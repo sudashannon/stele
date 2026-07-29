@@ -31,7 +31,9 @@ export function classifyChanges(
   const archived = changes.filter((c) => c.archived)
   const verifyFailed = active.filter((c) => c.verifyResult === 'fail')
   const stuck = active.filter(
-    (c) => c.phase === 'build' && daysSince(c.createdAt, now) > stuckThresholdDays,
+    (c) =>
+      (c.phase === 'build' || (c.sourceType === 'trellis' && c.phase === 'in_progress')) &&
+      daysSince(c.createdAt, now) > stuckThresholdDays,
   )
   const incomplete = active.filter((c) => c.tasksCompleted < c.tasksTotal)
 

@@ -9,29 +9,47 @@ import (
 	"strings"
 
 	"comet-ui/internal/pathresolve"
+	"comet-ui/internal/source"
 )
 
 type ChangeSummary struct {
-	Name           string          `json:"name"`
-	ComponentID    string          `json:"componentId,omitempty"`
-	Workspace      string          `json:"workspace,omitempty"`
-	Workflow       string          `json:"workflow"`
-	Phase          string          `json:"phase"`
-	Archived       bool            `json:"archived"`
-	TasksCompleted int             `json:"tasksCompleted"`
-	TasksTotal     int             `json:"tasksTotal"`
-	VerifyResult   string          `json:"verifyResult"`
-	CreatedAt      string          `json:"createdAt"`
-	Artifacts      map[string]bool `json:"artifacts"`
-	Visualized     bool            `json:"visualized"`
-	DesignReviewed bool            `json:"designReviewed"`
-	VerifyReviewed bool            `json:"verifyReviewed"`
-	VerifiedAt     string          `json:"verifiedAt"`
-	BuildMode      string          `json:"buildMode"`
-	ReviewMode     string          `json:"reviewMode"`
-	TddMode        string          `json:"tddMode"`
-	AutoTransition bool            `json:"autoTransition"`
-	StateWarning   string          `json:"stateWarning,omitempty"`
+	Name           string            `json:"name"`
+	Title          string            `json:"title,omitempty"`
+	ComponentID    string            `json:"componentId,omitempty"`
+	Workspace      string            `json:"workspace,omitempty"`
+	SourceType     source.Kind       `json:"sourceType,omitempty"`
+	Workflow       string            `json:"workflow"`
+	Phase          string            `json:"phase"`
+	Archived       bool              `json:"archived"`
+	TasksCompleted int               `json:"tasksCompleted"`
+	TasksTotal     int               `json:"tasksTotal"`
+	VerifyResult   string            `json:"verifyResult"`
+	CreatedAt      string            `json:"createdAt"`
+	Artifacts      map[string]bool   `json:"artifacts"`
+	Visualized     bool              `json:"visualized"`
+	DesignReviewed bool              `json:"designReviewed"`
+	VerifyReviewed bool              `json:"verifyReviewed"`
+	VerifiedAt     string            `json:"verifiedAt"`
+	BuildMode      string            `json:"buildMode"`
+	ReviewMode     string            `json:"reviewMode"`
+	TddMode        string            `json:"tddMode"`
+	AutoTransition bool              `json:"autoTransition"`
+	StateWarning   string            `json:"stateWarning,omitempty"`
+	Lifecycle      []LifecycleStep   `json:"lifecycle,omitempty"`
+	NextTransition *TransitionAction `json:"nextTransition,omitempty"`
+	ProposalPath   string            `json:"-"`
+}
+
+type LifecycleStep struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+type TransitionAction struct {
+	Target        string `json:"target"`
+	Label         string `json:"label"`
+	Command       string `json:"command"`
+	BlockedReason string `json:"blockedReason,omitempty"`
 }
 
 type ChangeDetail struct {
@@ -250,14 +268,11 @@ func scanAllChanges(baseDir string) ([]ChangeSummary, error) {
 }
 
 func scanWorkspaceChanges(ws WorkspaceConfig) ([]ChangeSummary, error) {
-	summaries, err := scanAllChanges(ws.Path)
+	adapter, resolved, err := changeSourceFor(ws)
 	if err != nil {
 		return nil, err
 	}
-	for i := range summaries {
-		summaries[i].Workspace = ws.Alias
-	}
-	return summaries, nil
+	return adapter.List(resolved)
 }
 
 // scanAllWorkspaces aggregates changes across every registered workspace.
@@ -276,6 +291,42 @@ func scanAllWorkspaces(registry []WorkspaceConfig) (all []ChangeSummary, failedA
 		all = append(all, summaries...)
 	}
 	return all, failedAliases
+}
+
+func openSpecLifecycle() []LifecycleStep {
+	return []LifecycleStep{
+		{Key: "open", Label: "启动"},
+		{Key: "design", Label: "设计"},
+		{Key: "build", Label: "构建"},
+		{Key: "verify", Label: "验证"},
+		{Key: "archive", Label: "归档"},
+	}
+}
+
+func openSpecNextTransition(name, phase string, completed, total int) *TransitionAction {
+	order := []string{"open", "design", "build", "verify", "archive"}
+	labels := map[string]string{
+		"design":  "进入设计",
+		"build":   "进入构建",
+		"verify":  "进入验证",
+		"archive": "归档",
+	}
+	for i, current := range order {
+		if current != phase || i == len(order)-1 {
+			continue
+		}
+		target := order[i+1]
+		action := &TransitionAction{
+			Target:  target,
+			Label:   labels[target],
+			Command: fmt.Sprintf("comet-guard %s %s --apply", name, target),
+		}
+		if phase == "build" && target == "verify" && !(completed == total && total > 0) {
+			action.BlockedReason = fmt.Sprintf("任务未全部完成 (%d/%d)，无法进入验证", completed, total)
+		}
+		return action
+	}
+	return nil
 }
 
 func scanChange(parentDir, name string, archived bool, base string) ChangeSummary {
@@ -335,7 +386,9 @@ func scanChange(parentDir, name string, archived bool, base string) ChangeSummar
 
 	return ChangeSummary{
 		Name:           name,
+		Title:          name,
 		ComponentID:    filepath.Join(dir, ".comet.yaml"),
+		SourceType:     source.KindOpenSpec,
 		Workflow:       workflow,
 		Phase:          phase,
 		Archived:       archived,
@@ -353,6 +406,9 @@ func scanChange(parentDir, name string, archived bool, base string) ChangeSummar
 		TddMode:        tddMode,
 		AutoTransition: autoTransition,
 		StateWarning:   computeStateWarning(archived, phase),
+		Lifecycle:      openSpecLifecycle(),
+		NextTransition: openSpecNextTransition(name, phase, completed, total),
+		ProposalPath:   filepath.Join(dir, "proposal.md"),
 	}
 }
 
@@ -422,19 +478,23 @@ func scanChangeDetail(baseDir, name string) (*ChangeDetail, error) {
 
 	phases := buildPhases(root, dir, phase, completed, total, designDoc, plan, verifyReport)
 
+	summary := scanChange(filepath.Dir(dir), filepath.Base(dir), archived, root)
+	summary.Name = displayName
+	summary.Title = displayName
+	summary.Workflow = workflow
+	summary.Phase = phase
+	summary.Archived = archived
+	summary.TasksCompleted = completed
+	summary.TasksTotal = total
+	summary.VerifyResult = verifyResult
+	if createdAt != "" {
+		summary.CreatedAt = createdAt
+	}
+	summary.NextTransition = openSpecNextTransition(displayName, phase, completed, total)
+
 	return &ChangeDetail{
-		ChangeSummary: ChangeSummary{
-			Name:           displayName,
-			Workflow:       workflow,
-			Phase:          phase,
-			Archived:       archived,
-			TasksCompleted: completed,
-			TasksTotal:     total,
-			VerifyResult:   verifyResult,
-			CreatedAt:      createdAt,
-			Artifacts:      nil,
-		},
-		Phases: phases,
+		ChangeSummary: summary,
+		Phases:        phases,
 	}, nil
 }
 

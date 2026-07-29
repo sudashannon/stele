@@ -1,3 +1,5 @@
+import type { LifecycleStep } from '../api/types'
+
 const PHASES = [
   { key: 'open', label: '启动' },
   { key: 'design', label: '设计' },
@@ -15,8 +17,9 @@ function stateFor(index: number, currentIndex: number): StepState {
   return 'pending'
 }
 
-export function PhaseStepper({ currentPhase }: { currentPhase: string }) {
-  const currentIndex = PHASES.findIndex((p) => p.key === currentPhase)
+export function PhaseStepper({ currentPhase, lifecycle }: { currentPhase: string; lifecycle?: LifecycleStep[] }) {
+  const phases = lifecycle?.length ? lifecycle : PHASES
+  const currentIndex = phases.findIndex((p) => p.key === currentPhase)
   const isUnknown = currentIndex === -1
 
   return (
@@ -30,7 +33,7 @@ export function PhaseStepper({ currentPhase }: { currentPhase: string }) {
         </div>
       )}
       <div className="flex items-center flex-col md:flex-row gap-2 md:gap-0">
-        {PHASES.map((p, i) => {
+        {phases.map((p, i) => {
           const state = stateFor(i, currentIndex)
           return (
             <div key={p.key} className="flex items-center w-full md:w-auto md:flex-1">
@@ -65,7 +68,7 @@ export function PhaseStepper({ currentPhase }: { currentPhase: string }) {
                   {p.label}
                 </div>
               </div>
-              {i < PHASES.length - 1 && (
+              {i < phases.length - 1 && (
                 <div
                   className={
                     'hidden md:block flex-1 h-[2px] ' +

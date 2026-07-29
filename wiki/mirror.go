@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"comet-ui/internal/source"
 )
 
 // Mirror manages a single git repository that mirrors all wiki-indexed
@@ -87,21 +89,18 @@ func (m *Mirror) SyncAll(components map[string]Component, workspaces []Workspace
 	}
 }
 
-// relativeToWorkspace computes path relative to the scan root of the named
-// workspace (the parent directory of the workspace's registered openspec
-// path — see WorkspaceConfig.Path convention in index.go). Falls back to
-// the full path if the workspace can't be resolved or isn't a prefix,
-// which keeps SyncAll safe (if unhelpfully verbose) against config drift.
+// relativeToWorkspace computes a component path relative to the source's
+// stable project root. OpenSpec uses the parent of openspec/; Trellis uses
+// the registered repository root.
 func relativeToWorkspace(path, alias string, workspaces []WorkspaceConfig) string {
-	for _, w := range workspaces {
-		if w.Alias != alias {
+	for _, workspace := range workspaces {
+		if workspace.Alias != alias {
 			continue
 		}
-		parent := filepath.Dir(w.Path)
-		if strings.HasPrefix(path, parent) {
-			if rel, err := filepath.Rel(parent, path); err == nil {
-				return rel
-			}
+		root := source.MirrorRoot(workspace)
+		rel, err := filepath.Rel(root, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return rel
 		}
 		break
 	}

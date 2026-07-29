@@ -1,4 +1,5 @@
-import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult } from './types'
+import { encodeTodoId, normalizeTodo } from './types'
+import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, CreateTodoInput, UpdateTodoInput } from './types'
 
 export async function fetchChanges(): Promise<ChangeSummary[]> {
   const res = await fetch('/api/changes')
@@ -204,11 +205,18 @@ export async function streamChat(
   contextFiles: string[],
   onEvent: (event: ChatStreamEvent) => void,
   includeGraph?: boolean,
+  componentId?: string,
 ): Promise<void> {
   const res = await fetch('/api/chat/message', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ change, message, context_files: contextFiles, includeGraph: !!includeGraph }),
+    body: JSON.stringify({
+      change,
+      message,
+      context_files: contextFiles,
+      includeGraph: !!includeGraph,
+      ...(componentId ? { componentId } : {}),
+    }),
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as { message?: string; error?: string })
@@ -328,24 +336,7 @@ interface CreateShareResponse {
   url: string
 }
 
-export async function createShareLink(path: string, workspace?: string, ttl?: number, baseUrl?: string): Promise<CreateShareResponse> {
-  if (baseUrl) {
-    const params = new URLSearchParams()
-    params.set('url', baseUrl)
-    const res = await fetch('/api/share/create?' + params.toString(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, workspace, ttl }),
-    })
-    if (!res.ok) throw new Error(`Create share link failed: ${res.status}`)
-    const data = await res.json()
-    // Replace base URL with the provided one
-    if (data.url) {
-      const path = data.url.split('/share/')[1]
-      if (path) data.url = baseUrl + '/share/' + path
-    }
-    return data
-  }
+export async function createShareLink(path: string, workspace?: string, ttl?: number): Promise<CreateShareResponse> {
   const res = await fetch('/api/share/create', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -359,4 +350,68 @@ export async function revokeShareLink(token: string): Promise<void> {
   const tokenParam = encodeURIComponent(token)
   const res = await fetch(`/api/share/revoke?token=${tokenParam}`, { method: 'DELETE' })
   if (!res.ok) throw new Error(`Revoke share link failed: ${res.status}`)
+}
+
+// ── Todo API ─────────────────────────────────────────────────────────────────
+
+export interface TodoQueryParams {
+  status?: string
+  workspace?: string
+  change?: string
+  wikiComponentId?: string
+  q?: string
+}
+
+export async function fetchTodos(params?: TodoQueryParams): Promise<TodoListResponse> {
+  const qs = new URLSearchParams()
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, v)
+    }
+  }
+  const url = `/api/todos${qs.toString() ? '?' + qs.toString() : ''}`
+  const res = await fetch(url)
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    throw new Error(body.error || `获取待办失败 (${res.status})`)
+  }
+  const data: TodoListResponse = await res.json()
+  data.items = data.items.map(normalizeTodo)
+  return data
+}
+
+export async function createTodo(data: CreateTodoInput): Promise<Todo> {
+  const res = await fetch('/api/todos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    throw new Error(body.error || `创建待办失败 (${res.status})`)
+  }
+  const todo: Todo = await res.json()
+  return normalizeTodo(todo)
+}
+
+export async function updateTodo(id: string, patch: UpdateTodoInput): Promise<Todo> {
+  const res = await fetch(`/api/todos/${encodeTodoId(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    throw new Error(body.error || `更新待办失败 (${res.status})`)
+  }
+  const todo: Todo = await res.json()
+  return normalizeTodo(todo)
+}
+
+export async function deleteTodo(id: string): Promise<void> {
+  const res = await fetch(`/api/todos/${encodeTodoId(id)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    throw new Error(body.error || `删除待办失败 (${res.status})`)
+  }
 }

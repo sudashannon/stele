@@ -17,6 +17,10 @@ const PHASE_COLORS: Record<string, string> = {
   build: '#007d79',   // teal-60
   verify: '#24a148',  // green-60
   archive: '#525252', // gray-70
+  planning: '#0f62fe',
+  in_progress: '#007d79',
+  completed: '#24a148',
+  rejected: '#da1e28',
 }
 const DEFAULT_BAR_COLOR = '#8d8d8d' // gray-50
 

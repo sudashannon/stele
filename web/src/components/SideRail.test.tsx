@@ -78,4 +78,27 @@ describe('SideRail', () => {
     render(<SideRail view="changes" onSelect={() => {}} />)
     expect(screen.queryByText('100%')).toBeNull()
   })
+
+  it('renders todo badge when todoCount is provided and greater than zero', () => {
+    render(<SideRail view="changes" onSelect={() => {}} todoCount={5} />)
+    const badge = screen.getByTestId('side-rail-todo-badge')
+    expect(badge).toBeTruthy()
+    expect(badge.textContent).toBe('5')
+  })
+
+  it('caps todo badge at 99+ when count is 100 or more', () => {
+    render(<SideRail view="changes" onSelect={() => {}} todoCount={150} />)
+    const badge = screen.getByTestId('side-rail-todo-badge')
+    expect(badge.textContent).toBe('99+')
+  })
+
+  it('does not render todo badge when todoCount is zero', () => {
+    render(<SideRail view="changes" onSelect={() => {}} todoCount={0} />)
+    expect(screen.queryByTestId('side-rail-todo-badge')).toBeNull()
+  })
+
+  it('does not render todo badge when todoCount is undefined', () => {
+    render(<SideRail view="changes" onSelect={() => {}} />)
+    expect(screen.queryByTestId('side-rail-todo-badge')).toBeNull()
+  })
 })

@@ -173,9 +173,10 @@ interface Props {
   onToggleStar?: (path: string, title: string) => void
   isStarred?: boolean
   onNavigateToChange?: (changeName: string) => void
+  onCreateTodo?: () => void
 }
 
-export function MarkdownViewer({ path, body, artifacts, workspace, onSelectArtifact, onClose, onToggleStar, isStarred, onNavigateToChange }: Props) {
+export function MarkdownViewer({ path, body, artifacts, workspace, onSelectArtifact, onClose, onToggleStar, isStarred, onNavigateToChange, onCreateTodo }: Props) {
   const [content, setContent] = useState<string | null>(body ?? null)
   const [error, setError] = useState(false)
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
@@ -295,6 +296,18 @@ export function MarkdownViewer({ path, body, artifacts, workspace, onSelectArtif
                 className="shrink-0 text-lg leading-none px-2 py-1.5 border border-[var(--color-border)] hover:bg-[var(--palette-highlight)] hover:border-[var(--color-accent)]"
               >
                 🔄
+              </button>
+            )}
+            {onCreateTodo && (
+              <button
+                type="button"
+                aria-label="添加待办"
+                data-testid="create-todo-btn"
+                onClick={onCreateTodo}
+                className="shrink-0 text-lg leading-none px-2 py-1.5 border border-[var(--color-border)] hover:bg-[var(--palette-highlight)] hover:border-[var(--color-accent)]"
+                title="添加待办"
+              >
+                📋
               </button>
             )}
             {changeName && onNavigateToChange && (

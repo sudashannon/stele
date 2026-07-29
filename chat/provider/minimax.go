@@ -41,6 +41,10 @@ func (p *miniMaxProvider) ChatStream(ctx context.Context, apiKey, apiBase, model
 		Thinking    any       `json:"thinking,omitempty"`
 	}
 
+	if strings.TrimSpace(model) == "" {
+		model = p.Models()[0]
+	}
+
 	maxTokens := opts.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 4096
@@ -90,12 +94,24 @@ func (p *miniMaxProvider) ChatStream(ctx context.Context, apiKey, apiBase, model
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
+		sawMessageStop := false
+		send := func(event StreamEvent) bool {
+			select {
+			case ch <- event:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		sendError := func(err error) {
+			if err != nil {
+				send(StreamEvent{Type: "error", Error: err.Error()})
+			}
+		}
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
-			select {
-			case <-ctx.Done():
+			if ctx.Err() != nil {
 				return
-			default:
 			}
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {
@@ -106,26 +122,56 @@ func (p *miniMaxProvider) ChatStream(ctx context.Context, apiKey, apiBase, model
 			var event struct {
 				Type  string `json:"type"`
 				Delta struct {
-					Type     string `json:"type"`
-					Text     string `json:"text"`
-					Thinking string `json:"thinking"`
+					Type       string `json:"type"`
+					Text       string `json:"text"`
+					Thinking   string `json:"thinking"`
+					StopReason string `json:"stop_reason"`
 				} `json:"delta"`
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
 			}
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				continue
+				sendError(fmt.Errorf("invalid minimax stream event: %w", err))
+				return
 			}
 
 			switch event.Type {
 			case "content_block_delta":
 				switch event.Delta.Type {
 				case "thinking_delta":
-					ch <- StreamEvent{Type: "thinking", Content: event.Delta.Thinking}
+					if !send(StreamEvent{Type: "thinking", Content: event.Delta.Thinking}) {
+						return
+					}
 				case "text_delta":
-					ch <- StreamEvent{Type: "delta", Content: event.Delta.Text}
+					if !send(StreamEvent{Type: "delta", Content: event.Delta.Text}) {
+						return
+					}
 				}
+			case "message_delta":
+				if event.Delta.StopReason != "" && event.Delta.StopReason != "end_turn" {
+					sendError(fmt.Errorf("minimax stopped generation: %s", event.Delta.StopReason))
+					return
+				}
+			case "error":
+				if event.Error.Message == "" {
+					event.Error.Message = "unknown stream error"
+				}
+				sendError(fmt.Errorf("minimax stream error: %s", event.Error.Message))
+				return
 			case "message_stop":
-				ch <- StreamEvent{Type: "done"}
+				sawMessageStop = true
+				if !send(StreamEvent{Type: "done"}) {
+					return
+				}
 			}
+		}
+		if err := scanner.Err(); err != nil {
+			sendError(fmt.Errorf("read minimax stream: %w", err))
+			return
+		}
+		if !sawMessageStop && ctx.Err() == nil {
+			sendError(fmt.Errorf("minimax stream ended before message_stop"))
 		}
 	}()
 	return ch, nil

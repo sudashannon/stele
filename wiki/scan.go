@@ -64,6 +64,10 @@ func ScanComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
 			}
 			return nil
 		}
+		if !info.Mode().IsRegular() {
+			log.Printf("wiki scan: skipping non-regular file %s", path)
+			return nil
+		}
 		if !strings.HasSuffix(path, ".md") {
 			return nil
 		}
@@ -112,26 +116,31 @@ func ScanComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
 func classifyPath(path string) ComponentType {
 	base := filepath.Base(path)
 	switch base {
-	case "proposal.md":
+	case "proposal.md", "prd.md":
 		return TypeProposal
 	case "design.md":
 		return TypeDesign
-	case "tasks.md":
+	case "tasks.md", "implement.md":
 		return TypeTasks
 	}
 	sep := string(filepath.Separator)
 	switch {
-	case strings.Contains(path, sep+"specs"+sep):
+	case strings.Contains(path, sep+"specs"+sep),
+		strings.Contains(path, sep+".trellis"+sep+"spec"+sep):
 		return TypeSpec
 	case strings.Contains(path, sep+"plans"+sep):
 		return TypePlan
-	case strings.Contains(path, sep+"artifacts"+sep):
+	case strings.Contains(path, sep+"research"+sep):
+		return TypeKnowledge
+	case strings.Contains(path, sep+"artifacts"+sep),
+		strings.Contains(path, sep+".trellis"+sep+"tasks"+sep):
 		return TypeArtifact
 	case strings.Contains(path, sep+"diagrams"+sep):
 		return TypeDiagram
 	case strings.Contains(path, sep+"reports"+sep):
 		return TypeReport
-	case strings.Contains(path, sep+"knowledge"+sep):
+	case strings.Contains(path, sep+"knowledge"+sep),
+		strings.Contains(path, sep+".trellis"+sep+"workspace"+sep):
 		return TypeKnowledge
 	case strings.Contains(path, sep+"design_docs"+sep):
 		return TypeKnowledge
@@ -229,7 +238,7 @@ func parseFrontmatterAndTitle(path string) (map[string]any, string, error) {
 
 func isGenericTitle(t string) bool {
 	switch strings.ToLower(t) {
-	case "spec", "proposal", "design", "tasks", "plan", "report", "readme", "index":
+	case "spec", "proposal", "prd", "design", "tasks", "implement", "plan", "report", "readme", "index":
 		return true
 	}
 	return false

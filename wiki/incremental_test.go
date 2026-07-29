@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"comet-ui/internal/source"
 )
 
 func TestIncrementalUpdateRemovesDeletedComponentAndPersistsEmbeddings(t *testing.T) {
@@ -24,9 +26,9 @@ func TestIncrementalUpdateRemovesDeletedComponentAndPersistsEmbeddings(t *testin
 			{From: otherPath, To: deletedPath, Kind: "references"},
 		},
 	)
-	g.SetEmbeddings(map[string][]float32{
-		deletedPath: make([]float32, 384),
-		otherPath:   make([]float32, 384),
+	g.SetEmbeddingEntries(map[string]EmbeddingEntry{
+		deletedPath: {ID: deletedPath, InputVersion: EmbeddingInputVersion, Vector: make([]float32, 384)},
+		otherPath:   {ID: otherPath, InputVersion: EmbeddingInputVersion, Vector: make([]float32, 384)},
 	})
 	api := &API{
 		graph:         g,
@@ -50,9 +52,9 @@ func TestIncrementalUpdateRemovesDeletedComponentAndPersistsEmbeddings(t *testin
 		t.Fatalf("DirtyCount = %d, want structural change", api.DirtyCount())
 	}
 
-	cached, err := LoadEmbeddings(filepath.Join(cacheDir, "embeddings.bin"))
+	cached, err := LoadEmbeddingCache(filepath.Join(cacheDir, "embeddings.bin"))
 	if err != nil {
-		t.Fatalf("LoadEmbeddings: %v", err)
+		t.Fatalf("LoadEmbeddingCache: %v", err)
 	}
 	if _, ok := cached[deletedPath]; ok {
 		t.Fatal("persisted cache contains deleted component")
@@ -93,6 +95,9 @@ func TestIncrementalUpdateAddsOneChangedComponentWithoutFullScan(t *testing.T) {
 	component, ok := api.graph.Component(specPath)
 	if !ok || component.Title != "New" || component.Workspace != "test" {
 		t.Fatalf("component not incrementally added: %+v, ok=%v", component, ok)
+	}
+	if component.Frontmatter["_source"] != "openspec" {
+		t.Fatalf("incremental component lost source marker: %+v", component.Frontmatter)
 	}
 	edges := api.graph.Forward(specPath)
 	if len(edges) != 1 || edges[0].To != targetPath || edges[0].Source != "markdown-link" {
@@ -223,6 +228,42 @@ func TestResolveWorkspaceUsesLiveListerAndLongestPrefix(t *testing.T) {
 	alias, wsPath := api.resolveWorkspace(filepath.Join(nested, "spec.md"))
 	if alias != "specific" || wsPath != nested {
 		t.Fatalf("resolveWorkspace = (%q, %q), want (%q, %q)", alias, wsPath, "specific", nested)
+	}
+}
+
+func TestIncrementalSourceOwnershipRequiresFullRebuildOnlyForStandaloneSuperpowers(t *testing.T) {
+	superpowersRoot := t.TempDir()
+	superpowersPath := filepath.Join(superpowersRoot, "docs", "superpowers", "specs", "2026-07-20-cache-design.md")
+	if err := os.MkdirAll(filepath.Dir(superpowersPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	api := &API{
+		graph: BuildGraph(nil, nil),
+		ws: []WorkspaceConfig{{
+			Alias: "superpowers", Path: superpowersRoot, Type: source.KindSuperpowers,
+		}},
+	}
+	if !api.sourceRequiresFullRebuild([]string{superpowersPath}) {
+		t.Fatal("standalone Superpowers updates must rebuild convention edges and ownership")
+	}
+	knowledgePath := filepath.Join(superpowersRoot, "knowledge", "2026-07-20-cache-operations.md")
+	if err := os.MkdirAll(filepath.Dir(knowledgePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !api.sourceRequiresFullRebuild([]string{knowledgePath}) {
+		t.Fatal("standalone Superpowers knowledge updates must rebuild the index")
+	}
+
+	openSpecRoot := t.TempDir()
+	openSpecPath := filepath.Join(openSpecRoot, "docs", "superpowers", "specs", "2026-07-20-cache-design.md")
+	for _, dir := range []string{filepath.Join(openSpecRoot, "openspec", "changes"), filepath.Dir(openSpecPath)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api.ws = []WorkspaceConfig{{Alias: "openspec", Path: openSpecRoot}}
+	if api.sourceRequiresFullRebuild([]string{openSpecPath}) {
+		t.Fatal("Comet-owned Superpowers documents must retain OpenSpec incremental ownership")
 	}
 }
 

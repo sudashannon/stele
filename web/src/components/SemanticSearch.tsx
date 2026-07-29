@@ -6,6 +6,11 @@ import { TYPE_COLORS } from './WikiGraph'
 const DEBOUNCE_MS = 300
 const PAGE_SIZE = 20
 
+function componentFilename(id: string): string {
+  const separator = Math.max(id.lastIndexOf('/'), id.lastIndexOf('\\'))
+  return id.slice(separator + 1)
+}
+
 interface SemanticSearchProps {
   onNodeClick: (id: string) => void
 }
@@ -66,7 +71,7 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="按含义搜索组件…"
+        placeholder="按含义、标题或文件名搜索…"
         aria-label="语义搜索"
         className="w-full border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
       />
@@ -108,27 +113,35 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
         </>
       )}
       <ul className="space-y-1.5">
-        {pageResults.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              onClick={() => onNodeClick(item.id)}
-              className="w-full flex items-center gap-2 border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-bg)]"
-            >
-              <span
-                className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium text-white"
-                style={{ backgroundColor: TYPE_COLORS[item.type] ?? 'var(--color-text-secondary)' }}
+        {pageResults.map((item) => {
+          const filename = componentFilename(item.id)
+          return (
+            <li key={item.id}>
+              <button
+                type="button"
+                onClick={() => onNodeClick(item.id)}
+                className="w-full flex items-center gap-2 border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-bg)]"
               >
-                {item.type}
-              </span>
-              <span className="flex-1 truncate font-medium">{item.title}</span>
-              <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>
-              <span className="shrink-0 tabular-nums text-[var(--color-accent)]">
-                {Math.round(item.similarity * 100)}%
-              </span>
-            </button>
-          </li>
-        ))}
+                <span
+                  className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium text-white"
+                  style={{ backgroundColor: TYPE_COLORS[item.type] ?? 'var(--color-text-secondary)' }}
+                >
+                  {item.type}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{item.title}</span>
+                  {filename !== item.title && (
+                    <span className="block truncate text-[11px] text-[var(--color-text-secondary)]">{filename}</span>
+                  )}
+                </span>
+                <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>
+                <span className="shrink-0 tabular-nums text-[var(--color-accent)]">
+                  {Math.round(Math.min(1, item.similarity) * 100)}%
+                </span>
+              </button>
+            </li>
+          )
+        })}
       </ul>
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-2 pt-2">

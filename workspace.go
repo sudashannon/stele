@@ -7,14 +7,12 @@ import (
 	"strings"
 	"sync"
 
+	"comet-ui/internal/source"
+
 	"gopkg.in/yaml.v3"
 )
 
-type WorkspaceConfig struct {
-	Alias string `yaml:"alias" json:"alias"`
-	Path  string `yaml:"path" json:"path"`
-	Color string `yaml:"color" json:"color"`
-}
+type WorkspaceConfig = source.Workspace
 
 type workspacesFile struct {
 	Workspaces []WorkspaceConfig `yaml:"workspaces"`
@@ -81,6 +79,14 @@ func NewWorkspaceRegistry(configPath string) (*WorkspaceRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
+	for i := range ws {
+		if _, parseErr := source.ParseKind(ws[i].Type); parseErr != nil {
+			return nil, parseErr
+		}
+		if kind, resolveErr := source.ResolveKind(ws[i].Path, ws[i].Type); resolveErr == nil {
+			ws[i].Type = kind
+		}
+	}
 	syncCfg, err := LoadSyncConfig(configPath)
 	if err != nil {
 		return nil, err
@@ -116,7 +122,6 @@ func (r *WorkspaceRegistry) SetSyncRemote(remote string) (SyncConfig, error) {
 	return updated, nil
 }
 
-
 func (r *WorkspaceRegistry) List() []WorkspaceConfig {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -126,7 +131,8 @@ func (r *WorkspaceRegistry) List() []WorkspaceConfig {
 }
 
 func (r *WorkspaceRegistry) Add(cfg WorkspaceConfig) error {
-	if err := validateWorkspacePath(cfg.Path); err != nil {
+	normalized, err := normalizeWorkspaceConfig(cfg)
+	if err != nil {
 		return err
 	}
 
@@ -134,12 +140,12 @@ func (r *WorkspaceRegistry) Add(cfg WorkspaceConfig) error {
 	defer r.mu.Unlock()
 
 	for _, w := range r.workspaces {
-		if w.Alias == cfg.Alias {
-			return fmt.Errorf("workspace alias %q already registered", cfg.Alias)
+		if w.Alias == normalized.Alias {
+			return fmt.Errorf("workspace alias %q already registered", normalized.Alias)
 		}
 	}
 
-	updated := append(r.workspaces, cfg)
+	updated := append(r.workspaces, normalized)
 	if err := persistWorkspaces(r.configPath, updated, r.syncCfg); err != nil {
 		return err
 	}
@@ -147,41 +153,54 @@ func (r *WorkspaceRegistry) Add(cfg WorkspaceConfig) error {
 	return nil
 }
 
-// validateWorkspacePath rejects workspace paths that would make the
-// per-request traversal guard in handleGetArtifact a no-op or otherwise
-// expose the whole filesystem: the path must be an absolute, existing
-// directory, and must not be the filesystem root or one of its direct
-// children (e.g. "/", "/etc", "/home") — registering such a path would let
-// GET /api/artifact?workspace=<alias>&path=/etc/shadow read anything the
-// server process can access.
+// validateWorkspacePath preserves the legacy auto-detecting validation entry
+// point used by tests and callers that do not yet provide a source type.
 func validateWorkspacePath(path string) error {
-	if !filepath.IsAbs(path) {
-		return fmt.Errorf("workspace path %q must be an absolute path", path)
+	_, err := normalizeWorkspaceConfig(WorkspaceConfig{Path: path})
+	return err
+}
+
+func normalizeWorkspaceConfig(cfg WorkspaceConfig) (WorkspaceConfig, error) {
+	if !filepath.IsAbs(cfg.Path) {
+		return WorkspaceConfig{}, fmt.Errorf("workspace path %q must be an absolute path", cfg.Path)
 	}
 
-	info, err := os.Stat(path)
+	info, err := os.Stat(cfg.Path)
 	if err != nil {
-		return fmt.Errorf("workspace path %q is not accessible: %w", path, err)
+		return WorkspaceConfig{}, fmt.Errorf("workspace path %q is not accessible: %w", cfg.Path, err)
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("workspace path %q is not a directory", path)
+		return WorkspaceConfig{}, fmt.Errorf("workspace path %q is not a directory", cfg.Path)
 	}
 
-	clean := filepath.Clean(path)
+	clean := filepath.Clean(cfg.Path)
 	segments := strings.FieldsFunc(clean, func(c rune) bool { return c == filepath.Separator })
 	if len(segments) < 2 {
-		return fmt.Errorf("workspace path %q must not be the filesystem root or a direct child of it", path)
-	}
-	// Require a scannable OpenSpec changes dir so an unreadable workspace is
-	// rejected at add-time (immediate feedback) rather than silently accepted
-	// and only surfacing as a "workspace unreadable" warning on the next scan.
-	// Mirrors scanAllChanges's repo-root tolerance: accept either <path>/changes
-	// or <path>/openspec/changes.
-	if !isDir(filepath.Join(clean, "changes")) && !isDir(filepath.Join(clean, "openspec", "changes")) {
-		return fmt.Errorf("workspace path %q 下未找到 openspec/changes 目录，不是有效的 OpenSpec 工作区", path)
+		return WorkspaceConfig{}, fmt.Errorf("workspace path %q must not be the filesystem root or a direct child of it", cfg.Path)
 	}
 
-	return nil
+	kind, err := source.ResolveKind(clean, cfg.Type)
+	if err != nil {
+		return WorkspaceConfig{}, err
+	}
+	switch kind {
+	case source.KindOpenSpec:
+		if !source.HasOpenSpecLayout(clean) {
+			return WorkspaceConfig{}, fmt.Errorf("workspace path %q 下未找到 openspec/changes 目录，不是有效的 OpenSpec 工作区", cfg.Path)
+		}
+	case source.KindTrellis:
+		if !source.HasTrellisLayout(clean) {
+			return WorkspaceConfig{}, fmt.Errorf("workspace path %q 下未找到 .trellis/tasks、.trellis/spec 或 .trellis/workspace，不是有效的 Trellis 工作区", cfg.Path)
+		}
+	case source.KindSuperpowers:
+		if !source.HasSuperpowersLayout(clean) {
+			return WorkspaceConfig{}, fmt.Errorf("workspace path %q 下未找到 docs/superpowers 持久产物目录，不是有效的 Superpowers 项目根目录", cfg.Path)
+		}
+	}
+
+	cfg.Path = clean
+	cfg.Type = kind
+	return cfg, nil
 }
 
 func persistWorkspaces(configPath string, ws []WorkspaceConfig, syncCfg SyncConfig) error {

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"comet-ui/internal/source"
 )
 
 func TestHandleListWorkspaces_Empty(t *testing.T) {
@@ -212,6 +214,54 @@ func TestHandleGetArtifact_SiblingPrefixEscapeBlocked(t *testing.T) {
 	}
 }
 
+func TestHandleGetArtifact_SuperpowersRestrictsDurableRootsAndSymlinks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "superpowers-project")
+	designPath := filepath.Join(root, "docs", "superpowers", "specs", "2026-07-20-cache-design.md")
+	if err := os.MkdirAll(filepath.Dir(designPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(designPath, []byte("# Cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(root, "secret.md")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(filepath.Dir(designPath), "outside.md")
+	if err := os.Symlink(secretPath, symlinkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := NewWorkspaceRegistry(filepath.Join(t.TempDir(), "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{
+		Alias: "superpowers", Path: root, Color: "#123456", Type: source.KindSuperpowers,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name string
+		path string
+		want int
+	}{
+		{name: "durable design", path: designPath, want: http.StatusOK},
+		{name: "unrelated project file", path: secretPath, want: http.StatusForbidden},
+		{name: "allowlist symlink escape", path: symlinkPath, want: http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/artifact?workspace=superpowers&path="+test.path, nil)
+			recorder := httptest.NewRecorder()
+			handleGetArtifact(recorder, req, "unused-default", reg)
+			if recorder.Code != test.want {
+				t.Fatalf("artifact %q returned %d, want %d: %s", test.path, recorder.Code, test.want, recorder.Body.String())
+			}
+		})
+	}
+}
+
 // TestWorkspaceRegistry_Add_RejectsRootPath ensures registering "/" (or any
 // non-absolute / non-existent path) as a workspace is rejected outright,
 // since an unvalidated root path makes the traversal guard a no-op and
@@ -276,10 +326,10 @@ func TestHandleAddWorkspace_UnreadableWorkspaceReturns400(t *testing.T) {
 	handleAddWorkspace(w, req, reg)
 
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for a workspace dir with no changes/ nor openspec/changes/, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("expected 400 for a workspace with no supported source layout, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "openspec/changes") {
-		t.Fatalf("expected error body to mention openspec/changes, got: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), "OpenSpec, Trellis, or Superpowers") {
+		t.Fatalf("expected error body to list supported source layouts, got: %s", w.Body.String())
 	}
 	if len(reg.List()) != 0 {
 		t.Fatalf("expected registry to remain empty after rejected unreadable path, got %d", len(reg.List()))
@@ -302,5 +352,135 @@ func TestHandleAddWorkspace_ReadableWorkspaceWithOpenspecChangesReturns201(t *te
 	}
 	if len(reg.List()) != 1 {
 		t.Fatalf("expected registry to contain 1 workspace, got %d", len(reg.List()))
+	}
+}
+
+func TestHandleListChangesAndDetail_ThreeSourceWorkspaces(t *testing.T) {
+	openSpec := filepath.Join(t.TempDir(), "openspec")
+	openChange := filepath.Join(openSpec, "changes", "open-change")
+	if err := os.MkdirAll(openChange, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeYAML(t, openChange, "phase: build\n")
+
+	trellisRoot := t.TempDir()
+	trellisTask := filepath.Join(trellisRoot, ".trellis", "tasks", "07-26-task")
+	writeMainTrellisTask(t, trellisTask, "planning")
+	if err := os.WriteFile(filepath.Join(trellisTask, "prd.md"), []byte("# Trellis PRD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	superpowersRoot := t.TempDir()
+	superpowersDesign := writeSuperpowersFile(t, superpowersRoot, "docs/superpowers/specs/2026-07-26-idea-design.md", "# Standalone Idea\n")
+
+	reg, err := NewWorkspaceRegistry(filepath.Join(t.TempDir(), "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{Alias: "open", Path: openSpec, Color: "#000"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{Alias: "trellis", Path: trellisRoot, Color: "#111"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{Alias: "superpowers", Path: superpowersRoot, Color: "#222"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/changes", nil)
+	w := httptest.NewRecorder()
+	handleListChangesMultiWorkspace(w, req, openSpec, reg)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected mixed list 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Changes []ChangeSummary `json:"changes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Changes) != 3 {
+		t.Fatalf("expected all three source types, got %+v", response.Changes)
+	}
+	types := map[string]string{}
+	for _, change := range response.Changes {
+		types[change.Workspace] = string(change.SourceType)
+	}
+	if types["open"] != "openspec" || types["trellis"] != "trellis" || types["superpowers"] != "superpowers" {
+		t.Fatalf("unexpected source mapping: %v", types)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/changes/07-26-task?workspace=trellis", nil)
+	w = httptest.NewRecorder()
+	handleGetChange(w, req, openSpec, reg)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected Trellis detail 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var detail ChangeDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.SourceType != "trellis" || detail.Title != "Beta Task" || len(detail.Phases) != 3 {
+		t.Fatalf("unexpected Trellis detail: %+v", detail)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/changes/idea?workspace=superpowers", nil)
+	w = httptest.NewRecorder()
+	handleGetChange(w, req, openSpec, reg)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected Superpowers detail 200, got %d: %s", w.Code, w.Body.String())
+	}
+	detail = ChangeDetail{}
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.SourceType != source.KindSuperpowers || detail.Title != "Standalone Idea" ||
+		detail.ComponentID != superpowersDesign || len(detail.Phases) != 5 || detail.NextTransition != nil {
+		t.Fatalf("unexpected Superpowers detail: %+v", detail)
+	}
+
+	artifactPath := filepath.Join(trellisTask, "prd.md")
+	req = httptest.NewRequest(http.MethodGet, "/api/artifact?workspace=trellis&path="+artifactPath, nil)
+	w = httptest.NewRecorder()
+	handleGetArtifact(w, req, openSpec, reg)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Trellis PRD") {
+		t.Fatalf("expected Trellis artifact read, got %d: %s", w.Code, w.Body.String())
+	}
+
+	sibling := filepath.Join(filepath.Dir(trellisRoot), "outside-trellis.md")
+	if err := os.WriteFile(sibling, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/artifact?workspace=trellis&path="+sibling, nil)
+	w = httptest.NewRecorder()
+	handleGetArtifact(w, req, openSpec, reg)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected Trellis sibling path to be rejected, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWorkspacesForRuntimeDetectsTrellisDirFallback(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "trellis-project")
+	if err := os.MkdirAll(filepath.Join(root, ".trellis", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := workspacesForRuntime(nil, root)
+	if len(got) != 1 || got[0].Path != root || got[0].Type != "trellis" {
+		t.Fatalf("unexpected --dir fallback: %+v", got)
+	}
+
+	configured := []WorkspaceConfig{{Alias: "explicit", Path: "/configured", Type: "openspec"}}
+	got = workspacesForRuntime(configured, root)
+	if len(got) != 1 || got[0].Alias != "explicit" {
+		t.Fatalf("explicit registry must replace fallback: %+v", got)
+	}
+}
+
+func TestWorkspacesForRuntimeDetectsSuperpowersDirFallback(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "superpowers-project")
+	writeSuperpowersFile(t, root, "docs/superpowers/plans/2026-07-26-idea.md", "# Plan\n")
+	got := workspacesForRuntime(nil, root)
+	if len(got) != 1 || got[0].Path != root || got[0].Type != source.KindSuperpowers {
+		t.Fatalf("unexpected Superpowers --dir fallback: %+v", got)
 	}
 }

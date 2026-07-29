@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { WorkspaceSourceType } from '../api/types'
 
 const PHASE_LABELS: Record<string, string> = {
   open: '启动', design: '设计', build: '构建', verify: '验证', archive: '归档',
@@ -8,7 +9,11 @@ const EXIT_MARKER_RE = /__GUARD_EXIT__:(\d)(?::(.*))?/
 
 const VALID_CHANGE_NAME_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
-export function isValidChangeName(name: string): boolean {
+export function isValidChangeName(name: string, sourceType: WorkspaceSourceType = 'openspec'): boolean {
+  if (sourceType === 'superpowers') return false
+  if (sourceType === 'trellis') {
+    return name !== '' && name !== '.' && !name.includes('..') && !/[\\/]/.test(name)
+  }
   return VALID_CHANGE_NAME_RE.test(name)
 }
 
@@ -17,9 +22,22 @@ interface Props {
   targetPhase: string
   onComplete: () => void
   blockedReason?: string
+  workspace?: string
+  sourceType?: WorkspaceSourceType
+  label?: string
+  command?: string
 }
 
-export function GuardButton({ changeName, targetPhase, onComplete, blockedReason }: Props) {
+export function GuardButton({
+  changeName,
+  targetPhase,
+  onComplete,
+  blockedReason,
+  workspace,
+  sourceType = 'openspec',
+  label,
+  command,
+}: Props) {
   const [confirming, setConfirming] = useState(false)
   const [output, setOutput] = useState<string[]>([])
   const [running, setRunning] = useState(false)
@@ -31,7 +49,10 @@ export function GuardButton({ changeName, targetPhase, onComplete, blockedReason
     setOutput([])
     setTone(null)
     try {
-      const res = await fetch(`/api/changes/${changeName}/transition`, {
+      const params = new URLSearchParams()
+      if (workspace) params.set('workspace', workspace)
+      const query = params.size > 0 ? `?${params.toString()}` : ''
+      const res = await fetch(`/api/changes/${encodeURIComponent(changeName)}/transition${query}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetPhase }),
@@ -72,8 +93,12 @@ export function GuardButton({ changeName, targetPhase, onComplete, blockedReason
     }
   }
 
-  const nameValid = isValidChangeName(changeName)
-  const nameInvalidMsg = '变更名不满足 guard 规则（需字母开头，小写 kebab-case），无法迁移'
+  const nameValid = isValidChangeName(changeName, sourceType)
+  const nameInvalidMsg = sourceType === 'trellis'
+    ? 'Trellis 任务目录名无效，无法迁移'
+    : sourceType === 'superpowers'
+      ? 'Superpowers 工作区为只读，无法迁移'
+      : '变更名不满足 guard 规则（需字母开头，小写 kebab-case），无法迁移'
   const disabledReason = !nameValid ? nameInvalidMsg : blockedReason
 
   return (
@@ -84,14 +109,14 @@ export function GuardButton({ changeName, targetPhase, onComplete, blockedReason
         disabled={running || !nameValid || !!blockedReason}
         title={disabledReason}
       >
-        → {PHASE_LABELS[targetPhase] ?? targetPhase}
+        → {label ?? PHASE_LABELS[targetPhase] ?? targetPhase}
       </button>
 
       {confirming && (
         <div data-testid="guard-confirm-dialog" className="fixed inset-0 flex items-center justify-center bg-black/30">
           <div className="bg-white p-4 w-96">
             <p className="text-sm mb-3">
-              即将执行: <code>comet-guard {changeName} {targetPhase} --apply</code>
+              即将执行: <code>{command ?? `comet-guard ${changeName} ${targetPhase} --apply`}</code>
             </p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirming(false)}>取消</button>

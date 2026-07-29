@@ -57,44 +57,53 @@ func (w *Watcher) Start(paths []string) error {
 	w.watcher = fw
 
 	for _, root := range paths {
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil
-			}
-			if !info.IsDir() {
-				return nil
-			}
-			name := info.Name()
-			switch {
-			case name == ".git" || name == "node_modules" || name == "rootfs":
-				return filepath.SkipDir
-			case strings.HasPrefix(name, ".") && name != "." && name != "..":
-				return filepath.SkipDir
-			// Skip large SDK/BSP/vendor trees that contain no wiki-relevant content.
-			// These can have 100k+ subdirectories and exhaust inotify watches.
-			case name == "orin_bsp" || name == "qcom_bsp":
-				return filepath.SkipDir
-			case name == "argos-sdk" || name == "x5_sdk":
-				return filepath.SkipDir
-			case name == "mondo-ai":
-				return filepath.SkipDir
-			// Generic: skip any directory that looks like a vendored SDK tree
-			// (contains "sdk" or "bsp" in name AND is deep inside a workspace).
-			// Only skip if it's not a scan root itself (depth > 1 from workspace root).
-			case (strings.Contains(name, "_sdk") || strings.Contains(name, "_bsp")) && filepath.Dir(path) != root:
-				return filepath.SkipDir
-			}
-			if addErr := fw.Add(path); addErr != nil {
-				log.Printf("wiki watcher: failed to watch %s: %v", path, addErr)
-			}
-			return nil
-		})
+		w.addWatchTree(root)
 	}
 
 	log.Printf("wiki watcher: watching %d paths", len(paths))
 	w.wg.Add(1)
 	go w.loop()
 	return nil
+}
+func (w *Watcher) addWatchTree(root string) {
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		switch {
+		case name == ".git" || name == "node_modules" || name == "rootfs":
+			return filepath.SkipDir
+		case strings.HasPrefix(name, ".") && name != "." && name != ".." &&
+			!(path == root && name == ".trellis"):
+			return filepath.SkipDir
+		case name == "orin_bsp" || name == "qcom_bsp":
+			return filepath.SkipDir
+		case name == "argos-sdk" || name == "x5_sdk":
+			return filepath.SkipDir
+		case name == "mondo-ai":
+			return filepath.SkipDir
+		case (strings.Contains(name, "_sdk") || strings.Contains(name, "_bsp")) && filepath.Dir(path) != root:
+			return filepath.SkipDir
+		}
+		if addErr := w.watcher.Add(path); addErr != nil {
+			log.Printf("wiki watcher: failed to watch %s: %v", path, addErr)
+		}
+		return nil
+	})
+}
+
+// AddPaths extends a running watcher after a workspace is registered.
+func (w *Watcher) AddPaths(paths []string) {
+	if w.watcher == nil {
+		return
+	}
+	for _, root := range paths {
+		w.addWatchTree(root)
+	}
 }
 
 // Stop shuts down the watcher and blocks until its goroutine has exited.
@@ -143,6 +152,18 @@ func (w *Watcher) loop() {
 			if !ok {
 				return
 			}
+			if event.Op&fsnotify.Create != 0 {
+				if info, statErr := os.Stat(event.Name); statErr == nil && info.IsDir() {
+					w.addWatchTree(event.Name)
+					if !pendingNotified && w.api.SSE != nil {
+						w.api.SSE.BroadcastNamed("indexing-started", `{"changed":1}`)
+						pendingNotified = true
+					}
+					pending = append(pending, event.Name)
+					resetTimer()
+					continue
+				}
+			}
 			if !isWikiFile(event.Name) {
 				continue
 			}
@@ -164,19 +185,29 @@ func (w *Watcher) loop() {
 	}
 }
 
-// isWikiFile reports whether path is a file the watcher cares about:
-// markdown files or .comet.yaml frontmatter files.
+// isWikiFile reports whether path is a source document or durable workflow
+// metadata file that can change the graph.
 func isWikiFile(path string) bool {
 	base := filepath.Base(path)
-	return strings.HasSuffix(base, ".md") || base == ".comet.yaml"
+	return strings.HasSuffix(base, ".md") ||
+		base == ".comet.yaml" ||
+		base == "task.json" ||
+		base == "implement.jsonl" ||
+		base == "check.jsonl" ||
+		base == "debug.jsonl"
 }
 
 // processBatch handles a debounced batch with a per-file graph update. A full
 // rebuild remains the correctness fallback if classification, embedding, link
 // extraction, or cache persistence fails.
 func (w *Watcher) processBatch(files []string) {
-	log.Printf("wiki watcher: %d file(s) changed, updating index incrementally", len(files))
-	if err := w.api.IncrementalUpdate(files); err != nil {
+	log.Printf("wiki watcher: %d file(s) changed, updating index", len(files))
+	if requiresFullRebuild(files) {
+		if err := w.api.Rebuild(); err != nil {
+			log.Printf("wiki watcher: Trellis rebuild failed: %v", err)
+			return
+		}
+	} else if err := w.api.IncrementalUpdate(files); err != nil {
 		log.Printf("wiki watcher: incremental update failed, falling back to full rebuild: %v", err)
 		if rebuildErr := w.api.Rebuild(); rebuildErr != nil {
 			log.Printf("wiki watcher: fallback rebuild failed: %v", rebuildErr)
@@ -187,6 +218,19 @@ func (w *Watcher) processBatch(files []string) {
 		w.api.SSE.Broadcast(fmt.Sprintf(`{"changed":%d}`, len(files)))
 	}
 	w.SyncMirror()
+}
+
+func requiresFullRebuild(files []string) bool {
+	separator := string(filepath.Separator)
+	trellisMarker := separator + ".trellis" + separator
+	superpowersMarker := separator + filepath.Join("docs", "superpowers") + separator
+	for _, path := range files {
+		clean := filepath.Clean(path)
+		if strings.Contains(clean, trellisMarker) || strings.Contains(clean, superpowersMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetMirror wires a knowledge-mirror sync target into the watcher. When

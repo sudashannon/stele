@@ -28,10 +28,11 @@ function toChatMessage(msg: ChatSessionMessage): ChatMessage {
   return thinking ? { role, text, thinking } : { role, text }
 }
 
-export function ChatBubble({ changeName, workspace, documentPath }: {
+export function ChatBubble({ changeName, workspace, documentPath, componentId }: {
   changeName?: string
   workspace?: string
   documentPath?: string
+  componentId?: string
 }) {
   const [open, setOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -48,13 +49,14 @@ export function ChatBubble({ changeName, workspace, documentPath }: {
   // the (now stale) persisted history.
   const userActedRef = useRef(false)
   const effectiveChange = changeName || (documentPath ? documentPath.split(/[\\/]/).pop() || documentPath : '')
+  const sessionKey = componentId || effectiveChange
 
   // 会话按当前上下文隔离：App.tsx 以 viewerPath 作为 key，切换文档会整体
   // 重新挂载本组件（内存 state 清空），随后这里再从后端拉回对应会话历史。
   useEffect(() => {
     let cancelled = false
-    if (!effectiveChange) return
-    fetchChatSession(effectiveChange)
+    if (!sessionKey) return
+    fetchChatSession(sessionKey)
       .then((session) => {
         if (cancelled || userActedRef.current) return
         setMessages((session.messages ?? []).map(toChatMessage))
@@ -65,7 +67,7 @@ export function ChatBubble({ changeName, workspace, documentPath }: {
     return () => {
       cancelled = true
     }
-  }, [effectiveChange])
+  }, [sessionKey])
 
   // 上下文文件注入：挂载时拉取该变更的产物清单，把已存在的产物文件路径
   // 作为可勾选的上下文文件展示；用户勾选后发送时会连同消息一起传给后端。
@@ -132,6 +134,7 @@ export function ChatBubble({ changeName, workspace, documentPath }: {
           })
         },
         graphMode,
+        componentId,
       )
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

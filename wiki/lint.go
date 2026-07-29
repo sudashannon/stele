@@ -349,9 +349,12 @@ func (g *Graph) lintLifecycleGaps() []LintIssue {
 				continue
 			}
 			phase, _ := c.Frontmatter["phase"].(string)
+			sourceType, _ := c.Frontmatter["_source"].(string)
 			age := now.Sub(createdAt)
+			isComplete := phase == "archive" ||
+				(sourceType == "trellis" && (phase == "completed" || phase == "rejected"))
 
-			if phase != "archive" && phase != "" && age > 14*24*time.Hour {
+			if !isComplete && phase != "" && age > 14*24*time.Hour {
 				issues = append(issues, LintIssue{
 					Rule:        "stale-active",
 					ComponentID: id,

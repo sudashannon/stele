@@ -44,6 +44,7 @@ func HandleMessage(baseDir, openspecDir string, wikiGraph WikiGraphAccessor) htt
 			ContextFiles []string `json:"context_files"`
 			Images       []string `json:"images"`
 			IncludeGraph bool     `json:"includeGraph"`
+			ComponentID  string   `json:"componentId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, 400, "invalid request")
@@ -66,11 +67,14 @@ func HandleMessage(baseDir, openspecDir string, wikiGraph WikiGraphAccessor) htt
 			return
 		}
 
-		sess := GetSession(req.Change)
+		sessionKey := req.Change
+		if req.ComponentID != "" {
+			sessionKey = req.ComponentID
+		}
+		sess := GetSession(sessionKey)
 
 		systemPrompt := buildSystemPrompt(baseDir, openspecDir, req.Change, req.ContextFiles)
-
-		systemPrompt += buildGraphContext(openspecDir, req.Change, req.IncludeGraph, wikiGraph)
+		systemPrompt += buildGraphContextForComponent(openspecDir, req.Change, req.ComponentID, req.IncludeGraph, wikiGraph)
 
 		content := []provider.ContentBlock{{Type: "text", Text: req.Message}}
 		for _, img := range req.Images {
@@ -242,24 +246,28 @@ func buildSystemPrompt(baseDir, openspecDir, change string, contextFiles []strin
 	return b.String()
 }
 
-// buildGraphContext returns the graph-context section to append to the
-// system prompt when includeGraph is set: the change's 1-hop neighbors
-// (forward + backlinks) with titles/edge kinds, 2nd-hop neighbor titles,
-// and any cached community overview. Returns "" when disabled, no
-// accessor is wired, the change has no .comet.yaml, or the graph has
-// nothing to report — so callers can unconditionally append the result.
+// buildGraphContext preserves the legacy OpenSpec lookup; source-neutral
+// callers pass a component ID to buildGraphContextForComponent instead.
+// Both return the component's 1-hop neighbors, 2nd-hop titles, and cached
+// community overview, or "" when graph context is unavailable.
 func buildGraphContext(openspecDir, change string, includeGraph bool, wikiGraph WikiGraphAccessor) string {
+	return buildGraphContextForComponent(openspecDir, change, "", includeGraph, wikiGraph)
+}
+
+func buildGraphContextForComponent(openspecDir, change, componentID string, includeGraph bool, wikiGraph WikiGraphAccessor) string {
 	if !includeGraph || wikiGraph == nil {
 		return ""
 	}
-	changeDir := findChangeDir(openspecDir, change)
-	if changeDir == "" {
-		return ""
+	changeID := componentID
+	if changeID == "" {
+		changeDir := findChangeDir(openspecDir, change)
+		if changeDir == "" {
+			return ""
+		}
+		changeID = filepath.Join(changeDir, ".comet.yaml")
 	}
-	yamlID := filepath.Join(changeDir, ".comet.yaml")
-
 	var b strings.Builder
-	direct, secondHop := wikiGraph.Neighborhood(yamlID)
+	direct, secondHop := wikiGraph.Neighborhood(changeID)
 	if len(direct) > 0 || len(secondHop) > 0 {
 		b.WriteString("\n\n---\n\n## 图谱上下文\n\n")
 		b.WriteString("当前 change 的直接关联：\n")
@@ -273,7 +281,7 @@ func buildGraphContext(openspecDir, change string, includeGraph bool, wikiGraph 
 			}
 		}
 	}
-	if overview := wikiGraph.CommunityOverview(yamlID); overview != "" {
+	if overview := wikiGraph.CommunityOverview(changeID); overview != "" {
 		b.WriteString("\n\n## 所属主题综述\n\n")
 		b.WriteString(overview)
 	}

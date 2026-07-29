@@ -98,3 +98,14 @@ func TestBuildGraphContext_NoNeighborsOrOverviewReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty string when accessor reports nothing, got %q", got)
 	}
 }
+
+func TestBuildGraphContextForComponent_UsesSourceNeutralID(t *testing.T) {
+	wg := &fakeWikiGraph{
+		direct:   []NeighborInfo{{ID: "prd", Title: "Task PRD", Kind: "generates"}},
+		overview: "Trellis task community",
+	}
+	got := buildGraphContextForComponent("", "", "/repo/.trellis/tasks/07-26-beta/task.json", true, wg)
+	if !strings.Contains(got, "[generates] Task PRD") || !strings.Contains(got, "Trellis task community") {
+		t.Fatalf("expected component-id graph context, got %q", got)
+	}
+}

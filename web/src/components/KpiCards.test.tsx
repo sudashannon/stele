@@ -37,6 +37,22 @@ describe('classifyChanges', () => {
     expect(result.verifyFailed.map((c) => c.name)).toEqual(['c'])
     expect(result.incomplete.map((c) => c.name)).toEqual(['a', 'd'])
   })
+
+  it('treats an old Trellis in-progress task as stuck', () => {
+    const result = classifyChanges(
+      [
+        makeChange({
+          name: 'trellis-task',
+          sourceType: 'trellis',
+          phase: 'in_progress',
+          createdAt: '2026-06-01',
+        }),
+      ],
+      14,
+      today,
+    )
+    expect(result.stuck.map((c) => c.name)).toEqual(['trellis-task'])
+  })
 })
 
 describe('KpiCards', () => {

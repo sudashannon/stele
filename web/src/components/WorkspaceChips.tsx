@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { WorkspaceConfig } from '../api/types'
+import type { WorkspaceConfig, WorkspaceSourceType } from '../api/types'
 
 interface Props {
   workspaces: WorkspaceConfig[]
@@ -12,6 +12,7 @@ export function WorkspaceChips({ workspaces, active, onSelect, onAdd }: Props) {
   const [adding, setAdding] = useState(false)
   const [alias, setAlias] = useState('')
   const [path, setPath] = useState('')
+  const [sourceType, setSourceType] = useState<'' | WorkspaceSourceType>('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -22,10 +23,11 @@ export function WorkspaceChips({ workspaces, active, onSelect, onAdd }: Props) {
     setSubmitting(true)
     setError(null)
     try {
-      await onAdd({ alias, path, color: 'var(--color-accent)' })
+      await onAdd({ alias, path, color: 'var(--color-accent)', type: sourceType || undefined })
       setAdding(false)
       setAlias('')
       setPath('')
+      setSourceType('')
     } catch (e) {
       // Surface the server's rejection (e.g. path has no openspec/changes) inline
       // so the user gets immediate feedback at add-time, not a post-refresh warning.
@@ -39,6 +41,7 @@ export function WorkspaceChips({ workspaces, active, onSelect, onAdd }: Props) {
     setAdding(false)
     setAlias('')
     setPath('')
+    setSourceType('')
     setError(null)
   }
 
@@ -62,7 +65,10 @@ export function WorkspaceChips({ workspaces, active, onSelect, onAdd }: Props) {
             (active === w.alias ? 'bg-[var(--color-accent)] text-white' : 'bg-[var(--color-bg)] text-[var(--color-text-secondary)]')
           }
         >
-          {w.alias}
+          <span>{w.alias}</span>
+          {w.type && (
+            <span className="ml-1 opacity-60">{w.type === 'trellis' ? 'T' : w.type === 'superpowers' ? 'S' : 'O'}</span>
+          )}
         </button>
       ))}
       <button onClick={() => setAdding(true)} className="rounded-full px-3 py-1.5 text-xs bg-white border border-dashed border-[var(--color-border)] text-[var(--color-text-secondary)]">
@@ -84,6 +90,17 @@ export function WorkspaceChips({ workspaces, active, onSelect, onAdd }: Props) {
             onChange={(e) => setPath(e.target.value)}
             className="w-full border border-[var(--color-border)] px-2 py-1.5 text-sm"
           />
+          <select
+            data-testid="add-ws-type"
+            value={sourceType}
+            onChange={(e) => setSourceType(e.target.value as '' | WorkspaceSourceType)}
+            className="w-full border border-[var(--color-border)] bg-white px-2 py-1.5 text-sm"
+          >
+            <option value="">自动识别类型</option>
+            <option value="openspec">OpenSpec</option>
+            <option value="trellis">Trellis</option>
+            <option value="superpowers">Superpowers</option>
+          </select>
           {error && (
             <div data-testid="add-ws-error" className="text-xs text-[var(--color-danger)] leading-snug">
               {error}

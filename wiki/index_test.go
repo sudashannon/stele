@@ -46,14 +46,19 @@ func TestBuildIndex_EndToEnd(t *testing.T) {
 		t.Fatalf("expected change component Title to be %q, got %q", "my-change", changeComp.Title)
 	}
 
-	// And it must have a resolvable forward edge to design.md, since that's
-	// the whole point: the change node is now a real graph endpoint.
+	// It must have a resolvable ownership edge to design.md. Vector neighbors
+	// are intentionally data-dependent and may include proposal.md as the
+	// semantic extractor evolves, so they are not asserted by position/count.
 	fwd := g.Forward(yamlPath)
-	if len(fwd) != 2 {
-		t.Fatalf("expected 2 forward edges from change component (implements + vector similarity), got %+v", fwd)
+	foundImplements := false
+	for _, edge := range fwd {
+		if edge.To == designPath && edge.Kind == "implements" && edge.Source == "yaml" {
+			foundImplements = true
+			break
+		}
 	}
-	if fwd[0].To != designPath || fwd[1].To != designPath {
-		t.Fatalf("expected both forward edges from change component to point to design.md, got %+v", fwd)
+	if !foundImplements {
+		t.Fatalf("expected change component to implement design.md, got %+v", fwd)
 	}
 }
 

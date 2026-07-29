@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"comet-ui/internal/source"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,6 +19,9 @@ type incrementalChange struct {
 // IncrementalUpdate processes a batch of changed file paths and updates the
 // graph in-place without a full workspace scan.
 func (a *API) IncrementalUpdate(changedFiles []string) error {
+	if a.sourceRequiresFullRebuild(changedFiles) {
+		return a.Rebuild()
+	}
 	changes, err := a.classifyChanges(changedFiles)
 	if err != nil {
 		return err
@@ -27,24 +31,27 @@ func (a *API) IncrementalUpdate(changedFiles []string) error {
 	}
 
 	a.mu.RLock()
-	existing := make(map[string][]float32, len(a.graph.Embeddings()))
-	for id, vec := range a.graph.Embeddings() {
-		existing[id] = vec
+	embeddings := make(map[string][]float32, len(a.graph.Embeddings()))
+	for id, vector := range a.graph.Embeddings() {
+		embeddings[id] = vector
 	}
 	a.mu.RUnlock()
 
 	changedComponents := make([]Component, 0, len(changes))
 	for _, change := range changes {
 		if change.component == nil {
-			delete(existing, change.path)
+			delete(embeddings, change.path)
 			continue
 		}
 		changedComponents = append(changedComponents, *change.component)
 	}
 
-	embeddings, err := IncrementalEmbed(existing, changedComponents, findEmbedScript())
+	changedEmbeddingEntries, err := ComputeEmbeddingEntries(changedComponents, findEmbedScript())
 	if err != nil {
 		return fmt.Errorf("incremental embedding: %w", err)
+	}
+	for id, entry := range changedEmbeddingEntries {
+		embeddings[id] = entry.Vector
 	}
 
 	vectorEdges := ComputeVectorSimilarityEdges(embeddings, 3, 0.5)
@@ -98,8 +105,8 @@ func (a *API) IncrementalUpdate(changedFiles []string) error {
 			dirty++
 		}
 		a.graph.AddComponent(*change.component)
-		if vec, ok := embeddings[change.path]; ok {
-			a.graph.UpdateEmbedding(change.path, vec)
+		if entry, ok := changedEmbeddingEntries[change.path]; ok {
+			a.graph.UpdateEmbeddingEntry(entry)
 		} else {
 			a.graph.RemoveEmbedding(change.path)
 		}
@@ -139,19 +146,17 @@ func (a *API) IncrementalUpdate(changedFiles []string) error {
 		a.graph.AddEdges(edges)
 	}
 
-	cacheSnapshot := make(map[string][]float32, len(a.graph.Embeddings()))
-	for id, vec := range a.graph.Embeddings() {
-		cacheSnapshot[id] = vec
+	cacheSnapshot := make(map[string]EmbeddingEntry, len(a.graph.EmbeddingEntries()))
+	for id, entry := range a.graph.EmbeddingEntries() {
+		entry.Vector = append([]float32(nil), entry.Vector...)
+		cacheSnapshot[id] = entry
 	}
 	a.AddDirty(dirty)
 	a.mu.Unlock()
 
 	if a.indexCacheDir != "" {
-		if err := os.MkdirAll(a.indexCacheDir, 0o755); err != nil {
-			return fmt.Errorf("create embedding cache directory: %w", err)
-		}
 		cachePath := filepath.Join(a.indexCacheDir, "embeddings.bin")
-		if err := SaveEmbeddings(cachePath, cacheSnapshot); err != nil {
+		if err := SaveEmbeddingCache(cachePath, cacheSnapshot); err != nil {
 			return fmt.Errorf("save embeddings: %w", err)
 		}
 	}
@@ -207,6 +212,7 @@ func componentFromPath(path, workspace string, info os.FileInfo) (*Component, er
 		if err := yaml.Unmarshal(data, &frontmatter); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
+		frontmatter["_source"] = "openspec"
 		return &Component{
 			ID:          path,
 			Type:        TypeChange,
@@ -229,6 +235,7 @@ func componentFromPath(path, workspace string, info os.FileInfo) (*Component, er
 			return nil, nil
 		}
 	}
+	frontmatter["_source"] = "openspec"
 	return &Component{
 		ID:          path,
 		Type:        typ,
@@ -240,10 +247,32 @@ func componentFromPath(path, workspace string, info os.FileInfo) (*Component, er
 	}, nil
 }
 
+func (a *API) sourceRequiresFullRebuild(paths []string) bool {
+	for _, path := range paths {
+		workspace, ok := a.resolveWorkspaceConfig(path)
+		if !ok {
+			continue
+		}
+		kind, err := source.ResolveKind(workspace.Path, workspace.Type)
+		if err == nil && kind != source.KindOpenSpec {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveWorkspace returns the live workspace whose scan scope most
 // specifically contains path. The returned path is the configured workspace
 // path, not the expanded project scan scope.
 func (a *API) resolveWorkspace(path string) (alias string, wsPath string) {
+	workspace, ok := a.resolveWorkspaceConfig(path)
+	if !ok {
+		return "", ""
+	}
+	return workspace.Alias, workspace.Path
+}
+
+func (a *API) resolveWorkspaceConfig(path string) (WorkspaceConfig, bool) {
 	a.mu.RLock()
 	workspaces := a.ws
 	lister := a.lister
@@ -254,9 +283,10 @@ func (a *API) resolveWorkspace(path string) (alias string, wsPath string) {
 
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
-		return "", ""
+		return WorkspaceConfig{}, false
 	}
 	bestLength := -1
+	var best WorkspaceConfig
 	for _, workspace := range workspaces {
 		configuredPath, err := filepath.Abs(workspace.Path)
 		if err != nil {
@@ -272,11 +302,11 @@ func (a *API) resolveWorkspace(path string) (alias string, wsPath string) {
 				continue
 			}
 			bestLength = len(scope)
-			alias = workspace.Alias
-			wsPath = configuredPath
+			best = workspace
+			best.Path = configuredPath
 		}
 	}
-	return alias, wsPath
+	return best, bestLength >= 0
 }
 
 func pathWithin(path, root string) bool {

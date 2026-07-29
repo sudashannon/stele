@@ -34,6 +34,32 @@ describe('WorkspaceChips', () => {
     expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ alias: 'new-ws', path: '/x/new' }))
   })
 
+
+  it('submits the selected Trellis source type', async () => {
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(<WorkspaceChips workspaces={workspaces} active={null} onSelect={vi.fn()} onAdd={onAdd} />)
+    fireEvent.click(screen.getByText('+ 添加'))
+    fireEvent.change(screen.getByTestId('add-ws-alias'), { target: { value: 'trellis' } })
+    fireEvent.change(screen.getByTestId('add-ws-path'), { target: { value: '/x/trellis' } })
+    fireEvent.change(screen.getByTestId('add-ws-type'), { target: { value: 'trellis' } })
+    fireEvent.click(screen.getByTestId('add-ws-submit'))
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ type: 'trellis' })),
+    )
+  })
+  it('submits the selected Superpowers source type', async () => {
+    const onAdd = vi.fn().mockResolvedValue(undefined)
+    render(<WorkspaceChips workspaces={workspaces} active={null} onSelect={vi.fn()} onAdd={onAdd} />)
+    fireEvent.click(screen.getByText('+ 添加'))
+    fireEvent.change(screen.getByTestId('add-ws-alias'), { target: { value: 'ideas' } })
+    fireEvent.change(screen.getByTestId('add-ws-path'), { target: { value: '/x/ideas' } })
+    fireEvent.change(screen.getByTestId('add-ws-type'), { target: { value: 'superpowers' } })
+    fireEvent.click(screen.getByTestId('add-ws-submit'))
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ type: 'superpowers' })),
+    )
+  })
+
   it('disables submit until both alias and path are filled', () => {
     render(<WorkspaceChips workspaces={workspaces} active={null} onSelect={vi.fn()} onAdd={vi.fn()} />)
     fireEvent.click(screen.getByText('+ 添加'))

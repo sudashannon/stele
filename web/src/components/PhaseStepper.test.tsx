@@ -38,4 +38,21 @@ describe('PhaseStepper', () => {
     expect(screen.getByTestId('step-archive').dataset.state).toBe('unknown')
     expect(screen.getByTestId('phase-unknown-notice')).toBeTruthy()
   })
+
+  it('renders a source-provided Trellis lifecycle', () => {
+    render(
+      <PhaseStepper
+        currentPhase="in_progress"
+        lifecycle={[
+          { key: 'planning', label: '规划' },
+          { key: 'in_progress', label: '执行' },
+          { key: 'completed', label: '完成' },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('step-planning').dataset.state).toBe('done')
+    expect(screen.getByTestId('step-in_progress').dataset.state).toBe('current')
+    expect(screen.getByTestId('step-completed').dataset.state).toBe('pending')
+    expect(screen.queryByTestId('step-build')).toBeNull()
+  })
 })

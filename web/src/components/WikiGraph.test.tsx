@@ -45,13 +45,16 @@ describe('WikiGraph', () => {
     await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalled())
     const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
       elements: Array<{ data: { id: string; source?: string; target?: string; kind?: string } }>
+      style: Array<{ selector: string; style: Record<string, unknown> }>
       layout: { name: string }
     }
     expect(call.elements).toEqual([
-      { data: { id: '/x/a.md', label: 'A', color: TYPE_COLORS.spec, commColor: 'var(--color-surface)' } },
-      { data: { id: '/x/b.md', label: 'B', color: TYPE_COLORS.plan, commColor: 'var(--color-surface)' } },
-      { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'var(--color-success)' } },
+      { data: { id: '/x/a.md', label: 'A', color: 'rgb(234, 145, 31)', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/b.md', label: 'B', color: 'rgb(36, 161, 72)', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'rgb(36, 161, 72)' } },
     ])
+    expect(JSON.stringify(call.elements)).not.toMatch(/var\(|color-mix\(/)
+    expect(JSON.stringify(call.style)).not.toMatch(/var\(|color-mix\(/)
     // Edges present -> force-directed layout reveals structure instead of the flat grid.
     expect(call.layout.name).toBe('cose')
 
@@ -263,9 +266,9 @@ describe('WikiGraph', () => {
     const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
       elements: Array<{ data: { id: string; commColor?: string; kind?: string } }>
     }
-    expect(call.elements.find((el) => el.data.id === '/x/a.md')?.data.commColor).toBe(COMMUNITY_COLORS[0])
-    expect(call.elements.find((el) => el.data.id === '/x/b.md')?.data.commColor).toBe(COMMUNITY_COLORS[0])
-    expect(call.elements.find((el) => el.data.id === '/x/c.md')?.data.commColor).toBe(COMMUNITY_COLORS[1])
+    expect(call.elements.find((el) => el.data.id === '/x/a.md')?.data.commColor).toBe('rgb(15, 98, 254)')
+    expect(call.elements.find((el) => el.data.id === '/x/b.md')?.data.commColor).toBe('rgb(15, 98, 254)')
+    expect(call.elements.find((el) => el.data.id === '/x/c.md')?.data.commColor).toBe('rgb(36, 161, 72)')
     expect(call.elements.find((el) => el.data.kind === 'similar')).toBeTruthy()
 
     await waitFor(() => expect(getByTestId('wiki-graph-community-legend')).toBeTruthy())

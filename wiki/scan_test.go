@@ -149,3 +149,26 @@ func TestScanComponents_ParsesFrontmatter(t *testing.T) {
 		t.Fatalf("expected frontmatter reviewed=true, got %+v", fm)
 	}
 }
+
+func TestScanComponentsSkipsSymlinkedDocuments(t *testing.T) {
+	root := t.TempDir()
+	specsDir := filepath.Join(root, "docs", "superpowers", "specs")
+	if err := os.MkdirAll(specsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(outside, []byte("# Outside Secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(specsDir, "secret.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	components, err := ScanComponents(root, "ideas")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 0 {
+		t.Fatalf("symlinked documents must not cross the scan root: %+v", components)
+	}
+}

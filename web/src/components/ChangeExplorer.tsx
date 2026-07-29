@@ -6,36 +6,49 @@ import { useContextMenu } from './ContextMenu'
 interface Props {
   changes: ChangeSummary[]
   selected: string | null
-  onSelect: (name: string) => void
+  selectedWorkspace?: string
+  onSelect: (name: string, workspace?: string) => void
 }
 
 type StatusFilter = 'all' | 'active' | 'archived'
-type WorkflowFilter = 'all' | 'full' | 'hotfix' | 'tweak'
-type PhaseFilter = 'all' | 'open' | 'design' | 'build' | 'verify' | 'archive'
+type WorkflowFilter = string
+type PhaseFilter = string
 
 function barColor(phase: string, pct: number): string {
   if (pct >= 100) return 'var(--color-success)'
   switch (phase) {
-    case 'design': return 'var(--color-accent)'
+    case 'design': case 'planning': return 'var(--color-accent)'
     case 'verify': return 'rebeccapurple'
-    case 'archive': return 'var(--color-success)'
-    case 'build': return 'var(--color-warn)'
+    case 'archive': case 'completed': return 'var(--color-success)'
+    case 'build': case 'in_progress': return 'var(--color-warn)'
+    case 'rejected': return 'var(--color-danger)'
     default: return 'var(--color-border-hover)'
   }
 }
 
 const PHASE_STYLES: Record<string, string> = {
   open: 'bg-[var(--color-bg)] text-[var(--color-text-secondary)]',
+  planning: 'bg-blue-50 text-[var(--color-accent)]',
   design: 'bg-blue-50 text-[var(--color-accent)]',
+  plan: 'bg-blue-50 text-[var(--color-accent)]',
   build: 'bg-amber-50 text-[var(--color-warn)]',
+  in_progress: 'bg-amber-50 text-[var(--color-warn)]',
   verify: 'bg-violet-50 text-violet-600',
   archive: 'bg-green-50 text-[var(--color-success)]',
+  completed: 'bg-green-50 text-[var(--color-success)]',
+  rejected: 'bg-red-50 text-[var(--color-danger)]',
 }
 
 const WORKFLOW_LABELS: Record<string, string> = {
   full: 'full',
   hotfix: 'hotfix',
   tweak: 'tweak',
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  openspec: 'OpenSpec',
+  trellis: 'Trellis',
+  superpowers: 'Superpowers',
 }
 
 function Badge({ className, children }: { className: string; children: ReactNode }) {
@@ -55,7 +68,7 @@ function ChangeCard({
 }: {
   change: ChangeSummary
   selected: boolean
-  onSelect: (name: string) => void
+  onSelect: () => void
 }) {
   const progress = change.tasksTotal > 0 ? change.tasksCompleted / change.tasksTotal : 0
   const phaseStyle = PHASE_STYLES[change.phase] ?? 'bg-[var(--color-bg)] text-[var(--color-text-secondary)]'
@@ -64,14 +77,14 @@ function ChangeCard({
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     ctx.onContextMenu([
-      { id: 'open', label: '打开', icon: '📂', run: () => onSelect(change.name) },
+      { id: 'open', label: '打开', icon: '📂', run: onSelect },
       { id: 'copy-name', label: '复制名称', icon: '📋', run: () => navigator.clipboard.writeText(change.name) },
     ])(e)
   }, [change.name, onSelect, ctx])
 
   return (
     <div
-      onClick={() => onSelect(change.name)}
+      onClick={onSelect}
       onContextMenu={handleContextMenu}
       className={
         'px-2.5 py-2.5 border cursor-pointer ' +
@@ -81,12 +94,22 @@ function ChangeCard({
       }
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="text-sm font-medium truncate" title={change.name}>{change.name}</div>
+        <div className="min-w-0">
+          <div className="text-sm font-medium truncate" title={change.title || change.name}>{change.title || change.name}</div>
+          {change.title && change.title !== change.name && (
+            <div className="text-[10px] text-[var(--color-text-secondary)] truncate">{change.name}</div>
+          )}
+        </div>
         <div className="flex shrink-0 items-center gap-1">
           <Badge className={phaseStyle}>{change.phase}</Badge>
           <Badge className="bg-[var(--color-bg)] text-[var(--color-text-secondary)]">
             {WORKFLOW_LABELS[change.workflow] ?? change.workflow}
           </Badge>
+          {change.sourceType && (
+            <Badge className="bg-[var(--color-bg)] text-[var(--color-text-secondary)]">
+              {SOURCE_LABELS[change.sourceType] ?? change.sourceType}
+            </Badge>
+          )}
           {change.verifyResult === 'pass' && (
             <Badge className="bg-green-50 text-[var(--color-success)]">✓ pass</Badge>
           )}
@@ -122,7 +145,7 @@ function matchesFilters(
   workflow: WorkflowFilter,
   phase: PhaseFilter,
 ) {
-  if (search && !change.name.toLowerCase().includes(search.toLowerCase())) return false
+  if (search && !`${change.name} ${change.title ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false
   if (status === 'active' && change.archived) return false
   if (status === 'archived' && !change.archived) return false
   if (workflow !== 'all' && change.workflow !== workflow) return false
@@ -130,11 +153,13 @@ function matchesFilters(
   return true
 }
 
-export function ChangeExplorer({ changes, selected, onSelect }: Props) {
+export function ChangeExplorer({ changes, selected, selectedWorkspace, onSelect }: Props) {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<StatusFilter>('all')
   const [workflow, setWorkflow] = useState<WorkflowFilter>('all')
   const [phase, setPhase] = useState<PhaseFilter>('all')
+  const workflowOptions = Array.from(new Set(changes.map((change) => change.workflow).filter(Boolean))).sort()
+  const phaseOptions = Array.from(new Set(changes.map((change) => change.phase).filter(Boolean))).sort()
 
   const filtered = changes.filter((c) => matchesFilters(c, search, status, workflow, phase))
   const active = filtered.filter((c) => !c.archived)
@@ -152,7 +177,8 @@ export function ChangeExplorer({ changes, selected, onSelect }: Props) {
   // only matches are archived looks like "无匹配" behind a collapsed group.
   const hasActiveQuery = search.trim() !== '' || status !== 'all' || workflow !== 'all' || phase !== 'all'
   const selectedIsArchived =
-    (selected !== null && archived.some((c) => c.name === selected)) || hasActiveQuery
+    (selected !== null && archived.some((change) => change.name === selected && change.workspace === selectedWorkspace)) ||
+    hasActiveQuery
 
   return (
     <div className="space-y-2">
@@ -182,9 +208,9 @@ export function ChangeExplorer({ changes, selected, onSelect }: Props) {
             className="flex-1 border border-[var(--color-border)] px-2 py-1 text-xs"
           >
             <option value="all">全部工作流</option>
-            <option value="full">full</option>
-            <option value="hotfix">hotfix</option>
-            <option value="tweak">tweak</option>
+            {workflowOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
           </select>
           <select
             aria-label="阶段"
@@ -193,11 +219,9 @@ export function ChangeExplorer({ changes, selected, onSelect }: Props) {
             className="flex-1 border border-[var(--color-border)] px-2 py-1 text-xs"
           >
             <option value="all">全部阶段</option>
-            <option value="open">open</option>
-            <option value="design">design</option>
-            <option value="build">build</option>
-            <option value="verify">verify</option>
-            <option value="archive">archive</option>
+            {phaseOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
           </select>
         </div>
       </div>
@@ -217,10 +241,10 @@ export function ChangeExplorer({ changes, selected, onSelect }: Props) {
       )}
       {active.map((c) => (
         <ChangeCard
-          key={c.name}
+          key={`${c.workspace ?? ''}\u0000${c.name}`}
           change={c}
-          selected={selected === c.name}
-          onSelect={onSelect}
+          selected={selected === c.name && selectedWorkspace === c.workspace}
+          onSelect={() => onSelect(c.name, c.workspace)}
         />
       ))}
       {archived.length > 0 && (
@@ -233,10 +257,10 @@ export function ChangeExplorer({ changes, selected, onSelect }: Props) {
             <div className="space-y-2 mt-2">
               {archived.map((c) => (
                 <ChangeCard
-                  key={c.name}
+                  key={`${c.workspace ?? ''}\u0000${c.name}`}
                   change={c}
-                  selected={selected === c.name}
-                  onSelect={onSelect}
+                  selected={selected === c.name && selectedWorkspace === c.workspace}
+                  onSelect={() => onSelect(c.name, c.workspace)}
                 />
               ))}
             </div>

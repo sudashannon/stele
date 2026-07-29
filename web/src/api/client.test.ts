@@ -14,6 +14,11 @@ import {
   fetchChatConfig,
   updateChatConfig,
   fetchChatProviders,
+  createShareLink,
+  fetchTodos,
+  createTodo,
+  updateTodo,
+  deleteTodo,
 } from './client'
 import type { ChatStreamEvent } from './client'
 
@@ -517,5 +522,146 @@ describe('fetchChatProviders', () => {
   it('throws on non-OK response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 500 } as Response)
     await expect(fetchChatProviders()).rejects.toThrow()
+  })
+})
+
+describe('createShareLink', () => {
+  it('preserves the public LAN URL returned by the backend', async () => {
+    const response = { url: 'http://10.0.28.45:8989/share/token' }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    } as Response)
+
+    const result = await createShareLink('/workspace/knowledge/doc.md', 'miao', 3600)
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/share/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: '/workspace/knowledge/doc.md',
+        workspace: 'miao',
+        ttl: 3600,
+      }),
+    })
+    expect(result).toEqual(response)
+  })
+})
+
+// ── Todo API ─────────────────────────────────────────────────────────────────
+describe('fetchTodos', () => {
+  it('calls GET /api/todos and returns the parsed response', async () => {
+    const response = {
+      items: [{ id: 'a1', workspace: 'ws1', title: 'Test', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }],
+      counts: { total: 1, open: 1, inProgress: 0, done: 0 },
+      revision: 42,
+      writable: true,
+    }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    } as Response)
+    const result = await fetchTodos()
+    expect(fetchSpy).toHaveBeenCalledWith('/api/todos')
+    expect(result).toEqual(response)
+  })
+
+  it('appends query params for status, workspace, change, wikiComponentId, and q', async () => {
+    const response = { items: [], counts: { total: 0, open: 0, inProgress: 0, done: 0 }, revision: 0, writable: true }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    } as Response)
+    await fetchTodos({ status: 'open', workspace: 'ws1', q: 'urgent' })
+    const url = (fetchSpy.mock.calls[0][0] as string)
+    expect(url).toContain('/api/todos?')
+    expect(url).toContain('status=open')
+    expect(url).toContain('workspace=ws1')
+    expect(url).toContain('q=urgent')
+  })
+
+  it('throws on non-ok response with backend error message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'store unreachable' }),
+    } as Response)
+    await expect(fetchTodos()).rejects.toThrow('store unreachable')
+  })
+})
+
+describe('fetchTodos normalization', () => {
+  it('fills in omitted Go omitempty defaults via normalizeTodo', async () => {
+    const sparse = { id: 'sp1', workspace: 'ws1', title: 'Sparse', status: 'open', priority: 'normal', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }
+    const response = { items: [sparse], counts: { total: 1, open: 1, inProgress: 0, done: 0 }, revision: 1, writable: true }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => response } as Response)
+    const result = await fetchTodos()
+    expect(result.items[0].notes).toBe('')
+    expect(result.items[0].dueAt).toBeNull()
+    expect(result.items[0].change).toBeNull()
+    expect(result.items[0].wikiRefs).toEqual([])
+    expect(result.items[0].completedAt).toBeNull()
+  })
+  it('POSTs to /api/todos with JSON body and returns the created todo', async () => {
+    const todo = { id: 'new1', workspace: 'ws1', title: 'New todo', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => todo,
+    } as Response)
+    const input = { workspace: 'ws1', title: 'New todo' }
+    const result = await createTodo(input)
+    expect(fetchSpy).toHaveBeenCalledWith('/api/todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    expect(result).toEqual(todo)
+  })
+})
+
+describe('updateTodo', () => {
+  it('PATCHes /api/todos/:id with JSON body and returns the updated todo', async () => {
+    const todo = { id: 'a1', workspace: 'ws1', title: 'Updated', notes: '', status: 'in_progress' as const, priority: 'high' as const, dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => todo,
+    } as Response)
+    const patch = { status: 'in_progress' as const, priority: 'high' as const }
+    const result = await updateTodo('a1', patch)
+    expect(fetchSpy).toHaveBeenCalledWith('/api/todos/a1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    expect(result).toEqual(todo)
+  })
+
+  it('URL-encodes the todo id in the path', async () => {
+    const todo = { id: 'a/b', workspace: 'ws1', title: 'Slash', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => todo,
+    } as Response)
+    await updateTodo('a/b', { title: 'Slash' })
+    expect(fetchSpy).toHaveBeenCalledWith('/api/todos/a%2Fb', expect.any(Object))
+  })
+})
+
+describe('deleteTodo', () => {
+  it('DELETEs /api/todos/:id', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+    } as Response)
+    await deleteTodo('a1')
+    expect(fetchSpy).toHaveBeenCalledWith('/api/todos/a1', { method: 'DELETE' })
+  })
+
+  it('throws on non-ok response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'not found' }),
+    } as Response)
+    await expect(deleteTodo('missing')).rejects.toThrow('not found')
   })
 })

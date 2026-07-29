@@ -346,4 +346,29 @@ describe('MarkdownViewer', () => {
     fireEvent(window, new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('renders a create-todo button and calls onCreateTodo when clicked', async () => {
+    const markdown = '# Test Doc\n\nSome content.'
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => markdown,
+    } as Response)
+    const onCreateTodo = vi.fn()
+    render(<MarkdownViewer path="/x/test.md" onClose={() => {}} onCreateTodo={onCreateTodo} />)
+    const btn = await screen.findByTestId('create-todo-btn')
+    fireEvent.click(btn)
+    expect(onCreateTodo).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not render create-todo button when onCreateTodo is omitted', async () => {
+    const markdown = '# Test Doc\n\nSome content.'
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => markdown,
+    } as Response)
+    render(<MarkdownViewer path="/x/test.md" onClose={() => {}} />)
+    // Wait for content to load (close button always renders after fetch)
+    await screen.findByText('✕ 关闭')
+    expect(screen.queryByTestId('create-todo-btn')).toBeNull()
+  })
 })

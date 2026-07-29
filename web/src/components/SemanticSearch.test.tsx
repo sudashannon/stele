@@ -72,4 +72,22 @@ describe('SemanticSearch', () => {
     fireEvent.change(input, { target: { value: '' } })
     await waitFor(() => expect(screen.queryByText('Matching Doc')).toBeFalsy())
   })
+
+  it('renders the filename when it differs from the document title', async () => {
+    const filename = '2026-07-14-rx101-orin-bsp-build-system-research.md'
+    vi.mocked(searchSemantic).mockResolvedValue([{
+      id: `/workspace/knowledge/${filename}`,
+      title: '结论摘要',
+      workspace: 'miao',
+      type: 'knowledge',
+      similarity: 1,
+    }])
+
+    render(<SemanticSearch onNodeClick={() => {}} />)
+    const input = await waitFor(() => screen.getByLabelText('语义搜索') as HTMLInputElement)
+    fireEvent.change(input, { target: { value: filename } })
+
+    await waitFor(() => expect(screen.getByText(filename)).toBeTruthy(), { timeout: 2000 })
+    expect(screen.getByText('结论摘要')).toBeTruthy()
+  })
 })

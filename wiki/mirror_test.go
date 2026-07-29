@@ -189,3 +189,23 @@ func TestMirror_SyncAll_PreservesWorkspaceStructure(t *testing.T) {
 		t.Errorf("content mismatch: %s", content)
 	}
 }
+
+func TestRelativeToWorkspace_TrellisUsesRegisteredRoot(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".trellis", "spec", "backend", "index.md")
+	got := relativeToWorkspace(path, "trellis", []WorkspaceConfig{{Alias: "trellis", Path: root, Type: "trellis"}})
+	want := filepath.Join(".trellis", "spec", "backend", "index.md")
+	if got != want {
+		t.Fatalf("relative path = %q, want %q", got, want)
+	}
+}
+
+func TestRelativeToWorkspaceSuperpowersUsesProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "docs", "superpowers", "specs", "2026-07-20-cache-design.md")
+	got := relativeToWorkspace(path, "ideas", []WorkspaceConfig{{Alias: "ideas", Path: root, Type: "superpowers"}})
+	want := filepath.Join("docs", "superpowers", "specs", "2026-07-20-cache-design.md")
+	if got != want {
+		t.Fatalf("relative path = %q, want %q", got, want)
+	}
+}

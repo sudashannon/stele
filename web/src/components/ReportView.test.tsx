@@ -74,13 +74,26 @@ describe('ReportView', () => {
     await waitFor(() => expect(generateReport).toHaveBeenCalledTimes(1))
     expect(screen.getByTestId('report-progress')).toBeTruthy()
 
-    resolve({ format: 'markdown', body: '# 周报\n内容' })
+    resolve({ format: 'md', body: '# 周报\n内容' })
     await waitFor(() => expect(screen.queryByTestId('report-progress')).toBeNull())
   })
 
   it('renders a weekly markdown result via MarkdownViewer body prop', async () => {
     vi.mocked(fetchChatConfig).mockResolvedValue(readyConfig())
-    vi.mocked(generateReport).mockResolvedValue({ format: 'markdown', body: '# 周报标题\n正文内容' })
+    vi.mocked(generateReport).mockResolvedValue({
+      format: 'md',
+      body: '# 周报标题\n正文内容',
+      inputDocumentCount: 12,
+      clusterCount: 3,
+      coverage: {
+        sourceDocuments: 12,
+        contextDocuments: 2,
+        readableDocuments: 14,
+        truncatedDocuments: 0,
+        missingEmbeddings: 1,
+        clusteringMode: 'hybrid',
+      },
+    })
     render(<ReportView workspace="ws1" workspaces={workspaces} />)
 
     await screen.findByTestId('report-generate')
@@ -88,6 +101,8 @@ describe('ReportView', () => {
 
     await screen.findByText('周报标题')
     expect(screen.getByTestId('report-download')).toBeTruthy()
+    expect(screen.getByTestId('report-coverage').textContent).toContain('输入文档 12')
+    expect(screen.getByTestId('report-coverage').textContent).toContain('词法降级 1')
   })
 
   it('renders a monthly html result inside an iframe via srcDoc', async () => {
@@ -120,7 +135,7 @@ describe('ReportView', () => {
     vi.mocked(listReports).mockResolvedValue([
       { name: 'weekly-2026-01-01_2026-01-07-123.md', type: 'weekly', start: '2026-01-01', end: '2026-01-07', createdAt: '2026-01-08T00:00:00Z' },
     ])
-    vi.mocked(getReport).mockResolvedValue({ format: 'markdown', body: '# 历史周报\n旧内容' })
+    vi.mocked(getReport).mockResolvedValue({ format: 'md', body: '# 历史周报\n旧内容' })
     render(<ReportView workspace="ws1" workspaces={workspaces} />)
 
     await screen.findByTestId('report-generate')

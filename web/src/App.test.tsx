@@ -52,6 +52,10 @@ vi.mock('./api/client', () => ({
   generateReport: vi.fn(),
   listReports: vi.fn().mockResolvedValue([]),
   getReport: vi.fn(),
+  fetchTodos: vi.fn().mockResolvedValue({ items: [], counts: { total: 0, open: 0, inProgress: 0, done: 0 }, revision: 0, writable: true }),
+  createTodo: vi.fn(),
+  updateTodo: vi.fn(),
+  deleteTodo: vi.fn(),
 }))
 
 function makeChange(overrides: Partial<ChangeSummary>): ChangeSummary {
@@ -111,6 +115,24 @@ describe('App', () => {
     fireEvent.click(screen.getByText('ws2'))
     expect(screen.queryByText('beta')).toBeNull()
     expect(screen.getByText('gamma')).toBeTruthy()
+  })
+
+  it('selects duplicate change names by workspace-qualified identity', async () => {
+    const workspaces: WorkspaceConfig[] = [
+      { alias: 'openspec', path: '/x/open', color: '#0063f8', type: 'openspec' },
+      { alias: 'ideas', path: '/x/ideas', color: '#16a34a', type: 'superpowers' },
+    ]
+    const changes = [
+      makeChange({ name: 'cache', title: 'OpenSpec Cache', workspace: 'openspec', sourceType: 'openspec' }),
+      makeChange({ name: 'cache', title: 'Superpowers Cache', workspace: 'ideas', sourceType: 'superpowers' }),
+    ]
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce(workspaces)
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
+
+    render(<App />)
+    fireEvent.click(await screen.findByText('Superpowers Cache'))
+
+    await waitFor(() => expect(fetchChangeDetail).toHaveBeenCalledWith('cache', 'ideas'))
   })
 
 

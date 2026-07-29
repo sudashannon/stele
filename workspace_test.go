@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"comet-ui/internal/source"
 )
 
 func TestLoadWorkspaces(t *testing.T) {
@@ -96,20 +98,19 @@ func TestWorkspaceRegistry_AddDuplicateAliasRejected(t *testing.T) {
 	}
 }
 
-func TestValidateWorkspacePath_RejectsDirWithoutChangesDir(t *testing.T) {
-	// An existing, absolute, non-root directory with neither "changes/"
-	// nor "openspec/changes/" must be rejected — this is the new add-time
-	// guard against silently registering an unreadable workspace.
+func TestValidateWorkspacePathRejectsDirWithoutSupportedSource(t *testing.T) {
+	// An existing, absolute, non-root directory with no supported source
+	// layout must be rejected at registration time.
 	dir := filepath.Join(t.TempDir(), "empty-workspace")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	err := validateWorkspacePath(dir)
 	if err == nil {
-		t.Fatal("expected an error for a workspace dir with no changes/ nor openspec/changes/")
+		t.Fatal("expected an error for a workspace with no supported source layout")
 	}
-	if !strings.Contains(err.Error(), "openspec/changes") {
-		t.Fatalf("expected error to mention openspec/changes, got: %v", err)
+	if !strings.Contains(err.Error(), "OpenSpec, Trellis, or Superpowers") {
+		t.Fatalf("expected error to list supported source layouts, got: %v", err)
 	}
 }
 
@@ -130,5 +131,98 @@ func TestValidateWorkspacePath_AcceptsRepoRootWithOpenspecChangesSubdir(t *testi
 	}
 	if err := validateWorkspacePath(dir); err != nil {
 		t.Fatalf("expected nil error for a dir with openspec/changes/, got %v", err)
+	}
+}
+
+func TestWorkspaceRegistry_AddTrellisDetectsAndPersistsType(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := NewWorkspaceRegistry(filepath.Join(dir, "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(t.TempDir(), "trellis-project")
+	if err := os.MkdirAll(filepath.Join(project, ".trellis", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{Alias: "trellis", Path: project, Color: "#123456"}); err != nil {
+		t.Fatal(err)
+	}
+	got := reg.List()
+	if len(got) != 1 || got[0].Type != "trellis" {
+		t.Fatalf("expected detected Trellis type, got %+v", got)
+	}
+	reloaded, err := LoadWorkspaces(filepath.Join(dir, "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded) != 1 || reloaded[0].Type != "trellis" {
+		t.Fatalf("expected persisted Trellis type, got %+v", reloaded)
+	}
+}
+
+func TestValidateWorkspacePath_AcceptsTrellisRoot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "trellis-project")
+	if err := os.MkdirAll(filepath.Join(dir, ".trellis", "tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateWorkspacePath(dir); err != nil {
+		t.Fatalf("expected Trellis root to be accepted, got %v", err)
+	}
+}
+
+func TestWorkspaceRegistry_AddSuperpowersDetectsAndPersistsType(t *testing.T) {
+	configDir := t.TempDir()
+	reg, err := NewWorkspaceRegistry(filepath.Join(configDir, "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(t.TempDir(), "superpowers-project")
+	if err := os.MkdirAll(filepath.Join(project, "docs", "superpowers", "specs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{Alias: "superpowers", Path: project, Color: "#123456"}); err != nil {
+		t.Fatal(err)
+	}
+	got := reg.List()
+	if len(got) != 1 || got[0].Type != "superpowers" {
+		t.Fatalf("expected detected Superpowers type, got %+v", got)
+	}
+	reloaded, err := LoadWorkspaces(filepath.Join(configDir, "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded) != 1 || reloaded[0].Type != "superpowers" {
+		t.Fatalf("expected persisted Superpowers type, got %+v", reloaded)
+	}
+}
+
+func TestNormalizeWorkspaceConfigRejectsSuperpowersMixedWithOpenSpec(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "mixed-project")
+	for _, dir := range []string{"openspec/changes", "docs/superpowers/specs"} {
+		if err := os.MkdirAll(filepath.Join(project, filepath.FromSlash(dir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := normalizeWorkspaceConfig(WorkspaceConfig{
+		Alias: "ambiguous",
+		Path:  project,
+		Type:  source.KindSuperpowers,
+	}); err == nil {
+		t.Fatal("expected an explicitly Superpowers mixed project to be rejected")
+	}
+}
+
+func TestNormalizeWorkspaceConfigRejectsSuperpowersSubdirectory(t *testing.T) {
+	project := filepath.Join(t.TempDir(), "superpowers-project")
+	docsRoot := filepath.Join(project, "docs", "superpowers")
+	if err := os.MkdirAll(filepath.Join(docsRoot, "plans"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normalizeWorkspaceConfig(WorkspaceConfig{
+		Alias: "not-project-root",
+		Path:  docsRoot,
+		Type:  source.KindSuperpowers,
+	}); err == nil {
+		t.Fatal("expected docs/superpowers itself to be rejected")
 	}
 }

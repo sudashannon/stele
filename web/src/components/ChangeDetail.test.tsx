@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ChangeDetail } from './ChangeDetail'
 import type { ChangeSummary } from '../api/types'
@@ -157,5 +157,126 @@ describe('ChangeDetail', () => {
         { path: '/x/rx101-x/tasks.md', label: '任务清单' },
       ]),
     )
+  })
+
+  it('renders Trellis lifecycle and backend-provided transition metadata', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/changes/')) {
+        return { ok: true, json: async () => ({ name: '07-26-beta', phases: [] }) } as Response
+      }
+      return { ok: true, json: async () => ({ component: {}, forward: [], backlinks: [] }) } as Response
+    })
+    const change: ChangeSummary = {
+      name: '07-26-beta',
+      title: 'Beta Task',
+      sourceType: 'trellis',
+      workflow: 'trellis',
+      phase: 'in_progress',
+      archived: false,
+      tasksCompleted: 1,
+      tasksTotal: 2,
+      verifyResult: 'pending',
+      createdAt: '2026-07-26',
+      artifacts: {},
+      visualized: false,
+      designReviewed: false,
+      verifyReviewed: false,
+      verifiedAt: '',
+      buildMode: '',
+      reviewMode: '',
+      tddMode: '',
+      autoTransition: false,
+      lifecycle: [
+        { key: 'planning', label: '规划' },
+        { key: 'in_progress', label: '执行' },
+        { key: 'completed', label: '完成' },
+      ],
+      nextTransition: {
+        target: 'completed',
+        label: '完成并归档',
+        command: 'python3 .trellis/scripts/task.py archive 07-26-beta --no-commit',
+        blockedReason: '验收项未全部完成 (1/2)，无法归档',
+      },
+    }
+    render(<ChangeDetail change={change} onChangeUpdated={() => {}} onOpenArtifact={() => {}} />)
+    expect(screen.getByTestId('step-in_progress').dataset.state).toBe('current')
+    expect((screen.getByTestId('guard-trigger') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('guard-trigger').textContent).toContain('完成并归档')
+    expect(screen.queryByTestId('badge-visualized')).toBeNull()
+    await waitFor(() => {})
+  })
+  it('renders standalone Superpowers as read-only without OpenSpec review controls, with todo button showing count', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/changes/')) {
+        return { ok: true, json: async () => ({ name: 'cache-redesign', phases: [] }) } as Response
+      }
+      return { ok: true, json: async () => ({ component: {}, forward: [], backlinks: [] }) } as Response
+    })
+    const change: ChangeSummary = {
+      name: 'cache-redesign',
+      title: 'Cache Redesign',
+      workspace: 'superpowers-ws',
+      sourceType: 'superpowers',
+      workflow: 'superpowers',
+      phase: 'design',
+      archived: false,
+      tasksCompleted: 0,
+      tasksTotal: 0,
+      verifyResult: 'pending',
+      createdAt: '2026-07-26',
+      artifacts: {},
+      visualized: false,
+      designReviewed: false,
+      verifyReviewed: false,
+      verifiedAt: '',
+      buildMode: '',
+      reviewMode: '',
+      tddMode: '',
+      autoTransition: false,
+      lifecycle: [
+        { key: 'design', label: '设计' },
+        { key: 'plan', label: '计划' },
+        { key: 'build', label: '执行' },
+        { key: 'verify', label: '验证' },
+        { key: 'completed', label: '完成' },
+      ],
+    }
+    const onNavigateToTodos = vi.fn()
+    render(<ChangeDetail change={change} onChangeUpdated={() => {}} onOpenArtifact={() => {}} onNavigateToTodos={onNavigateToTodos} todoCount={3} />)
+    expect(screen.getByTestId('step-design').dataset.state).toBe('current')
+    expect(screen.queryByTestId('guard-trigger')).toBeNull()
+    expect(screen.queryByTestId('badge-visualized')).toBeNull()
+    const todoBtn = screen.getByTestId('change-todo-action')
+    expect(todoBtn.textContent).toBe('待办 3')
+    await waitFor(() => {})
+  })
+
+  it('calls onNavigateToTodos with workspace and change name when the todo action button is clicked', async () => {
+    const onNavigateToTodos = vi.fn()
+    const change: ChangeSummary = {
+      name: 'super-change',
+      title: 'Super Change',
+      workspace: 'superpowers-ws',
+      sourceType: 'superpowers',
+      workflow: 'superpowers', phase: 'planning', archived: false,
+      tasksCompleted: 10, tasksTotal: 20, verifyResult: 'pending', createdAt: '',
+      artifacts: {}, visualized: false, designReviewed: false, verifyReviewed: false,
+      verifiedAt: '', buildMode: '', reviewMode: '', tddMode: '', autoTransition: false,
+      lifecycle: [{ key: 'planning', label: '规划' }],
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/changes/')) {
+        return { ok: true, json: async () => ({ name: 'super-change', workflow: 'superpowers', phase: 'planning', phases: [] }) } as Response
+      }
+      return { ok: true, json: async () => ({ component: { id: '', title: '' }, forward: [], backlinks: [] }) } as Response
+    })
+    render(<ChangeDetail change={change} onChangeUpdated={() => {}} onOpenArtifact={() => {}} onNavigateToTodos={onNavigateToTodos} />)
+    const btn = screen.getByTestId('change-todo-action')
+    fireEvent.click(btn)
+    expect(onNavigateToTodos).toHaveBeenCalledWith('superpowers-ws', 'super-change')
+    await waitFor(() => {})
   })
 })

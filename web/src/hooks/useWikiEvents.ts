@@ -5,15 +5,16 @@ type WikiEventHandlers =
   | {
       onUpdate?: () => void
       onIndexingStarted?: (changed: number | null) => void
+      onTodosUpdated?: (revision: number) => void
     }
 
 // useWikiEvents subscribes to the backend's /api/wiki/events SSE stream.
 // Backward compatible form: useWikiEvents(onUpdate)
-// Extended form: useWikiEvents({ onUpdate, onIndexingStarted })
+// Extended form: useWikiEvents({ onUpdate, onIndexingStarted, onTodosUpdated })
 export function useWikiEvents(handlers: WikiEventHandlers) {
   const onUpdate = typeof handlers === 'function' ? handlers : handlers.onUpdate
   const onIndexingStarted = typeof handlers === 'function' ? undefined : handlers.onIndexingStarted
-
+  const onTodosUpdated = typeof handlers === 'function' ? undefined : handlers.onTodosUpdated
   useEffect(() => {
     if (typeof EventSource === 'undefined') return
     const es = new EventSource('/api/wiki/events')
@@ -28,6 +29,14 @@ export function useWikiEvents(handlers: WikiEventHandlers) {
         onIndexingStarted(changed)
       })
     }
+    if (onTodosUpdated) {
+      es.addEventListener('todos-updated', (event: MessageEvent) => {
+        try {
+          const payload = JSON.parse(event.data ?? '{}')
+          if (typeof payload.revision === 'number') onTodosUpdated(payload.revision)
+        } catch {}
+      })
+    }
     return () => es.close()
-  }, [onUpdate, onIndexingStarted])
+  }, [onUpdate, onIndexingStarted, onTodosUpdated])
 }

@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"comet-ui/chat"
+	"comet-ui/internal/source"
+	"comet-ui/internal/todo"
 	"comet-ui/wiki"
 
 	"github.com/yuin/goldmark"
@@ -41,7 +43,7 @@ func main() {
 	port := flag.Int("port", 8989, "port to listen on")
 	bind := flag.String("bind", "localhost", "address to bind to (use 0.0.0.0 for LAN access)")
 	shareURL := flag.String("share-url", "", "public base URL for share links (default: auto-detect or localhost)")
-	baseDir := flag.String("dir", "openspec", "path to openspec directory")
+	baseDir := flag.String("dir", "openspec", "path to an OpenSpec, Trellis, or Superpowers workspace")
 	flag.Parse()
 
 	mux := http.NewServeMux()
@@ -50,7 +52,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("workspace registry: %v", err)
 	}
-	workspaceRegistryAliasSnapshot = reg.List
 
 	// Share URL precedence: --share-url flag > auto-detected LAN IP > localhost.
 	shareBaseURL := fmt.Sprintf("http://localhost:%d", *port)
@@ -62,29 +63,37 @@ func main() {
 	// Always prefer explicit --share-url; auto-detection is unreliable on WSL2.
 	shareManager := NewShareManager(shareBaseURL)
 
-	mux.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handleListWorkspaces(w, r, reg)
-		case http.MethodPost:
-			handleAddWorkspace(w, r, reg)
-		default:
-			writeJSONError(w, "method not allowed", 405)
-		}
-	})
-
 	mux.HandleFunc("/api/sync", handleSync(reg))
 	mux.HandleFunc("/api/sync/config", handleSyncConfig(reg))
 
 	mux.HandleFunc("/api/bookmarks", handleBookmarks)
 
+	// --- Todo Store (shared by REST and MCP) ---
+	todoStore, err := todo.NewStore(todo.StorePath(), nil)
+	if err != nil {
+		log.Fatalf("todo store: %v", err)
+	}
+
+	// --- MCP write token ---
+	mcpToken, err := todo.EnsureToken()
+	if err != nil {
+		log.Fatalf("mcp write token: %v", err)
+	}
+
 	wikiCacheDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "wiki")
-	wikiAPI := wiki.NewAPIWithWorkspacesAsync(toWikiWorkspaces(reg.List()), wikiCacheDir)
+	runtimeWorkspaces := workspacesForRuntime(reg.List(), *baseDir)
+	wikiAPI := wiki.NewAPIWithWorkspacesAsync(toWikiWorkspaces(runtimeWorkspaces), wikiCacheDir)
 	sseHub := wiki.NewSSEHub()
 	wikiAPI.SSE = sseHub
-	// Wire the live registry so /api/wiki/rebuild reflects runtime workspace
-	// adds instead of only the construction-time snapshot taken above.
-	wikiAPI.SetLister(registryLister{reg})
+	// SSE callback: broadcast todos-updated on every successful mutation.
+	todoStore.SetOnChange(func(rev int64) {
+		sseHub.BroadcastNamed("todos-updated", fmt.Sprintf(`{"revision":%d}`, rev))
+	})
+	// Rebuilds use the live registry and retain the --dir fallback until the
+	// first explicit workspace is registered.
+	// Wire Todo store and MCP token into the wiki API atomically.
+	wikiAPI.SetTodoStore(todoStore, mcpToken)
+	wikiAPI.SetLister(registryLister{reg: reg, defaultDir: *baseDir})
 	// The initial index build scans the whole workspace tree and can take
 	// tens of seconds on a large repo. Run it in the background so
 	// ListenAndServe below binds immediately instead of leaving the
@@ -110,24 +119,39 @@ func main() {
 		}
 		watcher.SyncMirror()
 	}()
-	workspacePaths := make([]string, 0, len(reg.List())*5)
-	for _, ws := range reg.List() {
-		workspacePaths = append(workspacePaths, ws.Path)
-		// Also watch sibling docs/, knowledge/, and *_docs/ (same as BuildIndex scanRoots)
-		parent := filepath.Dir(ws.Path)
-		if docsDir := filepath.Join(parent, "docs"); dirExists(docsDir) {
-			workspacePaths = append(workspacePaths, docsDir)
-		}
-		if knowledgeDir := filepath.Join(parent, "knowledge"); dirExists(knowledgeDir) {
-			workspacePaths = append(workspacePaths, knowledgeDir)
-		}
-		workspacePaths = append(workspacePaths, wiki.FindDocsDirs(parent)...)
+	var watchPaths []string
+	for _, workspace := range runtimeWorkspaces {
+		watchPaths = append(watchPaths, source.WatchRoots(workspace)...)
 	}
-	if err := watcher.Start(workspacePaths); err != nil {
+	if err := watcher.Start(watchPaths); err != nil {
 		log.Printf("wiki watcher start failed (non-fatal): %v", err)
 	} else {
 		defer watcher.Stop()
 	}
+	mux.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handleListWorkspaces(w, r, reg)
+		case http.MethodPost:
+			added := handleAddWorkspace(w, r, reg)
+			if added == nil {
+				return
+			}
+			watcher.AddPaths(source.WatchRoots(*added))
+			sseHub.BroadcastNamed("indexing-started", `{"changed":1}`)
+			go func() {
+				if err := wikiAPI.Rebuild(); err != nil {
+					log.Printf("wiki index rebuild after workspace add failed: %v", err)
+					return
+				}
+				watcher.SyncMirror()
+				sseHub.Broadcast(`{"changed":1}`)
+			}()
+		default:
+			writeJSONError(w, "method not allowed", 405)
+		}
+	})
+
 	mux.HandleFunc("/api/wiki/index", wikiAPI.HandleIndex)
 	mux.HandleFunc("/api/wiki/graph", wikiAPI.HandleGraph)
 	mux.HandleFunc("/api/wiki/recent", wikiAPI.HandleRecent)
@@ -142,6 +166,11 @@ func main() {
 	mux.HandleFunc("/api/wiki/calendar/day", wikiAPI.HandleCalendarDay)
 	mux.HandleFunc("/mcp", wikiAPI.HandleMCP)
 	mux.Handle("/api/wiki/events", sseHub)
+
+	// --- Todo REST ---
+	todoHandler := newTodoAPI(todoStore, wikiAPI)
+	mux.HandleFunc("/api/todos", todoHandler.ServeHTTP)
+	mux.HandleFunc("/api/todos/", todoHandler.ServeHTTP)
 
 	mux.HandleFunc("/api/changes", func(w http.ResponseWriter, r *http.Request) {
 		handleListChangesMultiWorkspace(w, r, *baseDir, reg)
@@ -164,10 +193,10 @@ func main() {
 	mux.HandleFunc("/api/chat/config", chat.HandleConfig)
 	mux.HandleFunc("/api/chat/providers", chat.HandleProviders)
 
-	mux.HandleFunc("/api/report", func(w http.ResponseWriter, r *http.Request) { handleReport(w, r, reg) })
+	mux.HandleFunc("/api/report", func(w http.ResponseWriter, r *http.Request) { handleReport(w, r, wikiAPI) })
 	mux.HandleFunc("/api/reports", handleListReports)
 	mux.HandleFunc("/api/reports/get", handleGetReport)
-mux.HandleFunc("/api/share/create", func(w http.ResponseWriter, r *http.Request) { handleCreateShare(w, r, shareManager) })
+	mux.HandleFunc("/api/share/create", func(w http.ResponseWriter, r *http.Request) { handleCreateShare(w, r, shareManager) })
 	mux.HandleFunc("/api/share/list", func(w http.ResponseWriter, r *http.Request) { handleListShares(w, r, shareManager) })
 	mux.HandleFunc("/api/share/revoke", func(w http.ResponseWriter, r *http.Request) { handleRevokeShare(w, r, shareManager) })
 	mux.HandleFunc("/share/", func(w http.ResponseWriter, r *http.Request) { handleSharePage(w, r, shareManager) })
@@ -196,28 +225,37 @@ func openBrowser(url string) {
 	cmd.Start()
 }
 
-// toWikiWorkspaces converts main's WorkspaceConfig to wiki's WorkspaceConfig.
-// The two types are structurally identical but distinct named types in
-// different packages — Go cannot import a `package main` directory
-// ("is a program, not an importable package"), so wiki defines its own
-// mirrored WorkspaceConfig (see wiki/index.go) and this converts between
-// them at the one call site that crosses the boundary.
+// WorkspaceConfig and wiki.WorkspaceConfig are aliases of the same shared
+// source.Workspace contract, so crossing the package boundary needs no copy.
 func toWikiWorkspaces(ws []WorkspaceConfig) []wiki.WorkspaceConfig {
-	out := make([]wiki.WorkspaceConfig, len(ws))
-	for i, w := range ws {
-		out[i] = wiki.WorkspaceConfig{Alias: w.Alias, Path: w.Path, Color: w.Color}
-	}
-	return out
+	return ws
 }
 
-// registryLister adapts *WorkspaceRegistry to wiki.WorkspaceLister so
-// wiki.API.HandleRebuild always sees the live registry contents (including
-// workspaces added at runtime via POST /api/workspaces) rather than the
-// slice captured once when wikiAPI was constructed.
-type registryLister struct{ reg *WorkspaceRegistry }
+// workspacesForRuntime preserves --dir-only deployments for the wiki index
+// and watcher. An explicit registry replaces this fallback as a clean cutover.
+func workspacesForRuntime(configured []WorkspaceConfig, defaultDir string) []WorkspaceConfig {
+	if len(configured) > 0 {
+		return configured
+	}
+	absolute, err := filepath.Abs(defaultDir)
+	if err != nil {
+		return nil
+	}
+	fallback, err := normalizeWorkspaceConfig(WorkspaceConfig{Path: absolute})
+	if err != nil {
+		return nil
+	}
+	return []WorkspaceConfig{fallback}
+}
+
+// registryLister exposes runtime additions and the legacy --dir fallback.
+type registryLister struct {
+	reg        *WorkspaceRegistry
+	defaultDir string
+}
 
 func (l registryLister) List() []wiki.WorkspaceConfig {
-	return toWikiWorkspaces(l.reg.List())
+	return toWikiWorkspaces(workspacesForRuntime(l.reg.List(), l.defaultDir))
 }
 
 func writeJSONError(w http.ResponseWriter, msg string, code int) {
@@ -234,26 +272,30 @@ func getDir(r *http.Request, defaultDir string) string {
 	return d
 }
 
-// resolveWorkspaceDir resolves the working directory for a request that may
+// resolveWorkspaceConfig resolves the typed workspace for a request that may
 // carry a `?workspace=<alias>` query param. Precedence: `?workspace=`
 // (looked up against the live registry) wins over the legacy `?dir=` param,
 // which in turn wins over defaultDir. An unregistered alias is a hard
 // error — it must never silently fall back to defaultDir, since that would
 // let a client unknowingly operate on the wrong (or a shared default)
 // workspace.
-func resolveWorkspaceDir(r *http.Request, defaultDir string, reg *WorkspaceRegistry) (string, error) {
+func resolveWorkspaceConfig(r *http.Request, defaultDir string, reg *WorkspaceRegistry) (WorkspaceConfig, error) {
 	alias := r.URL.Query().Get("workspace")
 	if alias == "" {
-		return getDir(r, defaultDir), nil
+		cfg := WorkspaceConfig{Path: getDir(r, defaultDir), Type: source.KindOpenSpec}
+		if kind, err := source.ResolveKind(cfg.Path, ""); err == nil {
+			cfg.Type = kind
+		}
+		return cfg, nil
 	}
 	if reg != nil {
 		for _, ws := range reg.List() {
 			if ws.Alias == alias {
-				return ws.Path, nil
+				return ws, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("unknown workspace %q", alias)
+	return WorkspaceConfig{}, fmt.Errorf("unknown workspace %q", alias)
 }
 
 func handleListWorkspaces(w http.ResponseWriter, r *http.Request, reg *WorkspaceRegistry) {
@@ -261,30 +303,29 @@ func handleListWorkspaces(w http.ResponseWriter, r *http.Request, reg *Workspace
 	json.NewEncoder(w).Encode(reg.List())
 }
 
-func handleAddWorkspace(w http.ResponseWriter, r *http.Request, reg *WorkspaceRegistry) {
+func handleAddWorkspace(w http.ResponseWriter, r *http.Request, reg *WorkspaceRegistry) *WorkspaceConfig {
 	var cfg WorkspaceConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		writeJSONError(w, "invalid body", 400)
-		return
+		return nil
 	}
 	if cfg.Alias == "" || cfg.Path == "" {
 		writeJSONError(w, "alias and path are required", 400)
-		return
+		return nil
 	}
-	// Validate the path up front so a bad Path (non-absolute, missing, or
-	// the filesystem root / a direct child of it) surfaces as 400 rather
-	// than being conflated with the 409 alias-conflict case below.
-	if err := validateWorkspacePath(cfg.Path); err != nil {
+	normalized, err := normalizeWorkspaceConfig(cfg)
+	if err != nil {
 		writeJSONError(w, err.Error(), 400)
-		return
+		return nil
 	}
-	if err := reg.Add(cfg); err != nil {
+	if err := reg.Add(normalized); err != nil {
 		writeJSONError(w, err.Error(), 409)
-		return
+		return nil
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(cfg)
+	json.NewEncoder(w).Encode(normalized)
+	return &normalized
 }
 
 // handleListChangesMultiWorkspace replaces handleListChanges as the /api/changes
@@ -297,15 +338,23 @@ func handleListChangesMultiWorkspace(w http.ResponseWriter, r *http.Request, def
 	registered := reg.List()
 	if len(registered) == 0 {
 		dir := getDir(r, defaultDir)
-		changes, err := scanAllChanges(dir)
-		if err != nil {
-			writeJSONError(w, err.Error(), 500)
+		workspace := WorkspaceConfig{Path: dir, Type: source.KindOpenSpec}
+		if kind, detectErr := source.ResolveKind(dir, ""); detectErr == nil {
+			workspace.Type = kind
+		}
+		adapter, resolved, sourceErr := changeSourceFor(workspace)
+		if sourceErr != nil {
+			writeJSONError(w, sourceErr.Error(), 500)
+			return
+		}
+		changes, scanErr := adapter.List(resolved)
+		if scanErr != nil {
+			writeJSONError(w, scanErr.Error(), 500)
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"changes": changes, "dir": dir})
 		return
 	}
-
 	filterAlias := r.URL.Query().Get("workspace")
 	changes, failedWorkspaces := scanAllWorkspaces(registered)
 	if filterAlias != "" {
@@ -321,7 +370,7 @@ func handleListChangesMultiWorkspace(w http.ResponseWriter, r *http.Request, def
 }
 
 func handleGetChange(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry) {
-	dir, err := resolveWorkspaceDir(r, baseDir, reg)
+	workspace, err := resolveWorkspaceConfig(r, baseDir, reg)
 	if err != nil {
 		writeJSONError(w, err.Error(), 400)
 		return
@@ -337,14 +386,18 @@ func handleGetChange(w http.ResponseWriter, r *http.Request, baseDir string, reg
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	detail, scanErr := scanChangeDetail(dir, name)
+	adapter, resolved, sourceErr := changeSourceFor(workspace)
+	if sourceErr != nil {
+		writeJSONError(w, sourceErr.Error(), 400)
+		return
+	}
+	detail, scanErr := adapter.Detail(resolved, name)
 	if scanErr != nil {
 		writeJSONError(w, scanErr.Error(), 404)
 		return
 	}
-	enc := json.NewEncoder(w)
-	enc.Encode(detail)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(detail)
 }
 
 func handleTransition(w http.ResponseWriter, r *http.Request, changeName, defaultDir string, lock *TransitionLock, reg *WorkspaceRegistry) {
@@ -361,33 +414,36 @@ func handleTransition(w http.ResponseWriter, r *http.Request, changeName, defaul
 		writeJSONError(w, "invalid change name", 400)
 		return
 	}
-	// Validate targetPhase — constrain to known phases only
-	validPhases := map[string]bool{"open": true, "design": true, "build": true, "verify": true, "archive": true}
-	if !validPhases[body.TargetPhase] {
-		writeJSONError(w, "invalid targetPhase: must be one of open/design/build/verify/archive", 400)
-		return
-	}
-
-	workspaceDir, err := resolveWorkspaceDir(r, defaultDir, reg)
+	workspace, err := resolveWorkspaceConfig(r, defaultDir, reg)
 	if err != nil {
 		writeJSONError(w, err.Error(), 400)
 		return
 	}
-
-	// Pre-flight: fail fast if the guard script can't even be located,
-	// before opening an SSE stream or taking the lock.
-	if _, _, err := resolveCometGuard(); err != nil {
+	runner, resolved, err := transitionSourceFor(workspace)
+	if err != nil {
+		writeJSONError(w, err.Error(), 400)
+		return
+	}
+	if err := runner.ValidateTarget(body.TargetPhase); err != nil {
 		writeJSONError(w, err.Error(), 400)
 		return
 	}
 
-	if !lock.TryAcquire(changeName) {
+	lockKey := changeName
+	if resolved.Alias != "" {
+		lockKey = resolved.Alias + ":" + changeName
+	}
+	if !lock.TryAcquire(lockKey) {
 		writeJSONError(w, fmt.Sprintf("a transition for %q is already in progress", changeName), 409)
 		return
 	}
-	defer lock.Release(changeName)
+	defer lock.Release(lockKey)
+	if err := runner.Preflight(resolved, changeName, body.TargetPhase); err != nil {
+		writeJSONError(w, err.Error(), 400)
+		return
+	}
 
-	output, err := TriggerTransition(r.Context(), changeName, body.TargetPhase, workspaceDir)
+	output, err := runner.Trigger(r.Context(), resolved, changeName, body.TargetPhase)
 	if err != nil {
 		writeJSONError(w, err.Error(), 500)
 		return
@@ -428,7 +484,7 @@ func handleTransition(w http.ResponseWriter, r *http.Request, changeName, defaul
 }
 
 func handleGetArtifact(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry) {
-	dir, err := resolveWorkspaceDir(r, baseDir, reg)
+	workspace, err := resolveWorkspaceConfig(r, baseDir, reg)
 	if err != nil {
 		writeJSONError(w, err.Error(), 400)
 		return
@@ -444,22 +500,12 @@ func handleGetArtifact(w http.ResponseWriter, r *http.Request, baseDir string, r
 		writeJSONError(w, "invalid path", 400)
 		return
 	}
-	// The traversal guard root MUST be derived from the resolved workspace
-	// dir (which may come from ?workspace=<alias>), never from the process's
-	// --dir flag baseDir — otherwise a request scoped to workspace A could
-	// read files belonging to workspace B or any other directory reachable
-	// only via baseDir's parent.
-	//
-	// The check below is boundary-correct: filepath.Rel gives the relative
-	// path from rootAbs to absPath, and any escape outside rootAbs produces
-	// a leading ".." segment (or exactly ".."). A plain strings.HasPrefix on
-	// the raw absolute paths is NOT safe here — HasPrefix("/tmp/ws-evil",
-	// "/tmp/ws") is true even though ws-evil is a sibling, not a
-	// subdirectory, of ws.
-	rootAbs, _ := filepath.Abs(filepath.Join(dir, ".."))
-	rel, relErr := filepath.Rel(rootAbs, absPath)
-	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		writeJSONError(w, "path outside project directory", 403)
+	// Derive authorization from the resolved source. OpenSpec and Trellis
+	// preserve their project-root boundary; standalone Superpowers may serve
+	// only its four durable docs/superpowers roots, including after symlink
+	// resolution.
+	if !artifactPathAllowed(workspace, absPath) {
+		writeJSONError(w, "path outside allowed artifact roots", 403)
 		return
 	}
 
@@ -476,6 +522,47 @@ func handleGetArtifact(w http.ResponseWriter, r *http.Request, baseDir string, r
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Write(content)
+}
+
+func artifactPathAllowed(workspace WorkspaceConfig, path string) bool {
+	kind, err := source.ResolveKind(workspace.Path, workspace.Type)
+	if err != nil {
+		return false
+	}
+	if kind != source.KindSuperpowers {
+		root, err := filepath.Abs(source.ProjectRoot(workspace))
+		return err == nil && pathWithinRoot(path, root)
+	}
+
+	roots := source.SuperpowersRoots(workspace.Path)
+	lexicallyAllowed := false
+	for _, root := range roots {
+		absoluteRoot, err := filepath.Abs(root)
+		if err == nil && pathWithinRoot(path, absoluteRoot) {
+			lexicallyAllowed = true
+			break
+		}
+	}
+	if !lexicallyAllowed {
+		return false
+	}
+
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	for _, root := range roots {
+		resolvedRoot, err := filepath.EvalSymlinks(root)
+		if err == nil && pathWithinRoot(resolvedPath, resolvedRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathWithinRoot(path, root string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 // handleCreateShare generates a share token for a document and returns the link.
@@ -520,7 +607,6 @@ func handleListShares(w http.ResponseWriter, r *http.Request, mgr *ShareManager)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(shares)
 }
-
 
 // handleRevokeShare removes a share token.
 func handleRevokeShare(w http.ResponseWriter, r *http.Request, mgr *ShareManager) {
@@ -575,7 +661,7 @@ func handleSharePage(w http.ResponseWriter, r *http.Request, mgr *ShareManager) 
 func renderMarkdownToHTML(path, src string) string {
 	var buf bytes.Buffer
 	title := filepath.Base(path)
-		md := goldmark.New(goldmark.WithExtensions(extension.GFM))
+	md := goldmark.New(goldmark.WithExtensions(extension.GFM))
 	if err := md.Convert([]byte(src), &buf); err != nil {
 		log.Printf("share render: goldmark error for %s: %v", path, err)
 		return fmt.Sprintf(`<html><body><pre>%s</pre>

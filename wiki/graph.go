@@ -1,19 +1,22 @@
 package wiki
 
 type Graph struct {
-	components      map[string]Component
-	forward         map[string][]Edge
-	backward        map[string][]Edge
-	communities     map[string]int
-	communityLabels map[int]string
-	embeddings      map[string][]float32
+	components       map[string]Component
+	forward          map[string][]Edge
+	backward         map[string][]Edge
+	communities      map[string]int
+	communityLabels  map[int]string
+	embeddings       map[string][]float32
+	embeddingEntries map[string]EmbeddingEntry
+	failedWorkspaces []string
 }
 
 func BuildGraph(components []Component, edges []Edge) *Graph {
 	g := &Graph{
-		components: make(map[string]Component, len(components)),
-		forward:    make(map[string][]Edge),
-		backward:   make(map[string][]Edge),
+		components:       make(map[string]Component, len(components)),
+		forward:          make(map[string][]Edge),
+		backward:         make(map[string][]Edge),
+		embeddingEntries: make(map[string]EmbeddingEntry),
 	}
 	for _, c := range components {
 		g.components[c.ID] = c
@@ -100,17 +103,31 @@ func sameEdge(a, b Edge) bool {
 	return a.From == b.From && a.To == b.To && a.Kind == b.Kind && a.Source == b.Source
 }
 
-// UpdateEmbedding inserts or replaces the vector for id.
+// UpdateEmbedding inserts a vector without cache-validity metadata. Durable
+// index paths should use UpdateEmbeddingEntry instead.
 func (g *Graph) UpdateEmbedding(id string, vec []float32) {
 	if g.embeddings == nil {
 		g.embeddings = make(map[string][]float32)
 	}
 	g.embeddings[id] = vec
+	delete(g.embeddingEntries, id)
 }
 
-// RemoveEmbedding removes the cached vector for id.
+func (g *Graph) UpdateEmbeddingEntry(entry EmbeddingEntry) {
+	if g.embeddings == nil {
+		g.embeddings = make(map[string][]float32)
+	}
+	if g.embeddingEntries == nil {
+		g.embeddingEntries = make(map[string]EmbeddingEntry)
+	}
+	g.embeddings[entry.ID] = entry.Vector
+	g.embeddingEntries[entry.ID] = entry
+}
+
+// RemoveEmbedding removes the cached vector and its validity metadata.
 func (g *Graph) RemoveEmbedding(id string) {
 	delete(g.embeddings, id)
+	delete(g.embeddingEntries, id)
 }
 
 func (g *Graph) Component(id string) (Component, bool) {
@@ -144,6 +161,24 @@ func (g *Graph) Embeddings() map[string][]float32 {
 
 func (g *Graph) SetEmbeddings(e map[string][]float32) {
 	g.embeddings = e
+	g.embeddingEntries = make(map[string]EmbeddingEntry)
+}
+
+func (g *Graph) EmbeddingEntries() map[string]EmbeddingEntry {
+	return g.embeddingEntries
+}
+
+func (g *Graph) SetEmbeddingEntries(entries map[string]EmbeddingEntry) {
+	g.embeddingEntries = entries
+	g.embeddings = EmbeddingVectors(entries)
+}
+
+func (g *Graph) FailedWorkspaces() []string {
+	return g.failedWorkspaces
+}
+
+func (g *Graph) SetFailedWorkspaces(aliases []string) {
+	g.failedWorkspaces = aliases
 }
 
 func (g *Graph) Forward(id string) []Edge {

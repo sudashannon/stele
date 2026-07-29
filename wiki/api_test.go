@@ -545,3 +545,63 @@ func TestHandleFixDeadLinksRepairsMultipleYAMLFieldsFromOneSource(t *testing.T) 
 		t.Fatalf("unexpected refreshed edges: %+v", edges)
 	}
 }
+
+func TestRankSemanticSearch_ExactFilenameRanksAheadWithoutEmbedding(t *testing.T) {
+	const targetID = "/workspace/knowledge/2026-07-14-rx101-orin-bsp-build-system-research.md"
+	components := map[string]Component{
+		targetID: {
+			ID:        targetID,
+			Path:      targetID,
+			Title:     "结论摘要",
+			Type:      TypeKnowledge,
+			Workspace: "miao",
+		},
+		"semantic-result": {
+			ID:        "semantic-result",
+			Path:      "/workspace/knowledge/orin-build-guide.md",
+			Title:     "Orin build guide",
+			Type:      TypeKnowledge,
+			Workspace: "miao",
+		},
+	}
+	embeddings := map[string][]float32{
+		"semantic-result": {1, 0},
+	}
+
+	results := rankSemanticSearch(
+		"2026-07-14-rx101-orin-bsp-build-system-research",
+		[]float32{1, 0},
+		components,
+		embeddings,
+	)
+
+	if len(results) != 2 {
+		t.Fatalf("expected filename and semantic results, got %+v", results)
+	}
+	if results[0].id != targetID {
+		t.Fatalf("exact filename result must rank first, got %+v", results)
+	}
+	if results[0].score != 1 {
+		t.Fatalf("exact filename score = %v, want 1", results[0].score)
+	}
+}
+
+func TestRankSemanticSearch_FilenameSubstringBypassesSimilarityFloor(t *testing.T) {
+	const targetID = "/workspace/knowledge/2026-07-14-rx101-orin-bsp-build-system-research.md"
+	components := map[string]Component{
+		targetID: {
+			ID:    targetID,
+			Path:  targetID,
+			Title: "结论摘要",
+			Type:  TypeKnowledge,
+		},
+	}
+	embeddings := map[string][]float32{
+		targetID: {-1, 0},
+	}
+
+	results := rankSemanticSearch("rx101-orin-bsp", []float32{1, 0}, components, embeddings)
+	if len(results) != 1 || results[0].id != targetID {
+		t.Fatalf("filename substring must survive semantic floor, got %+v", results)
+	}
+}

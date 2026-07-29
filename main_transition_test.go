@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"comet-ui/internal/source"
 )
 
 func TestHandleTransition_RejectsInvalidChangeName(t *testing.T) {
@@ -126,5 +128,28 @@ func TestHandleTransition_RunsAgainstAliasedWorkspacePath(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), resolved) {
 		t.Fatalf("expected guard to run in aliased workspace dir %q, got: %s", resolved, w.Body.String())
+	}
+}
+
+func TestHandleTransitionRejectsReadOnlySuperpowersWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "docs", "superpowers", "specs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewWorkspaceRegistry(filepath.Join(t.TempDir(), "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Add(WorkspaceConfig{Alias: "ideas", Path: root, Type: source.KindSuperpowers}); err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"targetPhase": "build"})
+	req := httptest.NewRequest(http.MethodPost, "/api/changes/cache-redesign/transition?workspace=ideas", bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	handleTransition(recorder, req, "cache-redesign", ".", NewTransitionLock(), reg)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(strings.ToLower(recorder.Body.String()), "read-only") {
+		t.Fatalf("expected read-only 400, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 }

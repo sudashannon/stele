@@ -1,6 +1,10 @@
+export type WorkspaceSourceType = 'openspec' | 'trellis' | 'superpowers'
+
 export interface ChangeSummary {
   name: string
+  title?: string
   workflow: string
+  sourceType?: WorkspaceSourceType
   phase: string
   archived: boolean
   tasksCompleted: number
@@ -19,6 +23,8 @@ export interface ChangeSummary {
   stateWarning?: string
   workspace?: string // added in Phase②, optional until then
   componentId?: string // wiki graph node ID (.comet.yaml path); optional until backend populates it
+  lifecycle?: LifecycleStep[]
+  nextTransition?: TransitionAction
 }
 
 export interface Bookmark {
@@ -38,6 +44,19 @@ export interface WorkspaceConfig {
   alias: string
   path: string
   color: string
+  type?: WorkspaceSourceType
+}
+
+export interface LifecycleStep {
+  key: string
+  label: string
+}
+
+export interface TransitionAction {
+  target: string
+  label: string
+  command: string
+  blockedReason?: string
 }
 
 export interface WikiEdge {
@@ -106,13 +125,19 @@ export interface PhaseInfo {
 
 export interface ChangeDetail {
   name: string
+  title?: string
   workflow: string
+  sourceType?: WorkspaceSourceType
   phase: string
   archived: boolean
   tasksCompleted: number
   tasksTotal: number
   verifyResult: string
   createdAt: string
+  workspace?: string
+  componentId?: string
+  lifecycle?: LifecycleStep[]
+  nextTransition?: TransitionAction
   phases: PhaseInfo[]
 }
 
@@ -159,10 +184,30 @@ export interface ReportRequest {
   workspace?: string
 }
 
+export interface ReportSkippedDocument {
+  path: string
+  error: string
+}
+
+export interface ReportCoverage {
+  sourceDocuments: number
+  contextDocuments: number
+  readableDocuments: number
+  truncatedDocuments: number
+  missingEmbeddings: number
+  failedWorkspaces?: string[]
+  skippedDocuments?: ReportSkippedDocument[]
+  clusteringMode?: 'vector' | 'hybrid' | 'lexical'
+}
+
 export interface ReportResponse {
-  format: 'markdown' | 'html'
+  format: 'md' | 'html'
   body: string
   savedName?: string
+  coverage?: ReportCoverage
+  inputDocumentCount?: number
+  clusterCount?: number
+  sourceReportIDs?: string[]
 }
 
 export interface ReportMeta {
@@ -182,4 +227,86 @@ export interface SyncResult {
   action: 'pushed' | 'pulled' | 'merged' | 'up-to-date' | 'error'
   filesChanged: number
   message: string
+}
+
+// ── Todo ────────────────────────────────────────────────────────────────────
+
+export type TodoMetadataSource = 'ui' | 'mcp'
+export type TodoStatus = 'open' | 'in_progress' | 'done'
+export type TodoPriority = 'urgent' | 'high' | 'normal' | 'low'
+
+export interface TodoChangeRef {
+  workspace: string
+  name: string
+}
+
+export interface TodoWikiRef {
+  componentId: string
+  workspace: string
+  titleSnapshot: string
+}
+
+export interface Todo {
+  id: string
+  workspace: string
+  title: string
+  notes: string
+  status: TodoStatus
+  priority: TodoPriority
+  dueAt: string | null
+  change: TodoChangeRef | null
+  wikiRefs: TodoWikiRef[]
+  metadata: { source: TodoMetadataSource }
+  createdAt: string
+  updatedAt: string
+  completedAt: string | null
+}
+
+export interface TodoCounts {
+  total: number
+  open: number
+  inProgress: number
+  done: number
+}
+
+export interface TodoListResponse {
+  items: Todo[]
+  counts: TodoCounts
+  revision: number
+  writable: boolean
+}
+
+export interface CreateTodoInput {
+  workspace: string
+  title: string
+  notes?: string
+  status?: TodoStatus
+  priority?: TodoPriority
+  dueAt?: string | null
+  change?: TodoChangeRef | null
+  wikiRefs?: TodoWikiRef[]
+}
+
+export type UpdateTodoInput = Partial<CreateTodoInput>
+
+/** Fill in Go omitempty defaults so consumers always see a well-shaped Todo. */
+export function normalizeTodo(t: Todo): Todo {
+  return {
+    ...t,
+    notes: t.notes ?? '',
+    dueAt: t.dueAt ?? null,
+    change: t.change ?? null,
+    wikiRefs: t.wikiRefs ?? [],
+    completedAt: t.completedAt ?? null,
+  }
+}
+
+/** URL-safe encode a todo ID for use in REST path segments. */
+export function encodeTodoId(id: string): string {
+  return encodeURIComponent(id)
+}
+
+/** Decode a URL-encoded todo ID back to its raw value. */
+export function decodeTodoId(id: string): string {
+  return decodeURIComponent(id)
 }

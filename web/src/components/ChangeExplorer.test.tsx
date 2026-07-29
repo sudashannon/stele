@@ -26,7 +26,7 @@ describe('ChangeExplorer', () => {
     expect(screen.getByText('foo')).toBeTruthy()
     expect(screen.getByText('bar')).toBeTruthy()
     fireEvent.click(screen.getByText('bar'))
-    expect(onSelect).toHaveBeenCalledWith('bar')
+    expect(onSelect).toHaveBeenCalledWith('bar', undefined)
   })
 
   it('renders a phase badge and workflow tag on each change card', () => {
@@ -223,5 +223,45 @@ describe('ChangeExplorer', () => {
     fireEvent.change(input, { target: { value: '' } })
     expect(screen.getByText('foo')).toBeTruthy()
     expect(screen.getByText('bar')).toBeTruthy()
+  })
+
+  it('offers and filters source-specific Trellis workflow and phases', () => {
+    render(
+      <ChangeExplorer
+        changes={[
+          makeChange({ name: 'open-change', workflow: 'full', phase: 'build' }),
+          makeChange({
+            name: 'trellis-task',
+            sourceType: 'trellis',
+            workflow: 'trellis',
+            phase: 'in_progress',
+          }),
+        ]}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('工作流'), { target: { value: 'trellis' } })
+    fireEvent.change(screen.getByLabelText('阶段'), { target: { value: 'in_progress' } })
+    expect(screen.getByText('trellis-task')).toBeTruthy()
+    expect(screen.queryByText('open-change')).toBeNull()
+  })
+  it('labels standalone Superpowers items without reclassifying them as OpenSpec', () => {
+    render(
+      <ChangeExplorer
+        changes={[
+          makeChange({
+            name: 'cache-redesign',
+            sourceType: 'superpowers',
+            workflow: 'superpowers',
+            phase: 'design',
+          }),
+        ]}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('Superpowers')).toBeTruthy()
+    expect(screen.queryByText('OpenSpec')).toBeNull()
   })
 })

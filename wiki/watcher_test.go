@@ -1,6 +1,10 @@
 package wiki
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestIsWikiFile(t *testing.T) {
 	cases := []struct {
@@ -12,6 +16,8 @@ func TestIsWikiFile(t *testing.T) {
 		{"changes/x/image.png", false},
 		{"/absolute/path/to/proposal.md", true},
 		{"changes/x/comet.yaml", false},
+		{".trellis/tasks/07-26-beta/task.json", true},
+		{".trellis/tasks/07-26-beta/implement.jsonl", true},
 		{"changes/x/notes.markdown", false},
 	}
 	for _, c := range cases {
@@ -54,5 +60,41 @@ func TestCommunityRedetectionRequiresDirtyThreshold(t *testing.T) {
 	}
 	if _, stale := graph.Communities()["sentinel"]; stale {
 		t.Fatal("community detection did not replace stale communities")
+	}
+}
+
+func TestWatcherPrunesTrellisRuntime(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".trellis")
+	tasks := filepath.Join(root, "tasks")
+	runtimeDir := filepath.Join(root, ".runtime", "sessions")
+	for _, dir := range []string{tasks, runtimeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	watcher := NewWatcher(NewAPI(BuildGraph(nil, nil)), "")
+	if err := watcher.Start([]string{root}); err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Stop()
+	watched := map[string]bool{}
+	for _, path := range watcher.watcher.WatchList() {
+		watched[filepath.Clean(path)] = true
+	}
+	if !watched[root] || !watched[tasks] {
+		t.Fatalf("expected .trellis and tasks watches, got %v", watched)
+	}
+	if watched[runtimeDir] || watched[filepath.Dir(runtimeDir)] {
+		t.Fatalf(".trellis runtime must not be watched: %v", watched)
+	}
+}
+
+func TestRequiresFullRebuildForSuperpowersArtifacts(t *testing.T) {
+	path := filepath.Join("/repo", "docs", "superpowers", "plans", "2026-07-21-cache.md")
+	if !requiresFullRebuild([]string{path}) {
+		t.Fatalf("Superpowers convention changes require a full rebuild: %q", path)
+	}
+	if requiresFullRebuild([]string{filepath.Join("/repo", "docs", "notes.md")}) {
+		t.Fatal("unrelated project docs must retain incremental updates")
 	}
 }

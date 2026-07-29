@@ -6,34 +6,6 @@ import { GraphFilters } from './GraphFilters'
 import { useWikiEvents } from '../hooks/useWikiEvents'
 
 /**
- * Resolves a CSS color expression (var(), color-mix(), or plain hex) to a
- * concrete color value usable on Canvas. CSS custom properties and color-mix()
- * work in DOM styling but Canvas fillStyle/strokeStyle needs a resolved color
- * string (e.g. "rgb(15, 98, 254)").
- *
- * Uses a cached hidden element: sets the expression as color, reads the
- * computed value via getComputedStyle, then clears it.
- */
-let _resolveEl: HTMLDivElement | null = null
-const _resolveCache = new Map<string, string>()
-function resolveCSSColor(expr: string): string {
-  const cached = _resolveCache.get(expr)
-  if (cached !== undefined) return cached
-  if (!_resolveEl) {
-    _resolveEl = document.createElement('div')
-    _resolveEl.style.display = 'none'
-    document.body.appendChild(_resolveEl)
-  }
-  const supportsColorMix = CSS.supports('color', 'color-mix(in srgb, red, blue)')
-  const testExpr = supportsColorMix ? expr : expr.replace(/color-mix\([^)]+\)/g, 'var(--color-text-secondary)')
-  _resolveEl.style.color = testExpr
-  const resolved = getComputedStyle(_resolveEl).color
-  _resolveEl.style.color = ''
-  _resolveCache.set(expr, resolved)
-  return resolved
-}
-
-/**
  * Color legend for the 8 WikiComponent types shown in the WikiGraph force-directed view.
  *
  * Reused categories map to the app's semantic CSS variables; the remaining
@@ -85,21 +57,84 @@ export const COMMUNITY_COLORS = [
   'color-mix(in srgb, var(--color-warn) 70%, var(--color-surface))',
 ]
 
-// Canvas-resolved equivalents of the CSS-variable-based color maps above.
-// CSS var() and color-mix() do not work in Canvas fillStyle/strokeStyle, so
-// every value used in a cytoscape style must be pre-resolved via the browser's
-// CSS engine.
-const R_TYPE_COLORS = Object.fromEntries(
-  Object.entries(TYPE_COLORS).map(([k, v]) => [k, resolveCSSColor(v)]),
-)
-const R_EDGE_COLORS = Object.fromEntries(
-  Object.entries(EDGE_COLORS).map(([k, v]) => [k, resolveCSSColor(v)]),
-)
-const R_EDGE_FALLBACK_COLOR = resolveCSSColor(EDGE_FALLBACK_COLOR)
-const R_COMMUNITY_COLORS = COMMUNITY_COLORS.map(resolveCSSColor)
-const R_TEXT_PRIMARY = resolveCSSColor('var(--color-text-primary)')
-const R_ACCENT = resolveCSSColor('var(--color-accent)')
-const R_SURFACE = resolveCSSColor('var(--color-surface)')
+type RGB = readonly [number, number, number]
+
+function parseRGB(value: string): RGB | null {
+  const hex = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(value.trim())
+  if (hex) return [Number.parseInt(hex[1], 16), Number.parseInt(hex[2], 16), Number.parseInt(hex[3], 16)]
+
+  const rgb = /^rgba?\(\s*([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:\s*,\s*|\s+)([\d.]+)/i.exec(value.trim())
+  if (!rgb) return null
+  const channel = (input: string) => Math.max(0, Math.min(255, Math.round(Number(input))))
+  return [channel(rgb[1]), channel(rgb[2]), channel(rgb[3])]
+}
+
+function readColorToken(styles: CSSStyleDeclaration, name: string, fallback: string): RGB {
+  return parseRGB(styles.getPropertyValue(name)) ?? parseRGB(fallback)!
+}
+
+function mixRGB(left: RGB, right: RGB, leftWeight: number): RGB {
+  const rightWeight = 1 - leftWeight
+  return [
+    Math.round(left[0] * leftWeight + right[0] * rightWeight),
+    Math.round(left[1] * leftWeight + right[1] * rightWeight),
+    Math.round(left[2] * leftWeight + right[2] * rightWeight),
+  ]
+}
+
+function serializeRGB([red, green, blue]: RGB): string {
+  return `rgb(${red}, ${green}, ${blue})`
+}
+
+function createCytoscapePalette() {
+  const styles = getComputedStyle(document.documentElement)
+  const accent = readColorToken(styles, '--color-accent', '#0f62fe')
+  const success = readColorToken(styles, '--color-success', '#24a148')
+  const danger = readColorToken(styles, '--color-danger', '#da1e28')
+  const warn = readColorToken(styles, '--color-warn', '#f1c21b')
+  const surface = readColorToken(styles, '--color-surface', '#ffffff')
+  const textPrimary = readColorToken(styles, '--color-text-primary', '#161616')
+  const textSecondary = readColorToken(styles, '--color-text-secondary', '#525252')
+
+  const typeColors: Record<string, string> = {
+    change: serializeRGB(accent),
+    proposal: serializeRGB(mixRGB(accent, danger, 0.45)),
+    design: serializeRGB(mixRGB(success, accent, 0.55)),
+    tasks: serializeRGB(warn),
+    spec: serializeRGB(mixRGB(warn, danger, 0.7)),
+    plan: serializeRGB(success),
+    artifact: serializeRGB(textSecondary),
+    diagram: serializeRGB(danger),
+  }
+  const edgeColors: Record<string, string> = {
+    implements: serializeRGB(accent),
+    references: serializeRGB(success),
+    generates: serializeRGB(warn),
+  }
+
+  return {
+    accent: serializeRGB(accent),
+    surface: serializeRGB(surface),
+    textPrimary: serializeRGB(textPrimary),
+    textSecondary: serializeRGB(textSecondary),
+    typeColors,
+    communityColors: [
+      accent,
+      success,
+      danger,
+      warn,
+      mixRGB(accent, success, 0.6),
+      mixRGB(accent, danger, 0.6),
+      mixRGB(success, warn, 0.6),
+      mixRGB(danger, warn, 0.6),
+      mixRGB(accent, surface, 0.7),
+      mixRGB(success, surface, 0.7),
+      mixRGB(danger, surface, 0.7),
+      mixRGB(warn, surface, 0.7),
+    ].map(serializeRGB),
+    edgeColors,
+  }
+}
 
 const POLL_INTERVAL_MS = 3000
 const MAX_POLL_ATTEMPTS = 20
@@ -280,16 +315,24 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     const visibleIds = new Set(visible.map((c) => c.id))
     const visibleEdges = validEdges.filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to))
     const container = containerRef.current
+    // Cytoscape parses colors itself rather than through the browser CSS engine.
+    // Resolve Carbon tokens and color mixes to concrete rgb() values first.
+    const palette = createCytoscapePalette()
     const cy = cytoscape({
       container,
       elements: [
         ...visible.map((c) => {
           const commColor =
             communities[c.id] != null && communities[c.id] >= 0
-              ? R_COMMUNITY_COLORS[communities[c.id] % R_COMMUNITY_COLORS.length]
-              : R_SURFACE
+              ? palette.communityColors[communities[c.id] % palette.communityColors.length]
+              : palette.surface
           return {
-            data: { id: c.id, label: c.title, color: R_TYPE_COLORS[c.type] ?? R_EDGE_FALLBACK_COLOR, commColor },
+            data: {
+              id: c.id,
+              label: c.title,
+              color: palette.typeColors[c.type] ?? palette.textSecondary,
+              commColor,
+            },
           }
         }),
         ...visibleEdges.map((e, i) => ({
@@ -298,7 +341,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             source: e.from,
             target: e.to,
             kind: e.kind,
-            color: R_EDGE_COLORS[e.kind] ?? R_EDGE_FALLBACK_COLOR,
+            color: palette.edgeColors[e.kind] ?? palette.textSecondary,
           },
         })),
       ],
@@ -310,7 +353,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             label: 'data(label)',
             'font-size': 7,
             'min-zoomed-font-size': 9,
-            color: R_TEXT_PRIMARY,
+            color: palette.textPrimary,
             'text-valign': 'bottom',
             'text-margin-y': 3,
             'text-wrap': 'ellipsis',
@@ -325,7 +368,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           selector: 'node.hovered',
           style: {
             'border-width': 2.5,
-            'border-color': R_ACCENT,
+            'border-color': palette.accent,
           },
         },
         {
@@ -359,7 +402,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           selector: 'node.search-match',
           style: {
             'border-width': 3,
-            'border-color': R_ACCENT,
+            'border-color': palette.accent,
             'z-index': 10,
           },
         },

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"comet-ui/chat"
+	"comet-ui/internal/todo"
 )
 
 type API struct {
@@ -23,8 +24,11 @@ type API struct {
 	ws              []WorkspaceConfig
 	indexCacheDir   string
 	lister          WorkspaceLister
+	ready           bool
 	dirtyStructural int32
 	SSE             *SSEHub
+	todoStore       *todo.Store // set via SetTodoStore; nil until wired
+	todoToken       []byte      // MCP write token; not logged
 }
 
 // WorkspaceLister exposes the CURRENT workspace registry, decoupling
@@ -36,7 +40,7 @@ type WorkspaceLister interface {
 }
 
 func NewAPI(g *Graph) *API {
-	return &API{graph: g}
+	return &API{graph: g, ready: true}
 }
 
 func NewAPIWithWorkspaces(ws []WorkspaceConfig, indexCacheDir string) (*API, error) {
@@ -44,7 +48,7 @@ func NewAPIWithWorkspaces(ws []WorkspaceConfig, indexCacheDir string) (*API, err
 	if err != nil {
 		return nil, err
 	}
-	return &API{graph: g, ws: ws, indexCacheDir: indexCacheDir}, nil
+	return &API{graph: g, ws: ws, indexCacheDir: indexCacheDir, ready: true}, nil
 }
 
 // NewAPIWithWorkspacesAsync constructs an API immediately with an empty,
@@ -64,6 +68,23 @@ func (a *API) SetLister(lister WorkspaceLister) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lister = lister
+}
+
+// SetTodoStore atomically sets the shared Todo store and MCP write token.
+func (a *API) SetTodoStore(store *todo.Store, token []byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.todoStore = store
+	a.todoToken = token
+}
+
+// TodoStoreSnapshot returns the current store and token under RLock,
+// ensuring callers never hold a.mu across Store operations or title
+// resolution.
+func (a *API) TodoStoreSnapshot() (*todo.Store, []byte) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.todoStore, a.todoToken
 }
 
 // DirtyCount returns the number of structural graph changes accumulated
@@ -336,11 +357,16 @@ type semanticSearchResult struct {
 	Similarity float64 `json:"similarity"`
 }
 
-// HandleSemanticSearch embeds the query server-side (via the same
-// scripts/embed.ts bun script used to build the corpus) and ranks every
-// precomputed component embedding against it by cosine similarity. This
-// replaces the old client-side flow where the browser fetched the entire
-// embeddings corpus and ran @ternlight/mini's WASM encoder locally.
+type semanticScoredResult struct {
+	id          string
+	score       float64
+	lexicalRank int
+	typeOrder   int
+}
+
+// HandleSemanticSearch combines filename/title matching with semantic
+// similarity. Lexical matches remain searchable even when a component has no
+// embedding or its cosine similarity falls below the semantic noise floor.
 func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", 405)
@@ -351,24 +377,27 @@ func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	if req.Query == "" {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
 		json.NewEncoder(w).Encode([]semanticSearchResult{})
 		return
 	}
-	// topK=0 means return all results (frontend handles pagination)
 
 	// Embed the query using the same script the offline corpus build uses.
+	// If embedding fails, exact lexical matches can still be returned.
 	scriptPath := findEmbedScript()
-	queryComps := []Component{{ID: "__query__", Title: req.Query, Path: ""}}
+	queryComps := []Component{{ID: "__query__", Title: query, Path: ""}}
 	embedResult, err := ComputeEmbeddings(queryComps, scriptPath)
+	var queryVec []float32
+	embedFailure := ""
 	if err != nil {
-		http.Error(w, "embedding failed: "+err.Error(), 500)
-		return
-	}
-	queryVec, ok := embedResult["__query__"]
-	if !ok || len(queryVec) == 0 {
-		http.Error(w, "embedding produced no vector", 500)
-		return
+		embedFailure = "embedding failed: " + err.Error()
+	} else {
+		var ok bool
+		queryVec, ok = embedResult["__query__"]
+		if !ok || len(queryVec) == 0 {
+			embedFailure = "embedding produced no vector"
+		}
 	}
 
 	a.mu.RLock()
@@ -376,81 +405,133 @@ func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	components := a.graph.Components()
 	a.mu.RUnlock()
 
-	type scored struct {
-		id      string
-		sim     float64
-		typ     string
-		sortKey float64
+	results := rankSemanticSearch(query, queryVec, components, embeddings)
+	if embedFailure != "" && len(results) == 0 {
+		http.Error(w, embedFailure, 500)
+		return
 	}
 
-	// typeSortOrder: lower = higher priority in search results
-	typeSortOrder := map[string]int{
-		"knowledge": 0, "report": 1, "design": 2, "spec": 3,
-		"plan": 4, "proposal": 5, "tasks": 6, "change": 7,
-		"artifact": 8, "diagram": 9,
+	limit := len(results)
+	if req.TopK > 0 && req.TopK < limit {
+		limit = req.TopK
 	}
-	var results []scored
-	queryNorm := vecNorm(queryVec)
-	queryLower := strings.ToLower(req.Query)
-	for id, vec := range embeddings {
-		sim := cosineSim(queryVec, vec, queryNorm, vecNorm(vec))
-		if sim < 0.12 {
-			continue
-		}
-		c, ok := components[id]
-		if !ok {
-			results = append(results, scored{id: id, sim: sim, typ: ""})
-			continue
-		}
-		// Title keyword boost
-		if strings.Contains(strings.ToLower(c.Title), queryLower) {
-			sim += 0.6
-		}
-		// Filename keyword boost (skip common extensions)
-		filename := filepath.Base(c.Path)
-		ext := filepath.Ext(filename)
-		nameOnly := strings.TrimSuffix(filename, ext)
-		if strings.Contains(strings.ToLower(nameOnly), queryLower) {
-			sim += 0.3
-		}
-		// Prevent negative similarity floor
-		if sim < 0 {
-			sim = 0
-		}
-		// sortKey: type priority first, then similarity inverted for descending sort
-		typOrder := typeSortOrder[string(c.Type)]
-		sortKey := (1.0 - sim) + float64(typOrder)*0.001
-		results = append(results, scored{id: id, sim: sim, typ: string(c.Type), sortKey: sortKey})
-	}
-	// Fallback: if vector search yields nothing, do title substring match
-	if len(results) == 0 {
-		for id, c := range components {
-			name := strings.TrimSuffix(filepath.Base(c.Path), filepath.Ext(c.Path))
-			if strings.Contains(strings.ToLower(c.Title), queryLower) || strings.Contains(strings.ToLower(name), queryLower) {
-				results = append(results, scored{id: id, sim: 0.5, typ: string(c.Type)})
-			}
-		}
-	}
-	sort.Slice(results, func(i, j int) bool { return results[i].sortKey < results[j].sortKey })
 
 	w.Header().Set("Content-Type", "application/json")
-	out := make([]semanticSearchResult, 0, len(results))
-	for _, res := range results {
-		c, ok := components[res.id]
-		if !ok {
-			continue
-		}
+	out := make([]semanticSearchResult, 0, limit)
+	for _, result := range results[:limit] {
+		component := components[result.id]
 		out = append(out, semanticSearchResult{
-			ID:         res.id,
-			Title:      c.Title,
-			Workspace:  c.Workspace,
-			Type:       string(c.Type),
-			Similarity: res.sim,
+			ID:         result.id,
+			Title:      component.Title,
+			Workspace:  component.Workspace,
+			Type:       string(component.Type),
+			Similarity: result.score,
 		})
 	}
 	json.NewEncoder(w).Encode(out)
 }
 
+const (
+	semanticExactFilenameMatch = iota
+	semanticExactTitleMatch
+	semanticFilenamePrefixMatch
+	semanticTitlePrefixMatch
+	semanticFilenameSubstringMatch
+	semanticTitleSubstringMatch
+	semanticNoLexicalMatch
+)
+
+const semanticSimilarityFloor = 0.12
+
+func rankSemanticSearch(query string, queryVec []float32, components map[string]Component, embeddings map[string][]float32) []semanticScoredResult {
+	queryLower := strings.ToLower(strings.TrimSpace(query))
+	queryNorm := vecNorm(queryVec)
+	results := make([]semanticScoredResult, 0, len(components))
+
+	for id, component := range components {
+		lexicalRank, lexicalBoost := semanticLexicalMatch(component, queryLower)
+		semanticScore := 0.0
+		if vector, ok := embeddings[id]; ok && len(queryVec) > 0 && len(vector) == len(queryVec) {
+			semanticScore = cosineSim(queryVec, vector, queryNorm, vecNorm(vector))
+		}
+		if lexicalRank == semanticNoLexicalMatch && semanticScore < semanticSimilarityFloor {
+			continue
+		}
+
+		score := math.Max(0, semanticScore) + lexicalBoost
+		score = math.Min(1, score)
+		results = append(results, semanticScoredResult{
+			id:          id,
+			score:       score,
+			lexicalRank: lexicalRank,
+			typeOrder:   semanticTypeOrder(component.Type),
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].lexicalRank != results[j].lexicalRank {
+			return results[i].lexicalRank < results[j].lexicalRank
+		}
+		if results[i].score != results[j].score {
+			return results[i].score > results[j].score
+		}
+		if results[i].typeOrder != results[j].typeOrder {
+			return results[i].typeOrder < results[j].typeOrder
+		}
+		return results[i].id < results[j].id
+	})
+	return results
+}
+
+func semanticLexicalMatch(component Component, query string) (int, float64) {
+	filename := strings.ToLower(filepath.Base(component.Path))
+	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
+	title := strings.ToLower(strings.TrimSpace(component.Title))
+
+	switch {
+	case query == filename || query == stem:
+		return semanticExactFilenameMatch, 1
+	case query == title:
+		return semanticExactTitleMatch, 0.9
+	case strings.HasPrefix(stem, query):
+		return semanticFilenamePrefixMatch, 0.8
+	case strings.HasPrefix(title, query):
+		return semanticTitlePrefixMatch, 0.7
+	case strings.Contains(stem, query):
+		return semanticFilenameSubstringMatch, 0.7
+	case strings.Contains(title, query):
+		return semanticTitleSubstringMatch, 0.6
+	default:
+		return semanticNoLexicalMatch, 0
+	}
+}
+
+func semanticTypeOrder(componentType ComponentType) int {
+	switch componentType {
+	case TypeKnowledge:
+		return 0
+	case TypeReport:
+		return 1
+	case TypeDesign:
+		return 2
+	case TypeSpec:
+		return 3
+	case TypePlan:
+		return 4
+	case TypeProposal:
+		return 5
+	case TypeTasks:
+		return 6
+	case TypeChange:
+		return 7
+	case TypeArtifact:
+		return 8
+	case TypeDiagram:
+		return 9
+	default:
+		return 10
+	}
+}
 func vecNorm(v []float32) float64 {
 	var sum float64
 	for _, x := range v {
@@ -660,6 +741,7 @@ func (a *API) Rebuild() error {
 	}
 	a.mu.Lock()
 	a.graph = newGraph
+	a.ready = true
 	a.ResetDirty()
 	a.mu.Unlock()
 	return nil
@@ -825,4 +907,14 @@ func (a *API) CommunityOverview(changeID string) string {
 		return ""
 	}
 	return string(data)
+}
+
+// ComponentByID is a public accessor for the live graph. It returns the
+// Component and true when the ID is in the graph, hiding the internal
+// *Graph type from callers (e.g. the Todo REST handler) that only need
+// the wiki.API contract.
+func (a *API) ComponentByID(id string) (Component, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.graph.Component(id)
 }

@@ -224,7 +224,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
         </div>
         {generating && (
           <div data-testid="report-progress" className="text-xs text-[var(--color-text-secondary)]">
-            正在汇总变更… 合成中…
+            正在读取 Wiki 文档、聚类并分层合成…
           </div>
         )}
         {error && (
@@ -258,6 +258,19 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
                   </button>
                 )}
               </div>
+              {result.inputDocumentCount !== undefined && (
+                <div
+                  data-testid="report-coverage"
+                  className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 border border-[var(--color-border)] bg-white px-3 py-2 text-xs text-[var(--color-text-secondary)]"
+                >
+                  <span>输入文档 {result.inputDocumentCount}</span>
+                  <span>主题 {result.clusterCount ?? 0}</span>
+                  {result.coverage?.clusteringMode && <span>聚类 {result.coverage.clusteringMode}</span>}
+                  {!!result.coverage?.contextDocuments && <span>背景文档 {result.coverage.contextDocuments}</span>}
+                  {!!result.coverage?.missingEmbeddings && <span>词法降级 {result.coverage.missingEmbeddings}</span>}
+                  {!!result.sourceReportIDs?.length && <span>复用周报 {result.sourceReportIDs.length}</span>}
+                </div>
+              )}
               <div className="flex-1 min-h-0">
                 {result.format === 'html' ? (
                   <iframe data-testid="report-result-frame" srcDoc={result.body} className="w-full h-full border border-[var(--color-border)] bg-white" />

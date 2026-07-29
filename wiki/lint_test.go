@@ -127,7 +127,7 @@ func TestLint_DesignNoPlan(t *testing.T) {
 	// Change node older than 3 days
 	change := Component{
 		ID: "/test/changes/x/.comet.yaml", Type: TypeChange,
-		Path: "/test/changes/x/.comet.yaml",
+		Path:        "/test/changes/x/.comet.yaml",
 		Frontmatter: map[string]any{"created_at": "2026-06-01"},
 	}
 	g := BuildGraph([]Component{design, change}, nil)
@@ -148,7 +148,7 @@ func TestLint_DesignNoPlan(t *testing.T) {
 func TestLint_StaleActive(t *testing.T) {
 	change := Component{
 		ID: "/test/changes/stale/.comet.yaml", Type: TypeChange,
-		Path: "/test/changes/stale/.comet.yaml",
+		Path:        "/test/changes/stale/.comet.yaml",
 		Frontmatter: map[string]any{"created_at": "2026-06-01", "phase": "build"},
 	}
 	g := BuildGraph([]Component{change}, nil)
@@ -163,5 +163,41 @@ func TestLint_StaleActive(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected stale-active lint issue")
+	}
+}
+
+func TestLintLifecycleUsesTrellisStatus(t *testing.T) {
+	completed := Component{
+		ID:   "/repo/.trellis/tasks/archive/2026-07/done/task.json",
+		Type: TypeChange,
+		Path: "/repo/.trellis/tasks/archive/2026-07/done/task.json",
+		Frontmatter: map[string]any{
+			"_source":    "trellis",
+			"created_at": "2026-06-01",
+			"phase":      "completed",
+		},
+	}
+	active := Component{
+		ID:   "/repo/.trellis/tasks/old/task.json",
+		Type: TypeChange,
+		Path: "/repo/.trellis/tasks/old/task.json",
+		Frontmatter: map[string]any{
+			"_source":    "trellis",
+			"created_at": "2026-06-01",
+			"phase":      "in_progress",
+		},
+	}
+	issues := BuildGraph([]Component{completed, active}, nil).Lint()
+	foundActive := false
+	for _, issue := range issues {
+		if issue.Rule == "stale-active" && issue.ComponentID == completed.ID {
+			t.Fatal("completed Trellis tasks must not be reported stale")
+		}
+		if issue.Rule == "stale-active" && issue.ComponentID == active.ID {
+			foundActive = true
+		}
+	}
+	if !foundActive {
+		t.Fatal("old in-progress Trellis task should be reported stale")
 	}
 }

@@ -1,6 +1,6 @@
 # Comet Panel
 
-> 工程变更知识图谱 + AI 面板 — 可视化 OpenSpec 变更、语义搜索、知识图谱、自动报告生成。
+> 工程变更知识图谱 + AI 面板 — 统一可视化 OpenSpec 变更、Trellis 任务与独立 Superpowers 项目产物，支持语义搜索、知识图谱和自动报告。
 
 **单 Go 二进制 + 嵌入式前端。下载即用。**
 
@@ -10,19 +10,20 @@
 
 | 模块 | 功能 |
 |------|------|
-| 🚀 **变更仪表盘** | KPI 卡片、变更列表、进度条、多 workspace 聚合 |
+| 🚀 **变更仪表盘** | KPI 卡片、变更列表、进度条、OpenSpec + Trellis + Superpowers 多 workspace 聚合 |
 | ⌨️ **命令面板** | `Ctrl+K` 模糊搜索所有命令、`?` 快捷键速查、类别分组 |
 | 🗺️ **知识图谱** | Cytoscape 力导向图、社区检测、分组染色、节点关系可视化 |
 | 📅 **时间线** | Gantt 风格、阶段着色、今日标记线、周末高亮、workspace 分行 |
 | 📆 **产品日历** | 季度视图、日期产物热力图、按类型排序、点击跳转 viewer |
+| ✅ **聚焦待办** | 今日 / 明日 / 逾期 / 未定分组、优先级、Change/Wiki 关联、右侧焦点编辑 |
 | 🔍 **语义搜索** | Ternlight 向量 embedding + cosine 相似度 + 关键词增强 |
 | ✓ **文档健康** | 死链检测、孤儿节点、lifecycle gap 规则 |
-| 📊 **报告生成** | LLM 驱动的周报/月报 (Markdown + Swiss HTML), 历史管理 |
+| 📊 **报告生成** | Wiki 文档驱动的周报/月报、证据引用、分层聚类与历史管理 |
 | 💬 **AI 对话** | 流式 Chat, 图谱模式 (注入 2-hop 邻域 + 社区综述) |
 | 🖱️ **右键菜单** | 变更卡片 / 最近更新 / 日历产物右键复制路径、打开 |
 | 🔗 **分享** | 生成分享链接，可设置过期时间 |
 | ⚙️ **设置面板** | Provider / Model / API Base 配置 |
-| 🤖 **MCP Server** | Streamable HTTP 端点, 6 个 tools 供 AI agent 查询知识图谱 |
+| 🤖 **MCP Server** | Streamable HTTP 端点, 10 个 tools 供 AI agent 查询知识图谱与管理待办 |
 
 ---
 
@@ -31,7 +32,7 @@
 | 快捷键 | 功能 |
 |--------|------|
 | `Ctrl+K` | 打开命令面板 |
-| `Ctrl+1~7` | 切换视图：变更/图谱/时间线/搜索/最近/文档健康/日历 |
+| `Ctrl+1~8` | 切换视图：变更/图谱/时间线/搜索/最近/文档健康/日历/待办 |
 | `Ctrl+B` | 收藏夹开关 |
 | `Ctrl+=/-` | 放大/缩小 (50%-200%) |
 | `Ctrl+0` | 重置缩放 |
@@ -84,24 +85,24 @@
 
 | 类型 | 来源 |
 |------|------|
-| `change` | `.comet.yaml` 文件 |
-| `proposal` | `proposal.md` |
+| `change` | OpenSpec `.comet.yaml` / Trellis `task.json` |
+| `proposal` | OpenSpec `proposal.md` / Trellis `prd.md` |
 | `design` | `design.md` |
-| `tasks` | `tasks.md` |
-| `spec` | `specs/` 目录下 |
-| `plan` | `plans/` 目录下 |
-| `artifact` | `artifacts/` 目录下 |
+| `tasks` | OpenSpec `tasks.md` / Trellis `implement.md` |
+| `spec` | OpenSpec `specs/` / Trellis `.trellis/spec/` / Superpowers `docs/superpowers/specs/` |
+| `plan` | `plans/` / Superpowers `docs/superpowers/plans/` |
+| `artifact` | `artifacts/` / Superpowers `docs/superpowers/artifacts/` |
 | `diagram` | `diagrams/` 目录下 |
-| `report` | `reports/` 目录下 |
-| `knowledge` | `knowledge/` 目录 或 frontmatter `wiki: true` |
+| `report` | `reports/` / Superpowers `docs/superpowers/reports/` |
+| `knowledge` | OpenSpec `knowledge/` / Trellis `.trellis/workspace/` / frontmatter `wiki: true` |
 
 ### 4 层边提取
 
 | 层 | 来源 | 置信度 |
 |---|------|--------|
-| **YAML** | `.comet.yaml` 的 design_doc/plan/verification_report | 最高 |
+| **Metadata** | OpenSpec `.comet.yaml`；Trellis `task.json`、context JSONL；Superpowers 精确 frontmatter 身份 | 最高 |
 | **Markdown** | 文件内 `[text](path)` 链接 | 高 |
-| **Convention-internal** | 同 change 内 proposal→design→tasks→specs 自动连线 | 中 |
+| **Convention-internal** | OpenSpec/Trellis 工作项内部连线；Superpowers design→plan→execution→verify 精确归组 | 中 |
 | **Vector** | Ternlight embedding cosine top-3 (阈值 0.5) | 语义 |
 
 ### 社区检测
@@ -112,9 +113,9 @@
 
 ### 增量更新
 
-- fsnotify 监控所有 workspace 目录
-- 2s debounce → 自动 rebuild
-- embedding 缓存 (只 embed 新增/变更文件)
+- fsnotify 监控各来源的持久目录；Superpowers 仅监控 `docs/superpowers/{specs,plans,artifacts,reports}`
+- 2s debounce → 增量更新；Superpowers 产物变化触发来源级完整重建
+- 内容哈希 + 输入版本校验的 embedding 缓存（正文变化后自动重算）
 - SSE push → 前端自动刷新
 
 ---
@@ -130,16 +131,18 @@
 
 ## 报告生成
 
-- **周报**: Markdown 格式, 按 workspace × 主题分组, 列关键成果
-- **月报**: Swiss-style 单页 HTML, KPI 卡片 + 主题摘要
-- **LLM 驱动**: 使用已配置的 provider (MiniMax / Claude / OpenAI)
-- **历史管理**: 持久化到 `~/.comet-panel/reports/`, 支持查看/下载/删除
+- **统一语料**: 直接使用 Wiki 索引内 `proposal/design/tasks/spec/plan/artifact/report/knowledge` Markdown；日期口径为文档最后更新时间
+- **周报**: 关系约束 + 向量/词法聚类，按主题并行生成结构化摘要，再渲染为带 `D<n>` 证据引用的 Markdown
+- **月报**: 复用完整落在区间内的周报 `PeriodDigest`，仅为月初/月末和覆盖缺口生成裁剪摘要，再聚类渲染 Swiss-style HTML
+- **可追溯性**: 每份报告同时保存 `.manifest.json`，记录文档内容哈希、主题、结构化 claims、覆盖告警、模型与聚类版本
+- **降级策略**: embedding 缺失时使用确定性词法聚类；索引未就绪或模型输出无法通过证据校验时返回错误且不落盘
+- **历史管理**: 持久化到 `~/.comet-panel/reports/`，支持查看、下载和删除（删除时同步清理 manifest）
 
 ---
 
 ## MCP Server
 
-Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI agent 直接查询知识图谱。
+Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI agent 查询知识图谱并管理待办。Wiki 工具保持只读；待办写工具仅接受 loopback 请求，并要求 `~/.comet-panel/mcp-write-token` 中的 Bearer token。
 
 **端点**: `POST http://localhost:8989/mcp`
 
@@ -151,6 +154,10 @@ Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI a
 | `wiki_overview` | 主题社区综述 |
 | `wiki_read` | 读取文档内容 |
 | `wiki_lint` | 文档健康检查 |
+| `todo_list` | 按状态、workspace、Change 或关键词筛选待办 |
+| `todo_create` | 创建待办（loopback + Bearer） |
+| `todo_update` | 更新或清空待办字段（loopback + Bearer） |
+| `todo_delete` | 按 ID 删除单条待办（loopback + Bearer） |
 
 **Agent 配置示例** (OpenCode `mcp.json`):
 ```json
@@ -183,7 +190,7 @@ go build -o comet-panel .
 ### 运行
 
 ```bash
-./comet-panel --port 8989 --dir /path/to/openspec
+./comet-panel --port 8989 --dir /path/to/openspec-or-trellis-or-superpowers-project
 ```
 
 浏览器打开 `http://localhost:8989`
@@ -204,10 +211,23 @@ systemctl --user enable --now comet-panel
 workspaces:
   - alias: miao
     path: /home/user/workspace/miao/openspec
-  - alias: lz100
-    path: /home/user/workspace/miao/lz100
+    color: '#0063f8'
+    type: openspec
+  - alias: trellis-app
+    path: /home/user/workspace/trellis-app
     color: '#10b981'
+    type: trellis
+  - alias: ideas
+    path: /home/user/workspace/ideas
+    color: '#8b5cf6'
+    type: superpowers
 ```
+
+`type` 可省略，服务会按 `OpenSpec → Trellis → Superpowers` 的优先级自动检测。OpenSpec 可注册 `openspec/` 本身或项目根目录；Trellis 必须注册包含 `.trellis/` 的项目根目录；Superpowers 必须注册仅拥有该来源的项目根目录，并至少包含一个 `docs/superpowers/{specs,plans,artifacts,reports}` 持久目录。混合仓库中的 `docs/superpowers` 仍归 OpenSpec/Trellis 所有，不会重复注册为独立来源；越界符号链接和 `docs/superpowers` 子目录注册会被拒绝。
+
+Trellis 任务状态映射为 `planning → in_progress → completed/rejected`。面板只读取持久文件；“开始执行”和“完成并归档”分别调用项目内 `.trellis/scripts/task.py start` 与 `archive --no-commit`，不会直接改写 `task.json`。
+
+独立 Superpowers 来源为只读：按精确 metadata、`design-doc` 引用或标准文件名归组，展示 `design → plan → build → verify → completed` 生命周期、计划 checkbox 进度和验证报告结果；Comet 不写回这些 Markdown，也不提供迁移按钮。
 
 ### 配置 LLM Provider
 
@@ -262,10 +282,12 @@ tags: [architecture, decision]
 | `/api/workspaces` | GET/POST | 管理 workspace |
 | `/api/changes` | GET | 变更列表 |
 | `/api/changes/:name` | GET | 变更详情 |
+| `/api/todos` | GET/POST | 筛选、计数与创建待办；LAN GET 只读 |
+| `/api/todos/:id` | PATCH/DELETE | 更新或删除单条待办；仅允许 loopback + same-origin |
 | `/api/artifact` | GET | 读取文档内容 |
 | `/api/chat/message` | POST | AI 对话 (流式) |
 | `/api/chat/config` | GET/PUT | Chat 配置 |
-| `/api/report` | POST | 生成报告 |
+| `/api/report` | POST | 从 Wiki 文档生成报告，返回覆盖率、输入文档数、主题数与复用周报 ID |
 | `/api/reports` | GET | 报告历史 |
 | `/api/reports/get` | GET/DELETE | 查看/删除报告 |
 | `/api/wiki/graph` | GET | 完整图谱数据 |
@@ -278,8 +300,8 @@ tags: [architecture, decision]
 | `/api/wiki/recent` | GET | 最近更新 (支持 ?offset=&limit=) |
 | `/api/wiki/calendar/month` | GET | 日历月视图 (?year=&month=) |
 | `/api/wiki/calendar/day` | GET | 日历日视图 (?date=) |
-| `/api/wiki/events` | GET (SSE) | 实时更新推送 |
-| `/mcp` | POST | MCP JSON-RPC 端点 |
+| `/api/wiki/events` | GET (SSE) | 图谱与待办实时更新推送 |
+| `/mcp` | POST | MCP JSON-RPC 端点（6 个 Wiki 工具 + 4 个待办工具） |
 
 ---
 

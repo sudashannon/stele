@@ -1,29 +1,51 @@
 @echo off
-REM === Comet-Panel LAN Port Forwarding ===
-REM Run this ONCE as Administrator on Windows to make comet-panel
-REM reachable from other machines on the LAN.
-REM
-REM Prerequisites:
-REM   1. comet-panel must run with --bind 0.0.0.0 inside WSL2
-REM   2. Get WSL2 IP: wsl hostname -I
-REM   3. This script forwards Windows:8989 -> WSL2:8989
+setlocal
+REM === Comet Panel LAN Port Forwarding ===
+REM Run as Administrator whenever the WSL2 address changes.
+REM comet-panel must listen on 0.0.0.0:8989 inside WSL2.
 
+net session >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Run this script as Administrator.
+    pause
+    exit /b 1
+)
+
+set "WSL_IP="
 echo Checking WSL2 IP...
-for /f "tokens=*" %%i in ('wsl hostname -I') do set WSL_IP=%%i
+for /f "tokens=1" %%i in ('wsl.exe hostname -I') do if not defined WSL_IP set "WSL_IP=%%i"
+if not defined WSL_IP (
+    echo ERROR: Could not determine the WSL2 IP address.
+    pause
+    exit /b 1
+)
 echo WSL2 IP: %WSL_IP%
 
 echo.
-echo Setting up port forwarding: %WSL_IP%:8989 -> Windows:8989
+echo Forwarding Windows:8989 to %WSL_IP%:8989...
+netsh interface portproxy delete v4tov4 listenport=8989 listenaddress=0.0.0.0 >nul 2>&1
 netsh interface portproxy add v4tov4 listenport=8989 listenaddress=0.0.0.0 connectport=8989 connectaddress=%WSL_IP%
+if errorlevel 1 (
+    echo ERROR: Failed to configure the Windows port proxy.
+    pause
+    exit /b 1
+)
 
 echo.
-echo Opening Windows Firewall...
-netsh advfirewall firewall add rule name="Comet Panel" dir=in action=allow protocol=TCP localport=8989
+echo Allowing TCP 8989 from the local subnet...
+netsh advfirewall firewall delete rule name="Comet Panel" >nul 2>&1
+netsh advfirewall firewall delete rule name="Comet Panel 8989" >nul 2>&1
+netsh advfirewall firewall add rule name="Comet Panel 8989" dir=in action=allow protocol=TCP localport=8989 remoteip=LocalSubnet profile=any
+if errorlevel 1 (
+    echo ERROR: Failed to configure Windows Firewall.
+    pause
+    exit /b 1
+)
 
 echo.
 echo === Done ===
 echo Share URL base: http://YOUR_WINDOWS_IP:8989
-echo Get your Windows IP: ipconfig | findstr IPv4
+echo Get your Windows IP: ipconfig ^| findstr IPv4
 echo.
-echo Run comet-panel with: --bind 0.0.0.0 --share-url http://YOUR_WINDOWS_IP:8989
+echo Optional explicit server flag: --share-url http://YOUR_WINDOWS_IP:8989
 pause

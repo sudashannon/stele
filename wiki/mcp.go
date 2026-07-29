@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"comet-ui/internal/todo"
 )
 
 // MCP JSON-RPC types
@@ -114,6 +117,68 @@ var mcpTools = []mcpTool{
 			"properties": map[string]any{},
 		},
 	},
+	{
+		Name:        "todo_list",
+		Description: "列出所有待办事项,可按状态/工作区/Change/Wiki组件/关键词(搜索标题和备注)筛选。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"status":          map[string]any{"type": "string", "description": "筛选状态: open, in_progress, done"},
+				"workspace":       map[string]any{"type": "string", "description": "按 Todo 所属工作区筛选"},
+				"change":          map[string]any{"type": "string", "description": "按关联 Change 名称筛选"},
+				"wikiComponentId": map[string]any{"type": "string", "description": "按关联的 Wiki 组件 ID 筛选"},
+				"q":               map[string]any{"type": "string", "description": "标题和备注关键词搜索"},
+			},
+		},
+	},
+	{
+		Name:        "todo_create",
+		Description: "创建新的待办事项。需要 loopback + Bearer token 鉴权。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"workspace": map[string]any{"type": "string", "description": "所属工作区别名(必填)"},
+				"title":     map[string]any{"type": "string", "description": "待办标题(必填)"},
+				"notes":     map[string]any{"type": "string", "description": "备注"},
+				"status":    map[string]any{"type": "string", "description": "状态: open, in_progress, done (默认 open)"},
+				"priority":  map[string]any{"type": "string", "description": "优先级: urgent, high, normal, low (默认 normal)"},
+				"dueAt":     map[string]any{"type": "string", "description": "截止时间 RFC3339"},
+				"change":    map[string]any{"type": "object", "description": "关联 Change: {workspace, name}"},
+				"wikiRefs":  map[string]any{"type": "array", "description": "关联 Wiki 组件: [{componentId, workspace}]"},
+			},
+			"required": []string{"workspace", "title"},
+		},
+	},
+	{
+		Name:        "todo_update",
+		Description: "更新待办事项的部分字段。需要 loopback + Bearer token 鉴权。change 设为 null 清除关联; wikiRefs 设为 [] 清除列表。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id":        map[string]any{"type": "string", "description": "待办 ID(必填)"},
+				"workspace": map[string]any{"type": "string", "description": "新工作区"},
+				"title":     map[string]any{"type": "string", "description": "新标题"},
+				"notes":     map[string]any{"type": "string", "description": "新备注"},
+				"status":    map[string]any{"type": "string", "description": "新状态"},
+				"priority":  map[string]any{"type": "string", "description": "新优先级"},
+				"dueAt":     map[string]any{"type": []string{"string", "null"}, "description": "新截止时间 RFC3339, null 清除"},
+				"change":    map[string]any{"type": []string{"object", "null"}, "description": "新 Change 关联 {workspace,name}, null 清除"},
+				"wikiRefs":  map[string]any{"type": "array", "description": "新 WikiRefs 列表 [{componentId,workspace}], 传 [] 清除"},
+			},
+			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "todo_delete",
+		Description: "删除待办事项。需要 loopback + Bearer token 鉴权。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "待办 ID(必填)"},
+			},
+			"required": []string{"id"},
+		},
+	},
 }
 
 // HandleMCP is the MCP Streamable HTTP endpoint. It accepts POST JSON-RPC
@@ -155,7 +220,7 @@ func (a *API) HandleMCP(w http.ResponseWriter, r *http.Request) {
 	case "tools/list":
 		a.mcpToolsList(w, req)
 	case "tools/call":
-		a.mcpToolsCall(w, req)
+		a.mcpToolsCall(w, r, req)
 	default:
 		writeRPCError(w, req.ID, -32601, "method not found: "+req.Method)
 	}
@@ -180,7 +245,7 @@ func (a *API) mcpToolsList(w http.ResponseWriter, req jsonRPCRequest) {
 	})
 }
 
-func (a *API) mcpToolsCall(w http.ResponseWriter, req jsonRPCRequest) {
+func (a *API) mcpToolsCall(w http.ResponseWriter, r *http.Request, req jsonRPCRequest) {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -204,6 +269,14 @@ func (a *API) mcpToolsCall(w http.ResponseWriter, req jsonRPCRequest) {
 		result = a.mcpWikiRead(params.Arguments)
 	case "wiki_lint":
 		result = a.mcpWikiLint(params.Arguments)
+	case "todo_list":
+		result = a.mcpTodoList(params.Arguments)
+	case "todo_create":
+		result = a.mcpTodoCreate(r, params.Arguments)
+	case "todo_update":
+		result = a.mcpTodoUpdate(r, params.Arguments)
+	case "todo_delete":
+		result = a.mcpTodoDelete(r, params.Arguments)
 	default:
 		result = mcpToolResult{
 			Content: []mcpContent{{Type: "text", Text: "unknown tool: " + params.Name}},
@@ -495,6 +568,263 @@ func (a *API) mcpWikiLint(args map[string]any) mcpToolResult {
 		sb.WriteString("\n")
 	}
 	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: sb.String()}}}
+}
+
+// mcpAuth checks loopback + Bearer token against the provided token bytes.
+func (a *API) mcpAuth(r *http.Request, tokenBytes []byte) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	if !net.ParseIP(host).IsLoopback() {
+		return false
+	}
+	auth := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		return false
+	}
+	return todo.EqualToken([]byte(auth[len(prefix):]), tokenBytes)
+}
+
+// resolveMCPWikiTitles resolves WikiRef titles from the live graph, matching
+// the REST behavior. Does not hold graph locks across Store ops.
+func (a *API) resolveMCPWikiTitles(refs []todo.WikiRef) []todo.WikiRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]todo.WikiRef, len(refs))
+	copy(out, refs)
+	a.mu.RLock()
+	for i := range out {
+		c, ok := a.graph.Component(out[i].ComponentID)
+		if ok {
+			if c.Title != "" {
+				out[i].TitleSnapshot = c.Title
+			}
+			if c.Workspace != "" {
+				out[i].Workspace = c.Workspace
+			}
+		}
+	}
+	a.mu.RUnlock()
+	return out
+}
+
+// --- Todo MCP tools ---
+
+func (a *API) mcpTodoList(args map[string]any) mcpToolResult {
+	store, _ := a.TodoStoreSnapshot()
+	if store == nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "todo store not available"}}, IsError: true}
+	}
+	f := todo.Filter{
+		Status:          todo.Status(stringArg(args, "status")),
+		Workspace:       stringArg(args, "workspace"),
+		Change:          stringArg(args, "change"),
+		WikiComponentID: stringArg(args, "wikiComponentId"),
+		Q:               stringArg(args, "q"),
+	}
+	items, counts, revision := store.List(f)
+
+	// Resolve current Wiki titles.
+	for i := range items {
+		items[i].WikiRefs = a.resolveMCPWikiTitles(items[i].WikiRefs)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# Todos (%d total, %d open, %d in_progress, %d done) revision %d\n\n", counts.Total, counts.Open, counts.InProgress, counts.Done, revision)
+	if len(items) == 0 {
+		sb.WriteString("(no items)\n")
+	} else {
+		for _, item := range items {
+			dueStr := ""
+			if item.DueAt != "" {
+				dueStr = " due:" + item.DueAt
+			}
+			changeStr := ""
+			if item.Change != nil {
+				changeStr = fmt.Sprintf(" change:%s/%s", item.Change.Workspace, item.Change.Name)
+			}
+			wikiStr := ""
+			if len(item.WikiRefs) > 0 {
+				wikiStr = fmt.Sprintf(" wiki:%d", len(item.WikiRefs))
+			}
+			notesStr := ""
+			if item.Notes != "" {
+				notesStr = " notes:" + item.Notes
+			}
+			fmt.Fprintf(&sb, "- [%s] %s (%s/%s/%s)%s%s%s%s\n", item.ID[:8], item.Title, item.Workspace, item.Status, item.Priority, dueStr, changeStr, wikiStr, notesStr)
+		}
+	}
+	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: sb.String()}}}
+}
+
+func (a *API) mcpTodoCreate(r *http.Request, args map[string]any) mcpToolResult {
+	store, token := a.TodoStoreSnapshot()
+	if store == nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "todo store not available"}}, IsError: true}
+	}
+	if !a.mcpAuth(r, token) {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "write access denied: loopback + Bearer token required"}}, IsError: true}
+	}
+
+	in := todo.CreateInput{
+		Workspace: stringArg(args, "workspace"),
+		Title:     stringArg(args, "title"),
+		Notes:     stringArg(args, "notes"),
+		Status:    todo.Status(stringArg(args, "status")),
+		Priority:  todo.Priority(stringArg(args, "priority")),
+		DueAt:     stringArg(args, "dueAt"),
+		Metadata:  todo.Metadata{Source: todo.SourceMCP},
+	}
+	if v, ok := args["change"]; ok && v != nil {
+		ch, ok := v.(map[string]any)
+		if !ok {
+			return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "change must be an object with workspace and name"}}, IsError: true}
+		}
+		in.Change = &todo.ChangeRef{
+			Workspace: fmt.Sprint(ch["workspace"]),
+			Name:      fmt.Sprint(ch["name"]),
+		}
+	}
+	if v, ok := args["wikiRefs"]; ok && v != nil {
+		refs, ok := v.([]any)
+		if !ok {
+			return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "wikiRefs must be an array"}}, IsError: true}
+		}
+		for _, r := range refs {
+			rm, ok := r.(map[string]any)
+			if !ok {
+				return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "each wikiRefs entry must be an object with componentId and workspace"}}, IsError: true}
+			}
+			in.WikiRefs = append(in.WikiRefs, todo.WikiRef{
+				ComponentID: fmt.Sprint(rm["componentId"]),
+				Workspace:   fmt.Sprint(rm["workspace"]),
+			})
+		}
+	}
+
+	item, err := store.Create(in)
+	if err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "create failed: " + err.Error()}}, IsError: true}
+	}
+	item.WikiRefs = a.resolveMCPWikiTitles(item.WikiRefs)
+	data, _ := json.MarshalIndent(item, "", "  ")
+	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: string(data)}}}
+}
+
+func (a *API) mcpTodoUpdate(r *http.Request, args map[string]any) mcpToolResult {
+	store, token := a.TodoStoreSnapshot()
+	if store == nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "todo store not available"}}, IsError: true}
+	}
+	if !a.mcpAuth(r, token) {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "write access denied: loopback + Bearer token required"}}, IsError: true}
+	}
+
+	id := stringArg(args, "id")
+	if id == "" {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "id is required"}}, IsError: true}
+	}
+
+	var in todo.UpdateInput
+	if v, ok := args["workspace"]; ok {
+		s := fmt.Sprint(v)
+		in.Workspace = &s
+	}
+	if v, ok := args["title"]; ok {
+		s := fmt.Sprint(v)
+		in.Title = &s
+	}
+	if v, ok := args["notes"]; ok {
+		s := fmt.Sprint(v)
+		in.Notes = &s
+	}
+	if v, ok := args["status"]; ok {
+		s := todo.Status(fmt.Sprint(v))
+		in.Status = &s
+	}
+	if v, ok := args["priority"]; ok {
+		s := todo.Priority(fmt.Sprint(v))
+		in.Priority = &s
+	}
+	if v, exists := args["dueAt"]; exists {
+		in.DueAtSet = true
+		if v != nil {
+			s := fmt.Sprint(v)
+			in.DueAt = &s
+		}
+		// v == nil clears dueAt.
+	}
+	// change: absent = no-op, null = clear, object = replace.
+	if v, exists := args["change"]; exists {
+		in.ChangeSet = true
+		if v != nil {
+			ch, ok := v.(map[string]any)
+			if !ok {
+				return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "change must be an object {workspace,name} or null"}}, IsError: true}
+			}
+			in.Change = &todo.ChangeRef{
+				Workspace: fmt.Sprint(ch["workspace"]),
+				Name:      fmt.Sprint(ch["name"]),
+			}
+		}
+	}
+	if v, exists := args["wikiRefs"]; exists {
+		in.WikiRefsSet = true
+		if v != nil {
+			refs, ok := v.([]any)
+			if !ok {
+				return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "wikiRefs must be an array"}}, IsError: true}
+			}
+			var wr []todo.WikiRef
+			for _, r := range refs {
+				rm, ok := r.(map[string]any)
+				if !ok {
+					return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "each wikiRefs entry must be an object with componentId and workspace"}}, IsError: true}
+				}
+				wr = append(wr, todo.WikiRef{
+					ComponentID: fmt.Sprint(rm["componentId"]),
+					Workspace:   fmt.Sprint(rm["workspace"]),
+				})
+			}
+			in.WikiRefs = wr
+		}
+	}
+
+	item, err := store.Update(id, in)
+	if err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "update failed: " + err.Error()}}, IsError: true}
+	}
+	item.WikiRefs = a.resolveMCPWikiTitles(item.WikiRefs)
+	data, _ := json.MarshalIndent(item, "", "  ")
+	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: string(data)}}}
+}
+
+func (a *API) mcpTodoDelete(r *http.Request, args map[string]any) mcpToolResult {
+	store, token := a.TodoStoreSnapshot()
+	if store == nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "todo store not available"}}, IsError: true}
+	}
+	if !a.mcpAuth(r, token) {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "write access denied: loopback + Bearer token required"}}, IsError: true}
+	}
+
+	id := stringArg(args, "id")
+	if id == "" {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "id is required"}}, IsError: true}
+	}
+
+	if err := store.Delete(id); err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "delete failed: " + err.Error()}}, IsError: true}
+	}
+	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "deleted " + id}}}
+}
+
+func stringArg(args map[string]any, key string) string {
+	v, _ := args[key].(string)
+	return v
 }
 
 // Helpers

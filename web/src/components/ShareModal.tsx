@@ -21,17 +21,16 @@ export function ShareModal({ path, workspace, onClose }: ShareModalProps) {
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [editableUrl, setEditableUrl] = useState<string | null>(null)
 
   const handleCreate = useCallback(async () => {
     if (!path) return
     setLoading(true)
     setError(null)
     try {
-      // createShareLink returns {url}, we extract token from the URL
-      const resp = await createShareLink(path, workspace, ttl, window.location.origin)
+      // The backend owns the public share base URL; window.location.origin may
+      // be localhost even when recipients must use the Windows LAN address.
+      const resp = await createShareLink(path, workspace, ttl)
       setLink(resp.url)
-      setEditableUrl(resp.url)
       const parts = resp.url.split('/share/')
       if (parts.length === 2) setToken(parts[1])
     } catch (e) {
@@ -48,7 +47,6 @@ export function ShareModal({ path, workspace, onClose }: ShareModalProps) {
       await revokeShareLink(token)
       setLink(null)
       setToken(null)
-      setEditableUrl(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : '撤销失败')
     } finally {
@@ -57,7 +55,7 @@ export function ShareModal({ path, workspace, onClose }: ShareModalProps) {
   }, [token])
 
   const handleCopy = useCallback(async () => {
-    const urlToCopy = editableUrl ?? link
+    const urlToCopy = link
     if (!urlToCopy) return
     try {
       await navigator.clipboard.writeText(urlToCopy)
@@ -121,8 +119,8 @@ export function ShareModal({ path, workspace, onClose }: ShareModalProps) {
             <div className="flex items-center gap-2 mb-4">
               <input
                 type="text"
-                value={editableUrl ?? link}
-                onChange={(e) => setEditableUrl(e.target.value)}
+                value={link}
+                readOnly
                 data-testid="share-link-input"
                 className="flex-1 text-xs bg-[var(--color-bg)] px-3 py-2 border border-[var(--color-border)] text-[var(--color-text-primary)] overflow-hidden text-ellipsis"
               />
