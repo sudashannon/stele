@@ -29,13 +29,35 @@ describe('DiagramBlock', () => {
     expect(mermaid.render).toHaveBeenCalledWith(expect.stringMatching(/^mermaid-/), 'graph TD;A-->B')
   })
 
-  it('shows a visible fallback when mermaid.render fails', async () => {
+  it('shows a visible fallback with the underlying reason when mermaid.render fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.mocked(mermaid.render).mockRejectedValue(new Error('parse error'))
 
     render(<DiagramBlock language="mermaid" code="invalid mermaid syntax" />)
 
     await waitFor(() => expect(screen.getByText('Mermaid 图表渲染失败，已显示源码。')).toBeTruthy())
     expect(screen.getByText('invalid mermaid syntax')).toBeTruthy()
+    expect(screen.getByText('parse error')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '刷新页面' })).toBeNull()
+    expect(consoleError).toHaveBeenCalledWith('mermaid render failed', expect.any(Error))
+  })
+
+  it('offers a reload instead of blaming the source when the renderer chunk is stale', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(mermaid.render).mockRejectedValue(
+      new TypeError(
+        'Failed to fetch dynamically imported module: http://localhost:8989/assets/mermaid.core-CB5VEcVa.js',
+      ),
+    )
+
+    render(<DiagramBlock language="mermaid" code="graph TD;A-->B" />)
+
+    await waitFor(() =>
+      expect(screen.getByText('图表渲染器加载失败：面板已更新，请刷新页面。')).toBeTruthy(),
+    )
+    expect(screen.getByRole('button', { name: '刷新页面' })).toBeTruthy()
+    expect(screen.queryByText('Mermaid 图表渲染失败，已显示源码。')).toBeNull()
+    expect(screen.getByText('graph TD;A-->B')).toBeTruthy()
   })
 
   it('renders a plantuml diagram by fetching the SVG from Kroki', async () => {
