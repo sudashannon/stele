@@ -1,8 +1,37 @@
-type View = 'changes' | 'todos' | 'graph' | 'timeline' | 'search' | 'recent' | 'lint' | 'report' | 'shares' | 'calendar'
+import { Icon, type IconName } from './icons'
+import { formatShortcut, type ShortcutDef } from '../hooks/useKeyboardShortcuts'
 
-interface SideRailProps {
-  view: View
-  onSelect: (v: View) => void
+export type SideRailView =
+  | 'changes'
+  | 'todos'
+  | 'graph'
+  | 'timeline'
+  | 'search'
+  | 'recent'
+  | 'lint'
+  | 'report'
+  | 'shares'
+  | 'calendar'
+
+interface SideRailItem {
+  key: SideRailView
+  label: string
+  icon: IconName
+  shortcutKey?: number
+}
+
+interface SideRailAction {
+  label: string
+  icon: IconName
+  onClick?: () => void
+  disabled?: boolean
+  pressed?: boolean
+  title: string
+}
+
+export interface SideRailProps {
+  view: SideRailView
+  onSelect: (v: SideRailView) => void
   onOpenSettings?: () => void
   onToggleBookmarks?: () => void
   bookmarkPanelOpen?: boolean
@@ -10,46 +39,134 @@ interface SideRailProps {
   zoomPercent?: string
   todoCount?: number
 }
-const items: { key: View; label: string; icon: string }[] = [
-  { key: 'changes', label: '变更仪表盘', icon: '📋' },
-  { key: 'todos', label: '待办', icon: '✅' },
-  { key: 'graph', label: '知识图谱', icon: '🧭' },
-  { key: 'timeline', label: '时间线', icon: '📆' },
-  { key: 'search', label: '语义搜索', icon: '🔍' },
-  { key: 'recent', label: '最近更新', icon: '🕐' },
-  { key: 'lint', label: '文档健康', icon: '🩺' },
-  { key: 'report', label: '报告', icon: '📊' },
-  { key: 'shares', label: '分享', icon: '🔗' },
-  { key: 'calendar', label: '日历', icon: '📅' },
+
+export const SIDE_RAIL_ITEMS: SideRailItem[] = [
+  { key: 'changes', label: '变更仪表盘', icon: 'changes', shortcutKey: 1 },
+  { key: 'todos', label: '待办', icon: 'todos', shortcutKey: 2 },
+  { key: 'graph', label: '知识图谱', icon: 'graph', shortcutKey: 3 },
+  { key: 'timeline', label: '时间线', icon: 'timeline', shortcutKey: 4 },
+  { key: 'search', label: '语义搜索', icon: 'search', shortcutKey: 5 },
+  { key: 'recent', label: '最近更新', icon: 'recent', shortcutKey: 6 },
+  { key: 'lint', label: '文档健康', icon: 'lint', shortcutKey: 7 },
+  { key: 'report', label: '报告', icon: 'report', shortcutKey: 8 },
+  { key: 'shares', label: '分享', icon: 'share' },
+  { key: 'calendar', label: '日历', icon: 'calendar' },
 ]
 
-export function SideRail({ view, onSelect, onOpenSettings, onToggleBookmarks, bookmarkPanelOpen, onOpenPalette, zoomPercent, todoCount }: SideRailProps) {
+function shortcutTitle(key: number): string {
+  const shortcut: ShortcutDef = {
+    key: String(key),
+    ctrlOrCmd: true,
+    label: '',
+    run: () => {},
+  }
+  return formatShortcut(shortcut)
+}
+
+// Base classes deliberately carry NO background / border-color / text-color:
+// Tailwind resolves competing utilities by stylesheet order, not by the order
+// they appear in the class string, so a shared `bg-[var(--color-surface)]` in
+// the base beat the active branch's `bg-[var(--color-accent)]` and left the
+// selected rail button white — with white `--color-text-on-color` glyphs on
+// top, the active icon vanished. Each state now supplies its own complete set.
+const RAIL_BUTTON_BASE =
+  'group relative h-10 w-10 border transition-colors focus-visible:z-10 focus-visible:border-[var(--color-accent)] focus-visible:outline-none'
+const RAIL_BUTTON_ACTIVE =
+  'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)] shadow-[var(--shadow-1)]'
+const RAIL_BUTTON_IDLE =
+  'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]'
+const RAIL_BUTTON_DISABLED =
+  'cursor-not-allowed border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]'
+
+export function navButtonClass(active: boolean): string {
+  return [RAIL_BUTTON_BASE, active ? RAIL_BUTTON_ACTIVE : RAIL_BUTTON_IDLE].join(' ')
+}
+
+export function actionButtonClass(active: boolean, disabled: boolean): string {
+  const state = disabled ? RAIL_BUTTON_DISABLED : active ? RAIL_BUTTON_ACTIVE : RAIL_BUTTON_IDLE
+  return [RAIL_BUTTON_BASE, state].join(' ')
+}
+
+// Hover/focus-only label for the icon-only rail. It is NOT pinned open for the
+// active view: the rail is 4.25rem wide, so the bubble necessarily spills into
+// the content column, where a permanently visible label overlapped the view
+// beneath it. `z-30` keeps it above in-view overlays (graph panels and
+// tooltips at z-10/z-20) while staying under the bookmark popover (z-40) and
+// modals (z-50), which previously painted over it and cut the label mid-word.
+function RailHint({ label }: { label: string }) {
+  return (
+    <span
+      className={
+        // `text-[length:…]` is required: `text-[var(--type-caption)]` compiles
+        // to a *color* utility (Tailwind cannot tell a size token from a color
+        // one), which overrode the color below and left the hint inheriting the
+        // button's white text — an empty white tooltip next to the active item.
+        'pointer-events-none absolute left-full top-1/2 z-30 ml-2 -translate-y-1/2 whitespace-nowrap border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] font-medium leading-none text-[var(--color-text-primary)] opacity-0 shadow-[var(--shadow-1)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100'
+      }
+    >
+      {label}
+    </span>
+  )
+}
+
+function RailAction({ label, icon, onClick, disabled = false, pressed, title }: SideRailAction) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={pressed}
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={actionButtonClass(Boolean(pressed), disabled)}
+    >
+      <span className="grid h-full w-full place-items-center">
+        <Icon name={icon} size={16} />
+      </span>
+      <RailHint label={label} />
+    </button>
+  )
+}
+
+export function SideRail({
+  view,
+  onSelect,
+  onOpenSettings,
+  onToggleBookmarks,
+  bookmarkPanelOpen,
+  onOpenPalette,
+  zoomPercent,
+  todoCount,
+}: SideRailProps) {
   return (
     <nav
-      className="h-full w-[52px] shrink-0 bg-white/55 backdrop-blur-[22px] border-r border-[var(--color-border)] flex flex-col items-center gap-1 py-3 shadow-sm"
+      className="flex h-full w-[4.25rem] shrink-0 flex-col items-center gap-2 border-r border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--spacing-03)] py-[var(--spacing-04)]"
       aria-label="主导航"
     >
-      {items.map((item) => {
+      {SIDE_RAIL_ITEMS.map((item) => {
         const active = view === item.key
+        const title = item.shortcutKey
+          ? `${item.label} (${shortcutTitle(item.shortcutKey)})`
+          : item.label
+
         return (
           <button
             key={item.key}
             type="button"
             aria-label={item.label}
+            aria-current={active ? 'page' : undefined}
             onClick={() => onSelect(item.key)}
-            title={item.label}
-            className={
-              'w-[38px] h-[38px] grid place-items-center text-[17px] relative ' +
-              (active
-                ? 'bg-[var(--color-accent)] text-white shadow-md'
-                : 'text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]')
-            }
+            title={title}
+            className={navButtonClass(active)}
           >
-            <span aria-hidden="true">{item.icon}</span>
+            <span className="grid h-full w-full place-items-center">
+              <Icon name={item.icon} size={16} />
+            </span>
+            <RailHint label={item.label} />
             {item.key === 'todos' && todoCount !== undefined && todoCount > 0 && (
               <span
                 data-testid="side-rail-todo-badge"
-                className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 flex items-center justify-center rounded-full bg-[var(--color-danger)] text-white text-[9px] font-bold leading-none px-1"
+                className="absolute -right-1 -top-1 min-w-[1.25rem] border border-[var(--color-danger)] bg-[var(--color-danger)] px-[0.1875rem] py-[0.0625rem] text-center text-[length:var(--type-caption)] font-semibold leading-none text-[var(--color-text-on-color)]"
               >
                 {todoCount >= 100 ? '99+' : todoCount}
               </span>
@@ -60,50 +177,39 @@ export function SideRail({ view, onSelect, onOpenSettings, onToggleBookmarks, bo
 
       <div className="flex-1" />
 
-      <button
-        type="button"
-        aria-label="收藏夹"
+      <RailAction
+        label="收藏夹"
+        icon="bookmark"
         onClick={onToggleBookmarks}
         disabled={!onToggleBookmarks}
-        title={onToggleBookmarks ? (bookmarkPanelOpen ? '关闭收藏夹' : '打开收藏夹') : '即将推出'}
-        className={
-          'w-[38px] h-[38px] grid place-items-center text-[17px] ' +
-          (bookmarkPanelOpen
-            ? 'bg-[var(--color-accent)] text-white shadow-md'
-            : onToggleBookmarks
-              ? 'text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]'
-              : 'text-[var(--color-text-tertiary)] cursor-not-allowed')
+        pressed={Boolean(bookmarkPanelOpen)}
+        title={
+          onToggleBookmarks
+            ? `${bookmarkPanelOpen ? '关闭' : '打开'}收藏夹 (${formatShortcut({ key: 'b', ctrlOrCmd: true, label: '', run: () => {} })})`
+            : '即将推出'
         }
-      >
-        <span aria-hidden="true">⭐</span>
-      </button>
+      />
 
-      <button
-        type="button"
-        aria-label="命令面板"
+      <RailAction
+        label="命令面板"
+        icon="command"
         onClick={onOpenPalette}
-        title="命令面板 (Ctrl+K)"
-        className="w-[38px] h-[38px] grid place-items-center text-[17px] text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]"
-      >
-        <span aria-hidden="true">⌨️</span>
-      </button>
+        disabled={!onOpenPalette}
+        title={onOpenPalette
+          ? `命令面板 (${formatShortcut({ key: 'k', ctrlOrCmd: true, label: '', run: () => {} })})`
+          : '命令面板不可用'}
+      />
 
-      <button
-        type="button"
-        aria-label="设置"
+      <RailAction
+        label="设置"
+        icon="settings"
         onClick={onOpenSettings}
         disabled={!onOpenSettings}
         title={onOpenSettings ? '设置' : '即将推出'}
-        className={
-          'w-[38px] h-[38px] grid place-items-center text-[17px] ' +
-          (onOpenSettings ? 'text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]' : 'text-[var(--color-text-tertiary)] cursor-not-allowed')
-        }
-      >
-        <span aria-hidden="true">⚙️</span>
-      </button>
+      />
 
       {zoomPercent && (
-        <div className="text-[10px] text-[var(--color-text-tertiary)] text-center pb-1 select-none tabular-nums">
+        <div className="pb-[var(--spacing-02)] text-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)] tabular-nums select-none">
           {zoomPercent}
         </div>
       )}

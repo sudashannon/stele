@@ -72,6 +72,7 @@ describe('KpiCards', () => {
     expect(screen.getByTestId('kpi-verify-failed').textContent).toContain('1')
     expect(screen.getByTestId('kpi-stuck').textContent).toContain('1')
     expect(screen.getByTestId('kpi-incomplete-tasks').textContent).toContain('8')
+    expect(screen.getByTestId('kpi-stuck').getAttribute('class')).toContain('border-[var(--color-warn-text)]')
   })
 
   it('clicking a card that is not the active filter calls onFilterSelect with that card key', () => {
@@ -121,9 +122,10 @@ describe('KpiCards', () => {
 
     expect(screen.getByTestId('kpi-archived').getAttribute('data-filter-active')).toBe('true')
     expect(screen.getByTestId('kpi-active').getAttribute('data-filter-active')).toBe('false')
+    expect(screen.getByTestId('kpi-archived').textContent).toContain('筛选中')
   })
 
-  it('supports keyboard activation (Enter) on a card, same as a click', () => {
+  it('uses native button semantics for keyboard activation and reports pressed state', () => {
     const onFilterSelect = vi.fn()
     render(
       <KpiCards
@@ -135,8 +137,10 @@ describe('KpiCards', () => {
       />,
     )
 
-    fireEvent.keyDown(screen.getByTestId('kpi-stuck'), { key: 'Enter' })
-
+    const card = screen.getByTestId('kpi-stuck')
+    expect(card.tagName).toBe('BUTTON')
+    expect(card.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(card)
     expect(onFilterSelect).toHaveBeenCalledWith('stuck')
   })
 })

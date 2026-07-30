@@ -14,8 +14,6 @@ describe('ChatBubble', () => {
     vi.mocked(streamChat).mockReset()
     vi.mocked(fetchChatSession).mockReset()
     vi.mocked(fetchChangeDetail).mockReset()
-    // Default: no persisted history, so pre-existing tests (which never set
-    // up fetchChatSession themselves) still start from an empty transcript.
     vi.mocked(fetchChatSession).mockResolvedValue({
       change: 'rx101-x',
       messages: [],
@@ -24,8 +22,6 @@ describe('ChatBubble', () => {
       created_at: '',
       updated_at: '',
     })
-    // Default: no artifacts, so pre-existing tests see an empty context-file
-    // selector (and don't need to mock fetchChangeDetail themselves).
     vi.mocked(fetchChangeDetail).mockResolvedValue({
       name: 'rx101-x',
       workflow: '',
@@ -39,20 +35,28 @@ describe('ChatBubble', () => {
     })
   })
 
-  it('is collapsed by default and expands on click', async () => {
+  it('opens as a labeled non-modal dialog and focuses the message input', async () => {
     render(<ChatBubble changeName="rx101-x" />)
     await waitFor(() => expect(fetchChatSession).toHaveBeenCalledWith('rx101-x'))
     expect(screen.queryByTestId('chat-overlay')).toBeNull()
+
     fireEvent.click(screen.getByTestId('chat-bubble-button'))
-    expect(screen.getByTestId('chat-overlay')).toBeTruthy()
+
+    const dialog = screen.getByRole('dialog', { name: 'Chat · rx101-x' })
+    expect(dialog.getAttribute('aria-modal')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('chat-input')))
   })
 
-  it('collapses again when the close button is clicked', async () => {
+  it('restores focus to the launcher when the dialog closes', async () => {
     render(<ChatBubble changeName="rx101-x" />)
     await waitFor(() => expect(fetchChatSession).toHaveBeenCalledWith('rx101-x'))
-    fireEvent.click(screen.getByTestId('chat-bubble-button'))
+    const launcher = screen.getByTestId('chat-bubble-button')
+    fireEvent.click(launcher)
+
     fireEvent.click(screen.getByTestId('chat-overlay-close'))
+
     expect(screen.queryByTestId('chat-overlay')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(launcher))
   })
 
   it('sends a message via streamChat and renders accumulated delta text', async () => {
@@ -78,6 +82,29 @@ describe('ChatBubble', () => {
     await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.getByTestId('chat-messages').textContent).toContain('Hi there!'))
     expect(screen.getByTestId('chat-messages').textContent).toContain('hello there')
+  })
+
+  it('always sends the open document as context, even when a change is selected', async () => {
+    const seen: string[][] = []
+    vi.mocked(streamChat).mockImplementation(async (_change, _message, contextFiles, onEvent) => {
+      seen.push(contextFiles)
+      onEvent({ type: 'done' })
+    })
+
+    render(<ChatBubble changeName="rx101-x" documentPath="/ws/miao/openspec/changes/rx101-x/proposal.md" />)
+    fireEvent.click(screen.getByTestId('chat-bubble-button'))
+
+    // The viewer's document is surfaced as attached context, not hidden behind
+    // the manual picker (which starts empty and silently dropped it before).
+    expect(screen.getByTestId('chat-current-document').textContent).toContain('proposal.md')
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: '这份文档讲什么' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('chat-send'))
+    })
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    expect(seen[0]).toEqual(['/ws/miao/openspec/changes/rx101-x/proposal.md'])
   })
 
   it('defaults graph mode on and passes includeGraph=true to streamChat', async () => {
@@ -179,7 +206,7 @@ describe('ChatBubble', () => {
     expect(screen.getByTestId('chat-messages').textContent).toBe('')
   })
 
-  it('renders context-file chips from the change artifacts and passes selected paths to streamChat', async () => {
+  it('selects context files through the shared searchable combobox and passes them to streamChat', async () => {
     vi.mocked(fetchChangeDetail).mockResolvedValue({
       name: 'rx101-x',
       workflow: '',
@@ -213,12 +240,12 @@ describe('ChatBubble', () => {
 
     await waitFor(() => expect(fetchChangeDetail).toHaveBeenCalledWith('rx101-x', 'rx101'))
 
-    // Only artifacts that exist are offered as context; the missing tasks.md is excluded.
-    const designChip = await screen.findByTestId('context-file-chip-openspec/changes/rx101-x/design.md')
-    expect(screen.getByTestId('context-file-chip-openspec/changes/rx101-x/proposal.md')).toBeTruthy()
-    expect(screen.queryByTestId('context-file-chip-openspec/changes/rx101-x/tasks.md')).toBeNull()
+    const combobox = await screen.findByRole('combobox', { name: '搜索并添加上下文文档' })
+    fireEvent.focus(combobox)
+    fireEvent.keyDown(combobox, { key: 'Enter' })
 
-    fireEvent.click(designChip)
+    await waitFor(() => expect(screen.getByTestId('context-file-chip-openspec/changes/rx101-x/design.md')).toBeTruthy())
+    expect(screen.queryByText('tasks.md')).toBeNull()
 
     const textarea = screen.getByTestId('chat-input') as HTMLTextAreaElement
     fireEvent.change(textarea, { target: { value: 'what changed?' } })
@@ -278,18 +305,13 @@ describe('ChatBubble', () => {
     fireEvent.click(screen.getByTestId('chat-bubble-button'))
     await waitFor(() => expect(fetchChangeDetail).toHaveBeenCalledWith('rx101-x', undefined))
 
-    const chip = await screen.findByTestId('context-file-chip-openspec/changes/rx101-x/design.md')
-    expect(chip.getAttribute('aria-pressed')).toBe('false')
-    expect(screen.getByTestId('context-file-list')).toBeTruthy()
-
-    fireEvent.click(chip)
-    expect(chip.getAttribute('aria-pressed')).toBe('true')
-
-    fireEvent.click(screen.getByTestId('context-panel-toggle'))
     expect(screen.queryByTestId('context-file-list')).toBeNull()
+    expect(await screen.findByRole('combobox', { name: '搜索并添加上下文文档' })).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('context-panel-toggle'))
-    expect(screen.getByTestId('context-file-list')).toBeTruthy()
+    expect(screen.queryByRole('combobox', { name: '搜索并添加上下文文档' })).toBeNull()
+
+    fireEvent.click(screen.getByTestId('context-panel-toggle'))
+    expect(screen.getByRole('combobox', { name: '搜索并添加上下文文档' })).toBeTruthy()
   })
 })
-

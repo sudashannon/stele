@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -22,6 +23,32 @@ type slowLister struct {
 func (l *slowLister) List() []WorkspaceConfig {
 	<-l.unblocked
 	return l.workspaces
+}
+
+type serialLister struct {
+	mu            sync.Mutex
+	calls         int
+	first         []WorkspaceConfig
+	latest        []WorkspaceConfig
+	firstEntered  chan struct{}
+	secondEntered chan struct{}
+	releaseFirst  chan struct{}
+}
+
+func (l *serialLister) List() []WorkspaceConfig {
+	l.mu.Lock()
+	l.calls++
+	call := l.calls
+	l.mu.Unlock()
+	if call == 1 {
+		close(l.firstEntered)
+		<-l.releaseFirst
+		return l.first
+	}
+	if call == 2 {
+		close(l.secondEntered)
+	}
+	return l.latest
 }
 
 // TestNewAPIWithWorkspacesAsync_DoesNotBlockOnSlowWorkspace proves the
@@ -127,5 +154,79 @@ func TestAsyncColdStart_ServesEmptyThenPopulatesAfterRebuild(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected index to be populated with %q after async Rebuild, got %+v", wantID, components)
+	}
+}
+
+func TestRebuildSerializesLiveSnapshotsAndPublishesLatest(t *testing.T) {
+	makeWorkspace := func(name string) (WorkspaceConfig, string) {
+		root := filepath.Join(t.TempDir(), name)
+		changeDir := filepath.Join(root, "changes", name)
+		if err := os.MkdirAll(changeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		componentPath := filepath.Join(changeDir, ".comet.yaml")
+		if err := os.WriteFile(componentPath, []byte("design_doc: design.md\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(changeDir, "design.md"), []byte("# Design\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return WorkspaceConfig{Alias: name, Path: root}, componentPath
+	}
+	oldWorkspace, oldID := makeWorkspace("old")
+	latestWorkspace, latestID := makeWorkspace("latest")
+	lister := &serialLister{
+		first:         []WorkspaceConfig{oldWorkspace},
+		latest:        []WorkspaceConfig{latestWorkspace},
+		firstEntered:  make(chan struct{}),
+		secondEntered: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+	}
+	api := NewAPIWithWorkspacesAsync(nil, "")
+	api.SetLister(lister)
+
+	done := make(chan error, 2)
+	go func() { done <- api.Rebuild() }()
+	select {
+	case <-lister.firstEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first rebuild did not read the live registry")
+	}
+	go func() { done <- api.Rebuild() }()
+
+	select {
+	case <-lister.secondEntered:
+		t.Fatal("second rebuild read the registry before the first rebuild released serialization")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(lister.releaseFirst)
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Rebuild: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("serialized rebuilds did not complete")
+		}
+	}
+
+	indexW := httptest.NewRecorder()
+	api.HandleIndex(indexW, httptest.NewRequest("GET", "/api/wiki/index", nil))
+	var components []Component
+	if err := json.Unmarshal(indexW.Body.Bytes(), &components); err != nil {
+		t.Fatalf("decode index response: %v", err)
+	}
+	foundLatest := false
+	for _, component := range components {
+		if component.ID == oldID {
+			t.Fatalf("old rebuild overwrote latest registry state: %+v", components)
+		}
+		if component.ID == latestID {
+			foundLatest = true
+		}
+	}
+	if !foundLatest {
+		t.Fatalf("latest registry component %q missing from final index: %+v", latestID, components)
 	}
 }

@@ -20,6 +20,8 @@ const (
 	StatusOpen       Status = "open"
 	StatusInProgress Status = "in_progress"
 	StatusDone       Status = "done"
+	StatusBlocked    Status = "blocked"
+	StatusDropped    Status = "dropped"
 )
 
 // Priority represents the urgency level of a Todo item.
@@ -57,6 +59,7 @@ type MetadataSource string
 const (
 	SourceUI  MetadataSource = "ui"
 	SourceMCP MetadataSource = "mcp"
+	SourceOMP MetadataSource = "omp"
 )
 
 // Metadata carries provenance information.
@@ -64,21 +67,37 @@ type Metadata struct {
 	Source MetadataSource `json:"source"`
 }
 
+// ExternalSystem identifies a supported external Todo source.
+type ExternalSystem string
+
+const ExternalSystemOMP ExternalSystem = "omp"
+
+// ExternalRef identifies a Todo projected from an external task system.
+// The tuple (system, sessionId, taskKey) is the stable external identity.
+type ExternalRef struct {
+	System    ExternalSystem `json:"system"`
+	SessionID string         `json:"sessionId"`
+	TaskKey   string         `json:"taskKey"`
+	Phase     string         `json:"phase"`
+	Blocker   string         `json:"blocker"`
+}
+
 // Todo is the core domain model for a single todo item.
 type Todo struct {
-	ID          string     `json:"id"`
-	Workspace   string     `json:"workspace"`
-	Title       string     `json:"title"`
-	Notes       string     `json:"notes,omitempty"`
-	Status      Status     `json:"status"`
-	Priority    Priority   `json:"priority"`
-	DueAt       string     `json:"dueAt,omitempty"` // UTC RFC3339 or empty
-	Change      *ChangeRef `json:"change,omitempty"`
-	WikiRefs    []WikiRef  `json:"wikiRefs,omitempty"`
-	Metadata    Metadata   `json:"metadata"`
-	CreatedAt   string     `json:"createdAt"`             // UTC RFC3339
-	UpdatedAt   string     `json:"updatedAt"`             // UTC RFC3339
-	CompletedAt string     `json:"completedAt,omitempty"` // UTC RFC3339, set when status=done
+	ID          string       `json:"id"`
+	Workspace   string       `json:"workspace"`
+	Title       string       `json:"title"`
+	Notes       string       `json:"notes,omitempty"`
+	Status      Status       `json:"status"`
+	Priority    Priority     `json:"priority"`
+	DueAt       string       `json:"dueAt,omitempty"` // UTC RFC3339 or empty
+	Change      *ChangeRef   `json:"change,omitempty"`
+	WikiRefs    []WikiRef    `json:"wikiRefs,omitempty"`
+	Metadata    Metadata     `json:"metadata"`
+	ExternalRef *ExternalRef `json:"externalRef,omitempty"`
+	CreatedAt   string       `json:"createdAt"`             // UTC RFC3339
+	UpdatedAt   string       `json:"updatedAt"`             // UTC RFC3339
+	CompletedAt string       `json:"completedAt,omitempty"` // UTC RFC3339, set when status=done
 }
 
 // CreateInput is the shape accepted by Store.Create.
@@ -136,6 +155,8 @@ type Counts struct {
 	Open       int `json:"open"`
 	InProgress int `json:"inProgress"`
 	Done       int `json:"done"`
+	Blocked    int `json:"blocked"`
+	Dropped    int `json:"dropped"`
 	Total      int `json:"total"`
 }
 
@@ -148,23 +169,65 @@ type Filter struct {
 	Q               string `json:"q,omitempty"`
 }
 
+// OMPSyncMode controls whether missing OMP-owned Todos are retained or removed.
+type OMPSyncMode string
+
+const (
+	OMPSyncUpsert    OMPSyncMode = "upsert"
+	OMPSyncReconcile OMPSyncMode = "reconcile"
+)
+
+// OMPSyncTodo is one item in a complete OMP Todo snapshot.
+type OMPSyncTodo struct {
+	TaskKey string `json:"taskKey"`
+	Phase   string `json:"phase"`
+	Title   string `json:"title"`
+	Status  Status `json:"status"`
+	Blocker string `json:"blocker,omitempty"`
+}
+
+// OMPSyncInput is the atomic OMP snapshot synchronization request.
+type OMPSyncInput struct {
+	Workspace   string        `json:"workspace"`
+	SessionID   string        `json:"sessionId"`
+	SnapshotSeq int64         `json:"snapshotSeq"`
+	Mode        OMPSyncMode   `json:"mode"`
+	Todos       []OMPSyncTodo `json:"todos"`
+}
+
+// OMPSyncResult reports an accepted or stale OMP snapshot.
+type OMPSyncResult struct {
+	Applied     bool        `json:"applied"`
+	Stale       bool        `json:"stale"`
+	SnapshotSeq int64       `json:"snapshotSeq"`
+	ServerSeq   int64       `json:"serverSeq"`
+	Mode        OMPSyncMode `json:"mode"`
+	Revision    int64       `json:"revision"`
+	Created     int         `json:"created"`
+	Updated     int         `json:"updated"`
+	Removed     int         `json:"removed"`
+	Items       []Todo      `json:"items"`
+}
+
 // storeEnvelope is the on-disk JSON shape.
 type storeEnvelope struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	Revision      int64  `json:"revision"`
-	Items         []Todo `json:"items"`
+	SchemaVersion int              `json:"schemaVersion"`
+	Revision      int64            `json:"revision"`
+	Items         []Todo           `json:"items"`
+	SyncCursors   map[string]int64 `json:"syncCursors,omitempty"`
 }
 
 // Validation helpers.
 
 var validStatuses = map[Status]bool{
 	StatusOpen: true, StatusInProgress: true, StatusDone: true,
+	StatusBlocked: true, StatusDropped: true,
 }
 var validPriorities = map[Priority]bool{
 	PriorityUrgent: true, PriorityHigh: true, PriorityNormal: true, PriorityLow: true,
 }
 var validMetadataSources = map[MetadataSource]bool{
-	SourceUI: true, SourceMCP: true,
+	SourceUI: true, SourceMCP: true, SourceOMP: true,
 }
 
 // ValidateCreate checks a CreateInput for structural correctness. Accepts a
@@ -281,6 +344,10 @@ func counts(items []Todo) Counts {
 			c.InProgress++
 		case StatusDone:
 			c.Done++
+		case StatusBlocked:
+			c.Blocked++
+		case StatusDropped:
+			c.Dropped++
 		}
 	}
 	c.Total = len(items)

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
 export interface ShortcutDef {
   /** Key to match (e.g. 'k', '1', 'Escape') */
@@ -17,12 +17,18 @@ export interface ShortcutDef {
   preventDefault?: boolean
 }
 
-function matchesShortcut(e: KeyboardEvent, shortcut: ShortcutDef): boolean {
-  const ctrlOrCmd = e.ctrlKey || e.metaKey
+function matchesShortcut(event: KeyboardEvent, shortcut: ShortcutDef): boolean {
+  const ctrlOrCmd = event.ctrlKey || event.metaKey
   if (shortcut.ctrlOrCmd !== ctrlOrCmd) return false
-  if ((shortcut.shift ?? false) !== e.shiftKey) return false
-  if ((shortcut.alt ?? false) !== e.altKey) return false
-  return e.key.toLowerCase() === shortcut.key.toLowerCase()
+  if ((shortcut.shift ?? false) !== event.shiftKey) return false
+  if ((shortcut.alt ?? false) !== event.altKey) return false
+  return event.key.toLowerCase() === shortcut.key.toLowerCase()
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName.toLowerCase()
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable
 }
 
 /**
@@ -36,7 +42,6 @@ export function formatShortcut(shortcut: ShortcutDef): string {
   if (shortcut.ctrlOrCmd) parts.push(isMac ? '⌘' : 'Ctrl')
   if (shortcut.alt) parts.push(isMac ? '⌥' : 'Alt')
   if (shortcut.shift) parts.push('Shift')
-  // Handle special key names for display
   const keyMap: Record<string, string> = {
     arrowup: '↑',
     arrowdown: '↓',
@@ -61,22 +66,17 @@ export function useKeyboardShortcuts(shortcuts: ShortcutDef[]) {
   shortcutsRef.current = shortcuts
 
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      // Skip when focus is in an input, textarea, select, or contenteditable
-      const tag = (e.target as HTMLElement).tagName?.toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return
-      if ((e.target as HTMLElement).isContentEditable) return
-      // Also skip if a modal/dialog is open and the shortcut is Escape
-      // (handled locally by the component)
+    function onKeyDown(event: KeyboardEvent) {
+      if (isEditableTarget(event.target)) return
 
-      for (const s of shortcutsRef.current) {
-        if (matchesShortcut(e, s)) {
-          if (s.preventDefault !== false) e.preventDefault()
-          s.run()
-          break // first match wins
-        }
+      for (const shortcut of shortcutsRef.current) {
+        if (!matchesShortcut(event, shortcut)) continue
+        if (shortcut.preventDefault !== false) event.preventDefault()
+        shortcut.run()
+        break
       }
     }
+
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
@@ -86,5 +86,5 @@ export function useKeyboardShortcuts(shortcuts: ShortcutDef[]) {
  * Build the all-shortcuts reference list shown in the ? mode of the palette.
  */
 export function buildShortcutList(shortcuts: ShortcutDef[]): ShortcutDef[] {
-  return shortcuts.filter((s) => !!s.label)
+  return shortcuts.filter((shortcut) => !!shortcut.label)
 }

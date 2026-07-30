@@ -11,15 +11,15 @@ export interface ChangeSummary {
   tasksTotal: number
   verifyResult: 'pass' | 'fail' | 'pending' | string
   createdAt: string
-  artifacts: Record<string, boolean>
-  visualized: boolean
-  designReviewed: boolean
-  verifyReviewed: boolean
-  verifiedAt: string
-  buildMode: string
-  reviewMode: string
-  tddMode: string
-  autoTransition: boolean
+  artifacts?: Record<string, boolean>
+  visualized?: boolean
+  designReviewed?: boolean
+  verifyReviewed?: boolean
+  verifiedAt?: string
+  buildMode?: string
+  reviewMode?: string
+  tddMode?: string
+  autoTransition?: boolean
   stateWarning?: string
   workspace?: string // added in Phase②, optional until then
   componentId?: string // wiki graph node ID (.comet.yaml path); optional until backend populates it
@@ -123,21 +123,7 @@ export interface PhaseInfo {
   artifacts: ArtifactInfo[]
 }
 
-export interface ChangeDetail {
-  name: string
-  title?: string
-  workflow: string
-  sourceType?: WorkspaceSourceType
-  phase: string
-  archived: boolean
-  tasksCompleted: number
-  tasksTotal: number
-  verifyResult: string
-  createdAt: string
-  workspace?: string
-  componentId?: string
-  lifecycle?: LifecycleStep[]
-  nextTransition?: TransitionAction
+export interface ChangeDetail extends ChangeSummary {
   phases: PhaseInfo[]
 }
 
@@ -231,13 +217,21 @@ export interface SyncResult {
 
 // ── Todo ────────────────────────────────────────────────────────────────────
 
-export type TodoMetadataSource = 'ui' | 'mcp'
-export type TodoStatus = 'open' | 'in_progress' | 'done'
+export type TodoMetadataSource = 'ui' | 'mcp' | 'omp'
+export type TodoStatus = 'open' | 'in_progress' | 'done' | 'blocked' | 'dropped'
 export type TodoPriority = 'urgent' | 'high' | 'normal' | 'low'
 
 export interface TodoChangeRef {
   workspace: string
   name: string
+}
+
+export interface TodoExternalRef {
+  system: 'omp'
+  sessionId: string
+  taskKey: string
+  phase: string
+  blocker: string
 }
 
 export interface TodoWikiRef {
@@ -257,6 +251,7 @@ export interface Todo {
   change: TodoChangeRef | null
   wikiRefs: TodoWikiRef[]
   metadata: { source: TodoMetadataSource }
+  externalRef: TodoExternalRef | null
   createdAt: string
   updatedAt: string
   completedAt: string | null
@@ -267,6 +262,8 @@ export interface TodoCounts {
   open: number
   inProgress: number
   done: number
+  blocked: number
+  dropped: number
 }
 
 export interface TodoListResponse {
@@ -297,6 +294,7 @@ export function normalizeTodo(t: Todo): Todo {
     dueAt: t.dueAt ?? null,
     change: t.change ?? null,
     wikiRefs: t.wikiRefs ?? [],
+    externalRef: t.externalRef ?? null,
     completedAt: t.completedAt ?? null,
   }
 }

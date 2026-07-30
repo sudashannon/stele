@@ -12,6 +12,13 @@ describe('PhaseStepper', () => {
     expect(screen.getByTestId('step-archive').dataset.state).toBe('pending')
   })
 
+  it('provides a visible text state in addition to phase color', () => {
+    render(<PhaseStepper currentPhase="build" />)
+    expect(screen.getAllByText('已完成').length).toBe(2)
+    expect(screen.getByText('当前')).toBeTruthy()
+    expect(screen.getAllByText('待开始').length).toBe(2)
+  })
+
   it('renders Chinese labels', () => {
     render(<PhaseStepper currentPhase="open" />)
     expect(screen.getByText('启动')).toBeTruthy()
@@ -29,7 +36,7 @@ describe('PhaseStepper', () => {
     expect(screen.getByTestId('step-verify').dataset.state).toBe('unknown')
     expect(screen.getByTestId('step-archive').dataset.state).toBe('unknown')
     expect(screen.getByTestId('phase-unknown-notice')).toBeTruthy()
-    expect(screen.getByText('⚠ 阶段信息缺失')).toBeTruthy()
+    expect(screen.getByText('阶段信息缺失')).toBeTruthy()
   })
 
   it('marks all phases as unknown for an arbitrary unrecognized phase string', () => {

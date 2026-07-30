@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 const ZOOM_KEY = 'comet-panel-zoom'
 const MIN_ZOOM = 0.5
@@ -16,13 +16,13 @@ function persistZoom(value: number) {
 
 function loadZoom(): number {
   try {
-    const v = localStorage.getItem(ZOOM_KEY)
-    if (v) {
-      const n = parseFloat(v)
-      if (n >= MIN_ZOOM && n <= MAX_ZOOM) return n
+    const value = localStorage.getItem(ZOOM_KEY)
+    if (value) {
+      const parsed = parseFloat(value)
+      if (parsed >= MIN_ZOOM && parsed <= MAX_ZOOM) return parsed
     }
   } catch {
-    // ignore
+    // ignore storage failures
   }
   return DEFAULT_ZOOM
 }
@@ -43,18 +43,18 @@ export function useAppZoom(): UseAppZoomReturn {
   }, [zoom])
 
   const zoomIn = useCallback(() => {
-    setZoom((prev) => Math.min(MAX_ZOOM, +(prev + STEP).toFixed(1)))
+    setZoom((previous) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +(previous + STEP).toFixed(1))))
   }, [])
 
   const zoomOut = useCallback(() => {
-    setZoom((prev) => Math.max(MIN_ZOOM, +(prev - STEP).toFixed(1)))
+    setZoom((previous) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +(previous - STEP).toFixed(1))))
   }, [])
 
   const zoomReset = useCallback(() => {
     setZoom(DEFAULT_ZOOM)
   }, [])
 
-  const zoomPercent = `${Math.round(zoom * 100)}%`
+  const zoomPercent = useMemo(() => `${Math.round(zoom * 100)}%`, [zoom])
 
   return { zoom, zoomIn, zoomOut, zoomReset, zoomPercent }
 }

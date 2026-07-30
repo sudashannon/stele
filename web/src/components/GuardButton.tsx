@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { WorkspaceSourceType } from '../api/types'
+import { Icon } from './icons'
+import { Modal } from './Modal'
 
 const PHASE_LABELS: Record<string, string> = {
   open: '启动', design: '设计', build: '构建', verify: '验证', archive: '归档',
@@ -104,26 +106,49 @@ export function GuardButton({
   return (
     <>
       <button
+        type="button"
         data-testid="guard-trigger"
         onClick={() => setConfirming(true)}
         disabled={running || !nameValid || !!blockedReason}
         title={disabledReason}
+        className="inline-flex items-center gap-1"
       >
-        → {label ?? PHASE_LABELS[targetPhase] ?? targetPhase}
+        <Icon name="chevron-right" size={14} />
+        <span>{label ?? PHASE_LABELS[targetPhase] ?? targetPhase}</span>
       </button>
 
       {confirming && (
-        <div data-testid="guard-confirm-dialog" className="fixed inset-0 flex items-center justify-center bg-black/30">
-          <div className="bg-white p-4 w-96">
-            <p className="text-sm mb-3">
-              即将执行: <code>{command ?? `comet-guard ${changeName} ${targetPhase} --apply`}</code>
+        <Modal
+          title="确认阶段迁移"
+          onClose={() => setConfirming(false)}
+          data-testid="guard-confirm-dialog"
+        >
+          <div className="space-y-4 p-4">
+            <p className="text-[var(--type-body)] text-[var(--color-text-primary)]">
+              即将执行：
             </p>
+            <code className="block overflow-x-auto bg-[var(--color-layer)] p-3 font-mono text-[var(--type-caption)] text-[var(--color-text-primary)]">
+              {command ?? `comet-guard ${changeName} ${targetPhase} --apply`}
+            </code>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setConfirming(false)}>取消</button>
-              <button data-testid="guard-confirm-yes" onClick={execute}>确认</button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className="border border-[var(--color-border)] px-3 py-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="guard-confirm-yes"
+                onClick={execute}
+                className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-on-color)]"
+              >
+                确认
+              </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* On success, output is cleared immediately after onComplete fires (see

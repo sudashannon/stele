@@ -37,7 +37,11 @@ describe('ArtifactList', () => {
     const existing = await screen.findByRole('button', { name: 'design doc' })
     expect(existing).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'handoff/context' })).toBeNull()
-    expect(screen.getByText('handoff/context')).toBeTruthy()
+    const missing = screen.getByText('handoff/context')
+    expect(missing.className).toContain('min-w-0')
+    expect(missing.className).toContain('flex-1')
+    expect(missing.className).toContain('truncate')
+    expect(screen.getByText('未生成').className).toContain('shrink-0')
 
     existing.click()
     expect(onSelectArtifact).toHaveBeenCalledWith('/x/design.md')
@@ -99,5 +103,17 @@ describe('ArtifactList', () => {
     render(<ArtifactList changeName="rx101-x" workspace="rx101" onSelectArtifact={vi.fn()} />)
 
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/changes/rx101-x?workspace=rx101'))
+  })
+
+  it('shows a text-and-icon error state when artifact loading fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+    } as Response)
+
+    render(<ArtifactList changeName="broken-change" onSelectArtifact={vi.fn()} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('产出物加载失败')
   })
 })

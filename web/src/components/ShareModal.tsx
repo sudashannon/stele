@@ -1,5 +1,8 @@
-import { useState, useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { createShareLink, revokeShareLink } from '../api/client'
+import { copyText } from '../utils/clipboard'
+import { Icon } from './icons'
+import { Modal } from './Modal'
 
 interface ShareModalProps {
   path: string | null
@@ -7,148 +10,203 @@ interface ShareModalProps {
   onClose: () => void
 }
 
-const TTL_OPTIONS: { label: string; value: number | 0 }[] = [
+const TTL_OPTIONS: { label: string; value: number }[] = [
   { label: '1 小时', value: 3600 },
   { label: '24 小时', value: 86400 },
   { label: '7 天', value: 604800 },
   { label: '永不过期', value: 0 },
 ]
 
+type Feedback = { kind: 'success' | 'error'; message: string } | null
+
 export function ShareModal({ path, workspace, onClose }: ShareModalProps) {
-  const [ttl, setTtl] = useState<number>(3600)
+  const [ttl, setTtl] = useState(3600)
   const [link, setLink] = useState<string | null>(null)
   const [token, setToken] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [operation, setOperation] = useState<'create' | 'copy' | 'revoke' | null>(null)
+  const [confirmingRevoke, setConfirmingRevoke] = useState(false)
+  const [feedback, setFeedback] = useState<Feedback>(null)
 
   const handleCreate = useCallback(async () => {
-    if (!path) return
-    setLoading(true)
-    setError(null)
+    if (!path || operation) return
+    setOperation('create')
+    setFeedback(null)
+    setLink(null)
+    setToken(null)
     try {
-      // The backend owns the public share base URL; window.location.origin may
-      // be localhost even when recipients must use the Windows LAN address.
-      const resp = await createShareLink(path, workspace, ttl)
-      setLink(resp.url)
-      const parts = resp.url.split('/share/')
-      if (parts.length === 2) setToken(parts[1])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '创建失败')
+      const response = await createShareLink(path, workspace, ttl)
+      const parsedURL = new URL(response.url, window.location.href)
+      const marker = '/share/'
+      const parsedToken = parsedURL.pathname.startsWith(marker) ? parsedURL.pathname.slice(marker.length) : ''
+      if (!parsedToken) throw new Error('无法从分享链接解析撤销令牌')
+      setLink(response.url)
+      setToken(parsedToken)
+      setFeedback({ kind: 'success', message: '分享链接已创建' })
+    } catch (error) {
+      setFeedback({ kind: 'error', message: error instanceof Error ? error.message : '创建分享链接失败' })
     } finally {
-      setLoading(false)
+      setOperation(null)
     }
-  }, [path, workspace, ttl])
+  }, [operation, path, ttl, workspace])
+
+  const handleCopy = useCallback(async () => {
+    if (!link || operation) return
+    setOperation('copy')
+    setFeedback(null)
+    try {
+      await copyText(link)
+      setFeedback({ kind: 'success', message: '链接已复制' })
+    } catch (error) {
+      setFeedback({ kind: 'error', message: error instanceof Error ? error.message : '复制链接失败' })
+    } finally {
+      setOperation(null)
+    }
+  }, [link, operation])
 
   const handleRevoke = useCallback(async () => {
-    if (!token) return
-    setLoading(true)
+    if (!token || operation) return
+    setOperation('revoke')
+    setFeedback(null)
     try {
       await revokeShareLink(token)
       setLink(null)
       setToken(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '撤销失败')
+      setConfirmingRevoke(false)
+      setFeedback({ kind: 'success', message: '分享已撤销' })
+    } catch (error) {
+      setConfirmingRevoke(false)
+      setFeedback({ kind: 'error', message: error instanceof Error ? error.message : '撤销分享失败' })
     } finally {
-      setLoading(false)
+      setOperation(null)
     }
-  }, [token])
+  }, [operation, token])
 
-  const handleCopy = useCallback(async () => {
-    const urlToCopy = link
-    if (!urlToCopy) return
-    try {
-      await navigator.clipboard.writeText(urlToCopy)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // fallback for non-HTTPS contexts
-      const el = document.createElement('textarea')
-      el.value = urlToCopy
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand('copy')
-      document.body.removeChild(el)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }, [link])
+  if (confirmingRevoke) {
+    return (
+      <Modal title="确认撤销分享" onClose={() => setConfirmingRevoke(false)} data-testid="share-revoke-confirm">
+        <div className="p-4">
+        <p className="text-sm text-[var(--color-text-secondary)]">撤销后，现有链接将立即失效。此操作无法撤回。</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setConfirmingRevoke(false)}
+            disabled={operation === 'revoke'}
+            className="px-3 py-2 text-sm border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="share-revoke-confirm-btn"
+            onClick={handleRevoke}
+            disabled={operation === 'revoke'}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-sm bg-[var(--color-danger)] text-[var(--color-text-on-color)] disabled:opacity-50"
+          >
+            <Icon name={operation === 'revoke' ? 'spinner' : 'trash'} size={14} className={operation === 'revoke' ? 'animate-spin' : undefined} />
+            {operation === 'revoke' ? '正在撤销…' : '确认撤销'}
+          </button>
+        </div>
+        </div>
+      </Modal>
+    )
+  }
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="bg-white shadow-2xl w-full max-w-sm p-6" data-testid="share-modal">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-bold text-[var(--color-text-primary)]">分享文档</h2>
-          <button
-            onClick={onClose}
-            className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] text-lg leading-none"
-            aria-label="关闭"
-          >✕</button>
-        </div>
-
-        {!link ? (
-          <>
-            <label className="block text-xs text-[var(--color-text-secondary)] mb-1">链接有效期</label>
-            <div className="flex gap-2 mb-4">
-              {TTL_OPTIONS.map((opt) => (
+    <Modal title="分享文档" onClose={onClose} width="max-w-sm" data-testid="share-modal">
+      <div className="p-4">
+      {!link ? (
+        <>
+          <fieldset disabled={operation !== null}>
+            <legend className="text-xs text-[var(--color-text-secondary)] mb-2">链接有效期</legend>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {TTL_OPTIONS.map((option) => (
                 <button
-                  key={opt.value}
-                  data-testid={`share-ttl-${opt.value}`}
-                  aria-pressed={ttl === opt.value}
-                  onClick={() => setTtl(opt.value)}
+                  type="button"
+                  key={option.value}
+                  data-testid={`share-ttl-${option.value}`}
+                  aria-pressed={ttl === option.value}
+                  onClick={() => setTtl(option.value)}
                   className={`px-3 py-1.5 text-xs border transition-colors ${
-                    ttl === opt.value
-                      ? 'bg-[var(--color-accent)] text-white border-[var(--color-accent)]'
-                      : 'bg-white text-[var(--color-text-primary)] border-[var(--color-border)] hover:border-[var(--color-accent)]'
+                    ttl === option.value
+                      ? 'bg-[var(--color-accent)] text-[var(--color-text-on-color)] border-[var(--color-accent)]'
+                      : 'bg-[var(--color-surface)] text-[var(--color-text-primary)] border-[var(--color-border)] hover:border-[var(--color-accent)]'
                   }`}
-                >{opt.label}</button>
+                >
+                  {option.label}
+                </button>
               ))}
             </div>
+          </fieldset>
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={!path || operation !== null}
+            data-testid="share-create-btn"
+            className="inline-flex w-full items-center justify-center gap-1.5 py-2 bg-[var(--color-accent)] text-[var(--color-text-on-color)] text-sm font-semibold disabled:opacity-50 hover:bg-[var(--color-accent-hover)] transition-colors"
+          >
+            <Icon name={operation === 'create' ? 'spinner' : 'share'} size={14} className={operation === 'create' ? 'animate-spin' : undefined} />
+            {operation === 'create' ? '创建中…' : '生成分享链接'}
+          </button>
+        </>
+      ) : (
+        <>
+          <label htmlFor="share-link" className="block text-xs text-[var(--color-text-secondary)] mb-1">分享链接</label>
+          <div className="flex items-center gap-2 mb-4">
+            <input
+              id="share-link"
+              type="text"
+              value={link}
+              readOnly
+              data-testid="share-link-input"
+              className="flex-1 min-w-0 text-xs bg-[var(--color-bg)] px-3 py-2 border border-[var(--color-border)] text-[var(--color-text-primary)] overflow-hidden text-ellipsis"
+            />
             <button
+              type="button"
+              onClick={handleCopy}
+              disabled={operation !== null}
+              data-testid="share-copy-btn"
+              className="inline-flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-[var(--color-accent)] text-[var(--color-text-on-color)] hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
+            >
+              <Icon name={operation === 'copy' ? 'spinner' : 'copy'} size={14} className={operation === 'copy' ? 'animate-spin' : undefined} />
+              {operation === 'copy' ? '复制中…' : '复制'}
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
               onClick={handleCreate}
-              disabled={loading}
-              data-testid="share-create-btn"
-              className="w-full py-2 bg-[var(--color-accent)] text-white text-sm font-semibold disabled:opacity-50 hover:bg-[var(--color-accent-hover)] transition-colors"
-            >{loading ? '创建中…' : '生成分享链接'}</button>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center gap-2 mb-4">
-              <input
-                type="text"
-                value={link}
-                readOnly
-                data-testid="share-link-input"
-                className="flex-1 text-xs bg-[var(--color-bg)] px-3 py-2 border border-[var(--color-border)] text-[var(--color-text-primary)] overflow-hidden text-ellipsis"
-              />
-              <button
-                onClick={handleCopy}
-                data-testid="share-copy-btn"
-                className={`shrink-0 px-3 py-2 text-xs font-semibold transition-colors ${
-                  copied ? 'bg-[var(--color-success)] text-white' : 'bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]'
-                }`}
-              >{copied ? '已复制' : '复制'}</button>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleCreate}
-                disabled={loading}
-                className="flex-1 py-2 border border-[var(--color-border)] text-[var(--color-text-primary)] text-xs font-semibold hover:bg-[var(--color-bg)] transition-colors"
-              >重新生成</button>
-              <button
-                onClick={handleRevoke}
-                disabled={loading}
-                data-testid="share-revoke-btn"
-                className="flex-1 py-2 border border-[var(--color-danger)] text-[var(--color-danger)] text-xs font-semibold hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] transition-colors"
-              >撤销分享</button>
-            </div>
-          </>
-        )}
-        {error && <p className="mt-3 text-xs text-[var(--color-danger)]">{error}</p>}
+              disabled={operation !== null}
+              className="inline-flex flex-1 items-center justify-center gap-1.5 py-2 border border-[var(--color-border)] text-[var(--color-text-primary)] text-xs font-semibold hover:bg-[var(--color-bg)] disabled:opacity-50"
+            >
+              <Icon name="refresh" size={14} />
+              重新生成
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingRevoke(true)}
+              disabled={!token || operation !== null}
+              data-testid="share-revoke-btn"
+              className="inline-flex flex-1 items-center justify-center gap-1.5 py-2 border border-[var(--color-danger)] text-[var(--color-danger)] text-xs font-semibold hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] disabled:opacity-50"
+            >
+              <Icon name="trash" size={14} />
+              撤销分享
+            </button>
+          </div>
+        </>
+      )}
+      {feedback && (
+        <p
+          role={feedback.kind === 'error' ? 'alert' : 'status'}
+          data-testid="share-feedback"
+          className={`mt-3 text-xs ${feedback.kind === 'error' ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <Icon name={feedback.kind === 'error' ? 'warning' : 'check'} size={14} />
+            {feedback.message}
+          </span>
+        </p>
+      )}
       </div>
-    </div>
+    </Modal>
   )
 }

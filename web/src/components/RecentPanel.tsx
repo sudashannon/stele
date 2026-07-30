@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchRecent } from '../api/client'
 import type { RecentItem } from '../api/types'
-import { TYPE_COLORS } from './WikiGraph'
+import { copyText } from '../utils/clipboard'
 import { useContextMenu } from './ContextMenu'
+import { typeBadgeClass } from './graphPalette'
 
 const MINUTE_MS = 60_000
 const HOUR_MS = 60 * MINUTE_MS
@@ -19,11 +20,48 @@ function formatRelativeTime(iso: string): string {
   return new Date(then).toLocaleDateString('zh-CN')
 }
 
+type RecentGroup = {
+  key: 'today' | 'yesterday' | 'older'
+  label: '今天' | '昨天' | '更早'
+  items: RecentItem[]
+}
+
+function groupRecentItems(items: RecentItem[]): RecentGroup[] {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+
+  const sorted = items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const timeDiff = new Date(b.item.updatedAt).getTime() - new Date(a.item.updatedAt).getTime()
+      return timeDiff || a.index - b.index
+    })
+    .map(({ item }) => item)
+
+  const groups: RecentGroup[] = [
+    { key: 'today', label: '今天', items: [] },
+    { key: 'yesterday', label: '昨天', items: [] },
+    { key: 'older', label: '更早', items: [] },
+  ]
+  for (const item of sorted) {
+    const updatedAt = new Date(item.updatedAt)
+    let group = groups[2]
+    if (updatedAt >= today) group = groups[0]
+    else if (updatedAt >= yesterday) group = groups[1]
+    group.items.push(item)
+  }
+  return groups.filter((group) => group.items.length > 0)
+}
+
+
 export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
   const [items, setItems] = useState<RecentItem[]>([])
   const [loadError, setLoadError] = useState(false)
   const [loading, setLoading] = useState(true)
   const [hasMore, setHasMore] = useState(true)
+  const [copyError, setCopyError] = useState<string | null>(null)
   const ctx = useContextMenu()
 
   const load = useCallback(async (offset: number) => {
@@ -44,8 +82,19 @@ export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
     load(0)
   }, [load])
 
-  if (loadError) {
-    return <div className="text-xs text-[var(--color-danger)]">加载失败</div>
+  const groups = useMemo(() => groupRecentItems(items), [items])
+  const openItem = useCallback((path: string) => onOpen?.(path), [onOpen])
+  const handleCopy = useCallback((text: string) => {
+    void copyText(text)
+      .then(() => setCopyError(null))
+      .catch(() => setCopyError('复制失败，请手动复制'))
+  }, [])
+
+  if (loading && items.length === 0) {
+    return <div className="text-xs text-[var(--color-text-secondary)]">加载中…</div>
+  }
+  if (loadError && items.length === 0) {
+    return <div role="alert" className="text-xs text-[var(--color-danger)]">加载失败</div>
   }
   if (items.length === 0) {
     return <div className="text-xs text-[var(--color-text-secondary)]">暂无最近变更</div>
@@ -53,40 +102,53 @@ export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
 
   return (
     <div>
-      <ul className="space-y-1.5 text-xs">
-        {items.map((item) => (
-          <li key={item.id}>
-            <button
-              type="button"
-              onClick={() => onOpen?.(item.path)}
-              onContextMenu={ctx.onContextMenu([
-                { id: 'open', label: '打开', icon: '📂', run: () => onOpen?.(item.path) },
-                { id: 'copy-path', label: '复制路径', icon: '📋', run: () => navigator.clipboard.writeText(item.path) },
-                { id: 'copy-title', label: '复制标题', icon: '📝', run: () => navigator.clipboard.writeText(item.title) },
-              ])}
-              className="w-full flex items-center gap-2 border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-layer)]"
+      <div className="space-y-4">
+        {groups.map((group) => (
+          <section key={group.key} aria-labelledby={`recent-${group.key}`}>
+            <h3
+              id={`recent-${group.key}`}
+              className="mb-1.5 text-xs font-semibold text-[var(--color-text-secondary)]"
             >
-              <span
-                className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium text-white"
-                style={{ backgroundColor: TYPE_COLORS[item.type] ?? '#6e6e73' }}
-              >
-                {item.type}
-              </span>
-              <span className="flex-1 truncate font-medium">{item.title}</span>
-              <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>
-              <span className="shrink-0 tabular-nums text-[var(--color-text-secondary)]">
-                {formatRelativeTime(item.updatedAt)}
-              </span>
-            </button>
-          </li>
+              {group.label}
+            </h3>
+            <ul className="space-y-1.5 text-xs">
+              {group.items.map((item) => (
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    onClick={() => openItem(item.path)}
+                    onContextMenu={ctx.onContextMenu([
+                      { id: 'open', label: '打开', run: () => openItem(item.path) },
+                      { id: 'copy-path', label: '复制路径', run: () => handleCopy(item.path) },
+                      { id: 'copy-title', label: '复制标题', run: () => handleCopy(item.title) },
+                    ])}
+                    className="flex w-full items-center gap-2 border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-layer)]"
+                  >
+                    <span
+                      className={`shrink-0 px-1.5 py-0.5 text-xs font-medium ${typeBadgeClass(item.type)}`}
+                    >
+                      {item.type}
+                    </span>
+                    <span className="flex-1 truncate font-medium">{item.title}</span>
+                    <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>
+                    <span className="shrink-0 tabular-nums text-[var(--color-text-secondary)]">
+                      {formatRelativeTime(item.updatedAt)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
         ))}
-      </ul>
-      {loading && <div className="text-center py-2 text-xs text-[var(--color-text-secondary)]">加载中…</div>}
+      </div>
+      {loading && <div className="py-2 text-center text-xs text-[var(--color-text-secondary)]">加载中…</div>}
+      {loadError && <div role="alert" className="py-2 text-center text-xs text-[var(--color-danger)]">加载失败</div>}
+      {copyError && <div role="alert" className="py-2 text-center text-xs text-[var(--color-danger)]">{copyError}</div>}
       {hasMore && !loading && (
         <button
           type="button"
           onClick={() => { setLoading(true); load(items.length) }}
-          className="w-full text-xs py-2 text-[var(--color-link)] hover:bg-[var(--color-layer)] mt-1"
+          className="mt-1 w-full py-2 text-xs text-[var(--color-link)] hover:bg-[var(--color-layer)]"
         >
           加载更多
         </button>

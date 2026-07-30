@@ -17,6 +17,6 @@ describe('TaskDonut', () => {
   it('uses success color at 100%', () => {
     render(<TaskDonut completed={5} total={5} />)
     const ring = screen.getByTestId('donut-ring')
-    expect(ring.style.background).toContain('#16a34a')
+    expect(ring.style.background).toContain('var(--color-success)')
   })
 })

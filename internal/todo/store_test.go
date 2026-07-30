@@ -53,8 +53,8 @@ func TestNewStore_PersistsEnvelope(t *testing.T) {
 	if err := json.Unmarshal(data, &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.SchemaVersion != 1 {
-		t.Fatalf("expected schema version 1, got %d", env.SchemaVersion)
+	if env.SchemaVersion != 2 {
+		t.Fatalf("expected schema version 2, got %d", env.SchemaVersion)
 	}
 	if env.Revision != 1 {
 		t.Fatalf("expected revision 1, got %d", env.Revision)
@@ -560,5 +560,180 @@ func TestUpdate_ClearDueAt(t *testing.T) {
 	}
 	if item.DueAt != "" {
 		t.Fatalf("expected dueAt cleared, got %s", item.DueAt)
+	}
+}
+
+func TestStore_BlockedAndDroppedLifecycle(t *testing.T) {
+	s, _ := helperStore(t)
+	item, err := s.Create(CreateInput{Workspace: "ws", Title: "task", Status: StatusDone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := StatusBlocked
+	item, err = s.Update(item.ID, UpdateInput{Status: &blocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Status != StatusBlocked || item.CompletedAt != "" {
+		t.Fatalf("done to blocked transition did not clear completion: %+v", item)
+	}
+	dropped := StatusDropped
+	item, err = s.Update(item.ID, UpdateInput{Status: &dropped})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Status != StatusDropped || item.CompletedAt != "" {
+		t.Fatalf("blocked to dropped transition invalid: %+v", item)
+	}
+}
+
+func TestStore_StatusCountsIncludeBlockedAndDropped(t *testing.T) {
+	s, _ := helperStore(t)
+	for _, status := range []Status{StatusOpen, StatusInProgress, StatusDone, StatusBlocked, StatusDropped} {
+		if _, err := s.Create(CreateInput{Workspace: "ws", Title: string(status), Status: status}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, got, _ := s.List(Filter{})
+	if got.Open != 1 || got.InProgress != 1 || got.Done != 1 || got.Blocked != 1 || got.Dropped != 1 || got.Total != 5 {
+		t.Fatalf("unexpected counts: %+v", got)
+	}
+}
+
+func TestStore_LoadsV1AndWritesV2(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "todos.json")
+	v1 := `{"schemaVersion":1,"revision":7,"items":[{"id":"legacy","workspace":"ws","title":"legacy","status":"open","priority":"normal","metadata":{"source":"ui"},"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(v1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(validCreate("new")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env storeEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.SchemaVersion != 2 || len(env.Items) != 2 {
+		t.Fatalf("unexpected migrated envelope: %+v", env)
+	}
+}
+
+func TestStore_LoadsV2CursorAndRejectsFutureSchema(t *testing.T) {
+	dir := t.TempDir()
+	v2Path := filepath.Join(dir, "v2.json")
+	v2 := `{"schemaVersion":2,"revision":4,"items":[],"syncCursors":{"session":9}}`
+	if err := os.WriteFile(v2Path, []byte(v2), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewStore(v2Path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.SyncOMP(OMPSyncInput{Workspace: "ws", SessionID: "session", SnapshotSeq: 9, Mode: OMPSyncUpsert, Todos: []OMPSyncTodo{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Stale || result.Applied || result.ServerSeq != 9 {
+		t.Fatalf("unexpected stale result: %+v", result)
+	}
+
+	futurePath := filepath.Join(dir, "future.json")
+	if err := os.WriteFile(futurePath, []byte(`{"schemaVersion":3,"revision":1,"items":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(futurePath, nil); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected future schema rejection, got %v", err)
+	}
+	data, readErr := os.ReadFile(futurePath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != `{"schemaVersion":3,"revision":1,"items":[]}` {
+		t.Fatalf("future schema file was rewritten: %s", data)
+	}
+}
+
+func TestStore_SyncOMPUpsertReconcileAndStale(t *testing.T) {
+	s, _ := helperStore(t)
+	user, err := s.Create(CreateInput{Workspace: "ws", Title: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.SyncOMP(OMPSyncInput{
+		Workspace: "ws", SessionID: "session-a", SnapshotSeq: 1, Mode: OMPSyncUpsert,
+		Todos: []OMPSyncTodo{
+			{TaskKey: "0:0", Phase: "build", Title: "one", Status: StatusBlocked, Blocker: "waiting"},
+			{TaskKey: "0:1", Phase: "build", Title: "two", Status: StatusOpen},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Applied || first.Stale || first.Created != 2 || len(first.Items) != 2 {
+		t.Fatalf("unexpected first result: %+v", first)
+	}
+	if first.Items[0].Metadata.Source != SourceOMP || first.Items[0].ExternalRef == nil || first.Items[0].ExternalRef.Blocker != "waiting" {
+		t.Fatalf("missing OMP provenance: %+v", first.Items[0])
+	}
+	if _, err := s.SyncOMP(OMPSyncInput{
+		Workspace: "ws", SessionID: "session-b", SnapshotSeq: 1, Mode: OMPSyncReconcile,
+		Todos: []OMPSyncTodo{{TaskKey: "0:0", Phase: "build", Title: "other session", Status: StatusOpen}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	upsert, err := s.SyncOMP(OMPSyncInput{
+		Workspace: "ws", SessionID: "session-a", SnapshotSeq: 2, Mode: OMPSyncUpsert,
+		Todos: []OMPSyncTodo{{TaskKey: "0:0", Phase: "verify", Title: "one updated", Status: StatusDone}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upsert.Updated != 1 || upsert.Removed != 0 || len(upsert.Items) != 2 {
+		t.Fatalf("upsert removed or duplicated projection: %+v", upsert)
+	}
+
+	stale, err := s.SyncOMP(OMPSyncInput{
+		Workspace: "ws", SessionID: "session-a", SnapshotSeq: 1, Mode: OMPSyncReconcile,
+		Todos: []OMPSyncTodo{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stale.Stale || stale.Applied || stale.ServerSeq != 2 || len(stale.Items) != 2 {
+		t.Fatalf("unexpected stale result: %+v", stale)
+	}
+
+	reconciled, err := s.SyncOMP(OMPSyncInput{
+		Workspace: "ws", SessionID: "session-a", SnapshotSeq: 3, Mode: OMPSyncReconcile,
+		Todos: []OMPSyncTodo{{TaskKey: "0:0", Phase: "verify", Title: "one updated", Status: StatusDropped}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.Removed != 1 || len(reconciled.Items) != 1 || reconciled.Items[0].Status != StatusDropped {
+		t.Fatalf("unexpected reconcile result: %+v", reconciled)
+	}
+	items, _, _ := s.List(Filter{})
+	foundUser := false
+	foundOtherSession := false
+	for _, item := range items {
+		if item.ID == user.ID {
+			foundUser = true
+		}
+		if isOMPSessionTodo(item, "session-b") {
+			foundOtherSession = true
+		}
+	}
+	if !foundUser || !foundOtherSession {
+		t.Fatalf("reconcile crossed ownership boundary: user=%v otherSession=%v", foundUser, foundOtherSession)
 	}
 }

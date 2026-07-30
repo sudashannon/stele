@@ -1,10 +1,51 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { BacklinksPanel } from './BacklinksPanel'
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('BacklinksPanel', () => {
+  it('shows loading and a visible error instead of empty backlinks when loading fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network error'))
+
+    render(<BacklinksPanel componentId="/x" />)
+
+    expect(screen.getByRole('status').textContent).toContain('正在加载引用')
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('引用加载失败，请稍后重试'))
+    expect(screen.queryByText('本文档未引用其他文档')).toBeNull()
+    expect(screen.queryByText('暂无其他文档引用本文档')).toBeNull()
+  })
+
+  it('ignores a stale response after the component id changes', async () => {
+    const first = Promise.withResolvers<Response>()
+    vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          component: { id: '/new', title: 'New' },
+          forward: [{ from: '/new', to: '/new-target', kind: 'references', source: 'md' }],
+          backlinks: [],
+        }),
+      } as Response)
+
+    const { rerender } = render(<BacklinksPanel componentId="/old" />)
+    rerender(<BacklinksPanel componentId="/new" />)
+    await waitFor(() => expect(screen.getByText('/new-target')).toBeTruthy())
+    await act(async () => {
+      first.resolve({
+        ok: true,
+        json: async () => ({
+          component: { id: '/old', title: 'Old' },
+          forward: [{ from: '/old', to: '/stale-target', kind: 'references', source: 'md' }],
+          backlinks: [],
+        }),
+      } as Response)
+    })
+    expect(screen.queryByText('/stale-target')).toBeNull()
+    expect(screen.getByText('/new-target')).toBeTruthy()
+  })
+
   it('fetches and lists backlinks for the given component', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -27,7 +68,6 @@ describe('BacklinksPanel', () => {
     render(<BacklinksPanel componentId="/x" />)
     await waitFor(() => expect(screen.getByText('本文档未引用其他文档')).toBeTruthy())
     expect(screen.getByText('暂无其他文档引用本文档')).toBeTruthy()
-    expect(screen.getAllByText('—')).toHaveLength(2)
   })
 
   it('renders backlink entries with kind badges when present', async () => {

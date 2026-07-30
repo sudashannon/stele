@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import App from './App'
-import { fetchWorkspaces, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchChatSession, fetchChangeDetail, fetchBookmarks, addBookmark } from './api/client'
+import { fetchWorkspaces, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchChatSession, fetchChangeDetail, fetchBookmarks, fetchTodos, addBookmark, removeWorkspace } from './api/client'
 import type { ChangeSummary, WorkspaceConfig } from './api/types'
 
 // WikiGraph mounts a real cytoscape instance with a cose layout and
@@ -9,13 +9,64 @@ import type { ChangeSummary, WorkspaceConfig } from './api/types'
 // jsdom (WikiGraph.test.tsx mocks cytoscape directly to cover that). At the
 // App level we only care that switching to 图谱 mounts WikiGraph and wires
 // its onNodeClick — so mock the component itself rather than cytoscape.
-vi.mock('./components/WikiGraph', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./components/WikiGraph')>()
-  return {
-    ...actual,
-    WikiGraph: () => <div data-testid="wiki-graph-canvas" />,
-  }
-})
+let wikiGraphShouldSuspend = false
+let wikiGraphSuspendPromise: Promise<void> | null = null
+let releaseWikiGraph: (() => void) | null = null
+
+function suspendWikiGraphLoad() {
+  wikiGraphShouldSuspend = true
+  wikiGraphSuspendPromise = new Promise<void>((resolve) => {
+    releaseWikiGraph = () => {
+      wikiGraphShouldSuspend = false
+      wikiGraphSuspendPromise = null
+      releaseWikiGraph = null
+      resolve()
+    }
+  })
+}
+
+function resetWikiGraphLoad() {
+  wikiGraphShouldSuspend = false
+  wikiGraphSuspendPromise = null
+  releaseWikiGraph = null
+}
+
+vi.mock('./components/WikiGraph', () => ({
+  WikiGraph: () => {
+    if (wikiGraphShouldSuspend && wikiGraphSuspendPromise) throw wikiGraphSuspendPromise
+    return <div data-testid="wiki-graph-canvas" />
+  },
+}))
+vi.mock('./components/WikiTimeline', () => ({
+  WikiTimeline: ({ onOpen }: { onOpen?: (path: string) => void }) => (
+    <button type="button" onClick={() => onOpen?.('/x/timeline.md')}>
+      打开时间线文档
+    </button>
+  ),
+}))
+vi.mock('./components/MarkdownViewer', () => ({
+  MarkdownViewer: ({
+    path,
+    onClose,
+    onToggleStar,
+  }: {
+    path: string
+    onClose: () => void
+    onToggleStar?: (path: string, title: string) => void
+  }) => (
+    <div data-testid="markdown-viewer">
+      <div>{path}</div>
+      <button type="button" onClick={onClose}>✕ 关闭</button>
+      <button
+        type="button"
+        aria-label="收藏"
+        onClick={() => onToggleStar?.(path, path.split('/').pop() ?? path)}
+      >
+        收藏
+      </button>
+    </div>
+  ),
+}))
 
 // Regression test for the Critical finding in Task 17 review: the Go backend
 // genuinely returns "changes": null (nil slice) in two real scenarios —
@@ -42,6 +93,7 @@ vi.mock('./api/client', () => ({
   fetchBookmarks: vi.fn().mockResolvedValue([]),
   addBookmark: vi.fn().mockResolvedValue([]),
   removeBookmark: vi.fn().mockResolvedValue([]),
+  removeWorkspace: vi.fn().mockResolvedValue(undefined),
   fetchChatSession: vi.fn().mockResolvedValue({
     change: '', messages: [], context_files: [], usage: { total_input: 0, total_output: 0 }, created_at: '', updated_at: '',
   }),
@@ -52,7 +104,7 @@ vi.mock('./api/client', () => ({
   generateReport: vi.fn(),
   listReports: vi.fn().mockResolvedValue([]),
   getReport: vi.fn(),
-  fetchTodos: vi.fn().mockResolvedValue({ items: [], counts: { total: 0, open: 0, inProgress: 0, done: 0 }, revision: 0, writable: true }),
+  fetchTodos: vi.fn().mockResolvedValue({ items: [], counts: { total: 0, open: 0, inProgress: 0, done: 0, blocked: 0, dropped: 0 }, revision: 0, writable: true }),
   createTodo: vi.fn(),
   updateTodo: vi.fn(),
   deleteTodo: vi.fn(),
@@ -71,6 +123,7 @@ function makeChange(overrides: Partial<ChangeSummary>): ChangeSummary {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  resetWikiGraphLoad()
 })
 
 describe('App', () => {
@@ -78,6 +131,130 @@ describe('App', () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
     expect(screen.getByTestId('kpi-grid')).toBeTruthy()
+  })
+
+
+  it('excludes done and dropped Todos from a Change pending count while retaining blocked', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce([
+      { alias: 'miao', path: '/x/miao', color: '#0063f8' },
+    ])
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({
+      changes: [makeChange({ name: 'alpha', workspace: 'miao' })],
+      failedWorkspaces: [],
+    })
+    vi.mocked(fetchTodos).mockResolvedValueOnce({
+      items: [
+        {
+          id: 'open', workspace: 'miao', title: 'open', notes: '', status: 'open', priority: 'normal',
+          dueAt: null, change: { workspace: 'miao', name: 'alpha' }, wikiRefs: [], metadata: { source: 'ui' },
+          externalRef: null, createdAt: '', updatedAt: '', completedAt: null,
+        },
+        {
+          id: 'blocked', workspace: 'miao', title: 'blocked', notes: '', status: 'blocked', priority: 'normal',
+          dueAt: null, change: { workspace: 'miao', name: 'alpha' }, wikiRefs: [], metadata: { source: 'ui' },
+          externalRef: null, createdAt: '', updatedAt: '', completedAt: null,
+        },
+        {
+          id: 'done', workspace: 'miao', title: 'done', notes: '', status: 'done', priority: 'normal',
+          dueAt: null, change: { workspace: 'miao', name: 'alpha' }, wikiRefs: [], metadata: { source: 'ui' },
+          externalRef: null, createdAt: '', updatedAt: '', completedAt: '',
+        },
+        {
+          id: 'dropped', workspace: 'miao', title: 'dropped', notes: '', status: 'dropped', priority: 'normal',
+          dueAt: null, change: { workspace: 'miao', name: 'alpha' }, wikiRefs: [], metadata: { source: 'ui' },
+          externalRef: null, createdAt: '', updatedAt: '', completedAt: null,
+        },
+      ],
+      counts: { total: 4, open: 1, inProgress: 0, done: 1, blocked: 1, dropped: 1 },
+      revision: 4,
+      writable: true,
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByText('alpha'))
+
+    expect(await screen.findByRole('button', { name: '待办 2' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '待办 3' })).toBeNull()
+  })
+
+  it('cancels workspace removal without calling the API', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce([
+      { alias: 'miao', path: '/x/miao', color: '#0063f8' },
+    ])
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({
+      changes: [makeChange({ name: 'alpha', workspace: 'miao' })],
+      failedWorkspaces: ['broken-ws'],
+    })
+
+    render(<App />)
+    await screen.findByRole('button', { name: '移除 workspace broken-ws' })
+
+    fireEvent.click(screen.getByRole('button', { name: '移除 workspace broken-ws' }))
+    await screen.findByRole('dialog', { name: '移除工作区' })
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '移除工作区' })).toBeNull())
+    expect(removeWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('removes a workspace from the chips, refreshes data, and keeps the app stable when activeWorkspace is null', async () => {
+    vi.mocked(fetchWorkspaces)
+      .mockResolvedValueOnce([
+        { alias: 'openspec', path: '/x/open', color: '#0063f8' },
+        { alias: 'ideas', path: '/x/ideas', color: '#16a34a' },
+      ])
+      .mockResolvedValueOnce([
+        { alias: 'ideas', path: '/x/ideas', color: '#16a34a' },
+      ])
+    vi.mocked(fetchChangesWithMeta)
+      .mockResolvedValueOnce({
+        changes: [
+          makeChange({ name: 'cache', workspace: 'openspec' }),
+          makeChange({ name: 'cache', workspace: 'ideas' }),
+        ],
+        failedWorkspaces: [],
+      })
+      .mockResolvedValueOnce({
+        changes: [makeChange({ name: 'cache', workspace: 'ideas' })],
+        failedWorkspaces: [],
+      })
+
+    render(<App />)
+    await screen.findByText('openspec')
+    const changesRefreshCount = vi.mocked(fetchChangesWithMeta).mock.calls.length
+    const workspaceRefreshCount = vi.mocked(fetchWorkspaces).mock.calls.length
+    const wikiRefreshCount = vi.mocked(fetchWikiIndex).mock.calls.length
+
+    fireEvent.click(screen.getByRole('button', { name: '移除 workspace openspec' }))
+    await screen.findByRole('dialog', { name: '移除工作区' })
+    fireEvent.click(screen.getByTestId('confirm-remove-workspace'))
+
+    await waitFor(() => expect(removeWorkspace).toHaveBeenCalledWith('openspec'))
+    await waitFor(() => expect(screen.queryByText('openspec')).toBeNull())
+    expect(vi.mocked(fetchChangesWithMeta).mock.calls.length).toBe(changesRefreshCount + 1)
+    expect(vi.mocked(fetchWorkspaces).mock.calls.length).toBe(workspaceRefreshCount + 1)
+    expect(vi.mocked(fetchWikiIndex).mock.calls.length).toBe(wikiRefreshCount + 1)
+    expect(screen.getByText('ideas')).toBeTruthy()
+    expect(screen.getByText('cache')).toBeTruthy()
+  })
+
+  it('shows a visible error when workspace removal fails', async () => {
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({
+      changes: [makeChange({ name: 'alpha', workspace: 'miao' })],
+      failedWorkspaces: ['broken-ws'],
+    })
+    vi.mocked(removeWorkspace).mockRejectedValueOnce(new Error('移除失败：权限不足'))
+
+    render(<App />)
+    await screen.findByRole('button', { name: '移除 workspace broken-ws' })
+
+    fireEvent.click(screen.getByRole('button', { name: '移除 workspace broken-ws' }))
+    fireEvent.click(await screen.findByTestId('confirm-remove-workspace'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('remove-workspace-error').textContent).toContain('移除失败：权限不足'),
+    )
+    expect(screen.getByRole('dialog', { name: '移除工作区' })).toBeTruthy()
   })
 
   it('narrows the visible change list via KPI-card filter, combined (AND) with the workspace filter', async () => {
@@ -301,6 +478,33 @@ describe('App view switcher', () => {
     expect(screen.queryByTestId('kpi-grid')).toBeNull()
   })
 
+
+  it('shows a visible suspense fallback before the lazy graph view resolves', async () => {
+    const nonEmptyIndex = [
+      { id: '/x/a.md', type: 'spec', title: 'A', path: '/x/a.md', workspace: 'miao' },
+    ]
+    vi.mocked(fetchWikiIndex).mockResolvedValueOnce(nonEmptyIndex)
+    suspendWikiGraphLoad()
+
+    render(<App />)
+    await screen.findByTestId('workspace-warning-banner')
+
+    fireEvent.click(screen.getByRole('button', { name: '知识图谱' }))
+
+    expect(await screen.findByTestId('lazy-view-fallback')).toBeTruthy()
+    await act(async () => {
+      releaseWikiGraph?.()
+    })
+    await screen.findByTestId('wiki-graph-canvas')
+  })
+  it('opens a document from the timeline view through the shared viewer flow', async () => {
+    render(<App />)
+    await screen.findByTestId('workspace-warning-banner')
+    fireEvent.click(screen.getByRole('button', { name: '时间线' }))
+    fireEvent.click(await screen.findByText('打开时间线文档'))
+    await screen.findByText('✕ 关闭')
+  })
+
   it('switches to the Lint view and mounts LintPanel', async () => {
     vi.mocked(fetchLintIssues).mockResolvedValueOnce([
       { rule: 'orphan', componentId: '/x/a.md', detail: '孤立组件' },
@@ -348,6 +552,21 @@ describe('App view switcher', () => {
     fireEvent.click(screen.getByText('✕ 关闭'))
     expect(screen.queryByTestId('chat-bubble-button')).toBeNull()
     await screen.findByText('暂无最近变更')
+  })
+
+
+  it('maps Ctrl+1…8 to the same view order as the side rail, including Todo and Report', async () => {
+    render(<App />)
+    await screen.findByTestId('workspace-warning-banner')
+
+    fireEvent.keyDown(document, { key: '2', ctrlKey: true })
+    expect(screen.getByRole('button', { name: '待办' }).getAttribute('aria-current')).toBe('page')
+
+    fireEvent.keyDown(document, { key: '8', ctrlKey: true })
+    expect(screen.getByRole('button', { name: '报告' }).getAttribute('aria-current')).toBe('page')
+
+    fireEvent.keyDown(document, { key: '1', ctrlKey: true })
+    expect(screen.getByRole('button', { name: '变更仪表盘' }).getAttribute('aria-current')).toBe('page')
   })
 
   it('switching back to 变更列表 restores KpiCards and ChangeExplorer', async () => {

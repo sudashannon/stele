@@ -6,7 +6,7 @@ import type { Bookmark } from '../api/types'
 describe('BookmarkPanel', () => {
   it('shows an empty state when there are no bookmarks', () => {
     render(<BookmarkPanel bookmarks={[]} onOpen={vi.fn()} onRemove={vi.fn()} onClose={vi.fn()} />)
-    expect(screen.getByText(/暂无收藏/)).toBeTruthy()
+    expect(screen.getByText(/尚无收藏/)).toBeTruthy()
   })
 
   it('renders each bookmark with its type badge and title', () => {
@@ -42,7 +42,7 @@ describe('BookmarkPanel', () => {
   it('calls onClose when the close button is clicked', () => {
     const onClose = vi.fn()
     render(<BookmarkPanel bookmarks={[]} onOpen={vi.fn()} onRemove={vi.fn()} onClose={onClose} />)
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭收藏' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import {
   streamChat,
@@ -6,6 +6,8 @@ import {
   fetchChangeDetail,
   type ChatSessionMessage,
 } from '../api/client'
+import { Icon } from './icons'
+import { SearchableCombobox, type SearchableComboboxOption } from './SearchableCombobox'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'error'
@@ -13,10 +15,6 @@ interface ChatMessage {
   thinking?: string
 }
 
-// Backend content blocks separate `text` and `thinking` blocks (see
-// provider.ContentBlock); the component's ChatMessage flattens each kind
-// into its own field, matching how handleSend already accumulates streamed
-// deltas/thinking onto a single message.
 function toChatMessage(msg: ChatSessionMessage): ChatMessage {
   const role = msg.role === 'user' ? 'user' : 'assistant'
   let text = ''
@@ -26,6 +24,11 @@ function toChatMessage(msg: ChatSessionMessage): ChatMessage {
     else text += block.text ?? ''
   }
   return thinking ? { role, text, thinking } : { role, text }
+}
+
+function rankContextFile(path: string, workspace?: string) {
+  if (!workspace) return 1
+  return path.includes(`/${workspace}/`) || path.startsWith(`${workspace}/`) ? 0 : 1
 }
 
 export function ChatBubble({ changeName, workspace, documentPath, componentId }: {
@@ -42,17 +45,25 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
   const [contextPanelOpen, setContextPanelOpen] = useState(true)
   const [graphMode, setGraphMode] = useState(true)
+  const [comboboxValue, setComboboxValue] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
-  // Guards against the history load resolving AFTER the user has already
-  // sent a message (e.g. slow /api/chat/session, fast first keystroke):
-  // without this, the late resolve would stomp the just-sent message with
-  // the (now stale) persisted history.
   const userActedRef = useRef(false)
+  const launcherRef = useRef<HTMLButtonElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const wasOpenRef = useRef(false)
+
+  useEffect(() => {
+    if (open) {
+      inputRef.current?.focus()
+      wasOpenRef.current = true
+    } else if (wasOpenRef.current) {
+      launcherRef.current?.focus()
+      wasOpenRef.current = false
+    }
+  }, [open])
   const effectiveChange = changeName || (documentPath ? documentPath.split(/[\\/]/).pop() || documentPath : '')
   const sessionKey = componentId || effectiveChange
 
-  // 会话按当前上下文隔离：App.tsx 以 viewerPath 作为 key，切换文档会整体
-  // 重新挂载本组件（内存 state 清空），随后这里再从后端拉回对应会话历史。
   useEffect(() => {
     let cancelled = false
     if (!sessionKey) return
@@ -69,18 +80,18 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
     }
   }, [sessionKey])
 
-  // 上下文文件注入：挂载时拉取该变更的产物清单，把已存在的产物文件路径
-  // 作为可勾选的上下文文件展示；用户勾选后发送时会连同消息一起传给后端。
   useEffect(() => {
     if (!changeName) return
     let cancelled = false
     fetchChangeDetail(changeName, workspace)
       .then((detail) => {
         if (cancelled) return
-        const paths = (detail.phases ?? [])
-          .flatMap((phase) => phase.artifacts ?? [])
-          .filter((artifact) => artifact.exists)
-          .map((artifact) => artifact.path || artifact.file)
+        const paths = Array.from(new Set(
+          (detail.phases ?? [])
+            .flatMap((phase) => phase.artifacts ?? [])
+            .filter((artifact) => artifact.exists)
+            .map((artifact) => artifact.path || artifact.file),
+        ))
         setContextFiles(paths)
       })
       .catch(() => {
@@ -91,28 +102,46 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
     }
   }, [changeName, workspace])
 
-  function toggleContextFile(path: string) {
-    setSelectedFiles((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]))
-  }
+  const contextOptions = useMemo<SearchableComboboxOption[]>(
+    () => contextFiles
+      .filter((path) => !selectedFiles.includes(path))
+      .sort((left, right) => {
+        const rankDiff = rankContextFile(left, workspace) - rankContextFile(right, workspace)
+        if (rankDiff !== 0) return rankDiff
+        return left.localeCompare(right, 'zh-CN')
+      })
+      .map((path) => ({
+        value: path,
+        label: path.split('/').pop() || path,
+        description: path,
+        group: rankContextFile(path, workspace) === 0 ? '当前工作区' : '其他文档',
+        keywords: path,
+      })),
+    [contextFiles, selectedFiles, workspace],
+  )
 
   useEffect(() => {
-    if (messagesRef.current) {
-      messagesRef.current.scrollTop = messagesRef.current.scrollHeight
-    }
+    if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight
   }, [messages])
+
+  function toggleContextFile(path: string) {
+    setSelectedFiles((prev) => (prev.includes(path) ? prev.filter((item) => item !== path) : [...prev, path]))
+  }
 
   async function handleSend() {
     const text = input.trim()
     if (!text || sending) return
     userActedRef.current = true
 
-    // 变更上下文发送用户勾选的产物；独立文档始终发送当前文件路径。
-    const filesToSend = changeName ? selectedFiles : documentPath ? [documentPath] : []
+    // The document open in the viewer is what the user is looking at, so it is
+    // always part of the prompt. Routing context through `selectedFiles` alone
+    // silently dropped it whenever a change happened to be selected: that list
+    // starts empty and is only filled by the picker below, so the model
+    // answered "您没有提供任何文档内容" while a document was on screen.
+    const filesToSend = [...new Set([...(documentPath ? [documentPath] : []), ...selectedFiles])]
     setMessages((prev) => [...prev, { role: 'user', text }])
     setInput('')
     setSending(true)
-
-    // Placeholder assistant message accumulates thinking/delta events in place.
     setMessages((prev) => [...prev, { role: 'assistant', text: '', thinking: '' }])
 
     try {
@@ -144,70 +173,79 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
     }
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void handleSend()
     }
   }
 
   return (
     <>
       <button
+        ref={launcherRef}
         data-testid="chat-bubble-button"
+        aria-label="打开聊天"
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 w-10 h-10 rounded-full bg-[var(--color-accent)] text-white shadow-lg flex items-center justify-center text-lg"
+        className="fixed bottom-4 right-4 flex h-10 w-10 items-center justify-center border border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)] shadow-[var(--shadow-2)]"
       >
-        💬
+        <Icon name="chat" />
       </button>
       {open && (
-        <div
+        <section
           data-testid="chat-overlay"
-          className="fixed bottom-20 right-4 w-[440px] h-[min(80vh,720px)] bg-white shadow-2xl border border-[var(--color-border)] flex flex-col"
+          role="dialog"
+          aria-label={effectiveChange ? `Chat · ${effectiveChange}` : '聊天'}
+          className="fixed bottom-20 right-4 flex h-[min(80vh,720px)] w-[440px] flex-col border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]"
         >
-          <div className="flex items-center justify-between p-3 border-b border-[var(--color-border)]">
-            <span className="text-sm font-semibold">Chat · {effectiveChange}</span>
+          <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-3">
+            <span className="text-sm font-semibold text-[var(--color-text-primary)]">Chat · {effectiveChange}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 data-testid="chat-graph-mode-toggle"
                 aria-pressed={graphMode}
-                onClick={() => setGraphMode((v) => !v)}
+                onClick={() => setGraphMode((value) => !value)}
                 title="图谱模式：将当前变更在知识图谱中的关联上下文注入对话"
                 className={
-                  graphMode
-                    ? 'text-xs rounded-full px-2 py-0.5 bg-[var(--color-accent)] text-white font-medium'
-                    : 'text-xs rounded-full px-2 py-0.5 bg-[var(--color-bg)] text-[var(--color-text-secondary)] border border-[var(--color-border)]'
+                  'flex items-center gap-1 border px-2 py-1 text-[var(--type-caption)] font-medium ' +
+                  (graphMode
+                    ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-secondary)]')
                 }
               >
-                📊 图谱模式
+                <Icon name="graph" />
+                <span>图谱模式</span>
               </button>
-              <button data-testid="chat-overlay-close" onClick={() => setOpen(false)}>
-                ✕
+              <button
+                type="button"
+                data-testid="chat-overlay-close"
+                aria-label="关闭聊天"
+                onClick={() => setOpen(false)}
+                className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+              >
+                <Icon name="close" />
               </button>
             </div>
           </div>
-          <div
-            data-testid="chat-messages"
-            ref={messagesRef}
-            className="flex-1 overflow-y-auto p-3 text-sm space-y-2"
-          >
-            {messages.map((msg, i) => (
+          <div data-testid="chat-messages" ref={messagesRef} className="flex-1 space-y-2 overflow-y-auto p-3 text-sm">
+            {messages.map((msg, index) => (
               <div
-                key={i}
+                key={index}
                 data-testid={`chat-msg-${msg.role}`}
                 className={
-                  msg.role === 'user'
-                    ? 'bg-[var(--color-accent)] text-white px-3 py-2 ml-auto max-w-[85%] whitespace-pre-wrap'
+                  'max-w-[85%] px-3 py-2 text-[var(--type-caption)] ' +
+                  (msg.role === 'user'
+                    ? 'ml-auto bg-[var(--color-accent)] text-[var(--color-text-on-color)] whitespace-pre-wrap'
                     : msg.role === 'error'
-                      ? 'bg-red-50 text-red-700 border border-red-200 px-3 py-2 max-w-[85%]'
-                      : 'bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 py-2 max-w-[85%]'
+                      ? 'border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] text-[var(--color-danger)]'
+                      : 'bg-[var(--color-layer)] text-[var(--color-text-primary)]')
                 }
               >
                 {msg.role === 'assistant' ? (
                   <>
                     {msg.thinking && !msg.text && (
-                      <div className="text-xs text-[var(--color-text-secondary)] italic mb-1">💭 {msg.thinking}</div>
+                      <div className="mb-1 text-[var(--type-caption)] italic text-[var(--color-text-secondary)]">思考中：{msg.thinking}</div>
                     )}
                     <div className="prose prose-sm max-w-none [&_p]:my-1">
                       <ReactMarkdown>{msg.text}</ReactMarkdown>
@@ -219,69 +257,96 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
               </div>
             ))}
           </div>
-          {contextFiles.length > 0 && (
+          {(documentPath || contextFiles.length > 0) && (
             <div className="border-t border-[var(--color-border)]">
-              <button
-                type="button"
-                data-testid="context-panel-toggle"
-                onClick={() => setContextPanelOpen((v) => !v)}
-                className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              >
-                <span>
-                  上下文文件
-                  {selectedFiles.length > 0 ? ` (已选 ${selectedFiles.length}/${contextFiles.length})` : ` (${contextFiles.length})`}
-                </span>
-                <span className="text-[10px]">{contextPanelOpen ? '收起 ▲' : '展开 ▼'}</span>
-              </button>
-              {contextPanelOpen && (
+              {documentPath && (
                 <div
-                  data-testid="context-file-list"
-                  className="flex flex-wrap gap-1.5 px-3 pb-2 max-h-20 overflow-y-auto"
+                  data-testid="chat-current-document"
+                  className="flex items-center gap-1.5 px-3 py-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]"
                 >
-                  {contextFiles.map((path) => {
-                    const selected = selectedFiles.includes(path)
-                    return (
-                      <button
-                        key={path}
-                        type="button"
-                        data-testid={`context-file-chip-${path}`}
-                        aria-pressed={selected}
-                        onClick={() => toggleContextFile(path)}
-                        title={path}
-                        className={
-                          selected
-                            ? 'text-xs rounded-full px-2 py-0.5 bg-[var(--color-accent)] text-white font-medium flex items-center gap-1'
-                            : 'text-xs rounded-full px-2 py-0.5 bg-white text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] flex items-center gap-1'
-                        }
-                      >
-                        {selected && <span aria-hidden="true">✓</span>}
-                        {path.split('/').pop()}
-                      </button>
-                    )
-                  })}
+                  <Icon name="check" size={12} className="shrink-0 text-[var(--color-success)]" />
+                  <span className="shrink-0">当前文档</span>
+                  <span className="truncate text-[var(--color-text-primary)]" title={documentPath}>
+                    {documentPath.split(/[\\/]/).pop()}
+                  </span>
+                </div>
+              )}
+              {contextFiles.length > 0 && (
+                <button
+                  type="button"
+                  data-testid="context-panel-toggle"
+                  onClick={() => setContextPanelOpen((value) => !value)}
+                  className="flex w-full items-center justify-between border-t border-[var(--color-border-subtle)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                >
+                  <span>
+                    追加文档
+                    {selectedFiles.length > 0 ? ` (已选 ${selectedFiles.length}/${contextFiles.length})` : ` (${contextFiles.length})`}
+                  </span>
+                  <Icon name={contextPanelOpen ? 'chevron-down' : 'chevron-right'} />
+                </button>
+              )}
+              {contextPanelOpen && contextFiles.length > 0 && (
+                <div className="space-y-2 px-3 pb-3">
+                  <div className="space-y-2">
+                    <label htmlFor="chat-context-combobox" className="block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">
+                      添加文档
+                    </label>
+                    <SearchableCombobox
+                      data-testid="context-file-combobox"
+                      options={contextOptions}
+                      value={comboboxValue}
+                      onChange={(value) => {
+                        toggleContextFile(value)
+                        setComboboxValue('')
+                      }}
+                      placeholder="搜索并添加文档…"
+                      ariaLabel="搜索并添加上下文文档"
+                      emptyText="无可添加文档"
+                      maxResults={8}
+                    />
+                  </div>
+                  {selectedFiles.length > 0 && (
+                    <div data-testid="context-file-list" className="flex flex-wrap gap-1.5">
+                      {selectedFiles.map((path) => (
+                        <button
+                          key={path}
+                          type="button"
+                          data-testid={`context-file-chip-${path}`}
+                          onClick={() => toggleContextFile(path)}
+                          className="flex items-center gap-1 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] px-2 py-1 text-[var(--type-caption)] text-[var(--color-accent)]"
+                          title={path}
+                        >
+                          <span className="max-w-[220px] truncate">{path.split('/').pop()}</span>
+                          <Icon name="close" size={14} />
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
-          <div className="p-3 border-t border-[var(--color-border)] flex gap-2">
+          <div className="flex gap-2 border-t border-[var(--color-border)] p-3">
             <textarea
+              ref={inputRef}
               data-testid="chat-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="询问关于此变更的问题…"
-              className="flex-1 resize-none border border-[var(--color-border)] p-2 text-sm h-10"
+              className="h-10 flex-1 resize-none border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
             />
             <button
+              type="button"
               data-testid="chat-send"
-              onClick={handleSend}
+              onClick={() => void handleSend()}
               disabled={sending || !input.trim()}
-              className="bg-[var(--color-accent)] text-white px-3 text-sm disabled:opacity-50"
+              className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 text-sm text-[var(--color-text-on-color)] disabled:opacity-50"
             >
               发送
             </button>
           </div>
-        </div>
+        </section>
       )}
     </>
   )

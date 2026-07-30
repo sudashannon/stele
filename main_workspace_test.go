@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"comet-ui/internal/source"
 )
@@ -51,6 +53,61 @@ func TestHandleAddWorkspace_PersistsAndReturns201(t *testing.T) {
 	}
 	if len(reg.List()) != 1 {
 		t.Fatalf("expected registry to contain 1 workspace, got %d", len(reg.List()))
+	}
+}
+
+func TestHandleWorkspaces_DeleteStatuses(t *testing.T) {
+	tests := []struct {
+		name          string
+		method        string
+		target        string
+		wantStatus    int
+		wantCallbacks int
+	}{
+		{name: "success", method: http.MethodDelete, target: "/api/workspaces?alias=miao", wantStatus: http.StatusNoContent, wantCallbacks: 1},
+		{name: "missing alias", method: http.MethodDelete, target: "/api/workspaces", wantStatus: http.StatusBadRequest},
+		{name: "unknown alias", method: http.MethodDelete, target: "/api/workspaces?alias=unknown", wantStatus: http.StatusNotFound},
+		{name: "unsupported method", method: http.MethodPut, target: "/api/workspaces?alias=miao", wantStatus: http.StatusMethodNotAllowed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "workspaces.yaml")
+			if err := persistWorkspaces(configPath, []WorkspaceConfig{{Alias: "miao", Path: "/tmp"}}, SyncConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			reg, err := NewWorkspaceRegistry(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(tt.method, tt.target, nil)
+			w := httptest.NewRecorder()
+			callbacks := 0
+			registrySizesAtCallback := []int{}
+
+			handleWorkspaces(w, req, reg, func() {
+				callbacks++
+				registrySizesAtCallback = append(registrySizesAtCallback, len(reg.List()))
+			})
+
+			if callbacks != tt.wantCallbacks {
+				t.Fatalf("workspace change callbacks = %d, want %d", callbacks, tt.wantCallbacks)
+			}
+			if w.Code != tt.wantStatus {
+				t.Fatalf("expected %d, got %d: %s", tt.wantStatus, w.Code, w.Body.String())
+			}
+			if tt.wantStatus == http.StatusNoContent {
+				if w.Body.Len() != 0 {
+					t.Fatalf("expected empty 204 response body, got %q", w.Body.String())
+				}
+				if len(reg.List()) != 0 {
+					t.Fatalf("expected successful DELETE to update registry, got %+v", reg.List())
+				}
+				if len(registrySizesAtCallback) != 1 || registrySizesAtCallback[0] != 0 {
+					t.Fatalf("DELETE callback ran before registry removal: sizes=%v", registrySizesAtCallback)
+				}
+			}
+		})
 	}
 }
 
@@ -482,5 +539,86 @@ func TestWorkspacesForRuntimeDetectsSuperpowersDirFallback(t *testing.T) {
 	got := workspacesForRuntime(nil, root)
 	if len(got) != 1 || got[0].Path != root || got[0].Type != source.KindSuperpowers {
 		t.Fatalf("unexpected Superpowers --dir fallback: %+v", got)
+	}
+}
+
+func TestCoalescedRebuilderSerializesAndRunsLatestRequest(t *testing.T) {
+	var mu sync.Mutex
+	generation := 1
+	runCount := 0
+	active := 0
+	maxActive := 0
+	lastBuilt := 0
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	completed := make(chan error, 1)
+
+	rebuilder := newCoalescedRebuilder(func() error {
+		mu.Lock()
+		runCount++
+		pass := runCount
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		snapshot := generation
+		mu.Unlock()
+
+		if pass == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+
+		mu.Lock()
+		lastBuilt = snapshot
+		active--
+		mu.Unlock()
+		return nil
+	}, func(err error, _ bool) {
+		completed <- err
+	})
+
+	rebuilder.Request(nil)
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first rebuild did not start")
+	}
+
+	mu.Lock()
+	generation = 2
+	mu.Unlock()
+	requestReturned := make(chan struct{})
+	go func() {
+		rebuilder.Request(nil)
+		rebuilder.Request(nil)
+		close(requestReturned)
+	}()
+	select {
+	case <-requestReturned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("coalesced Request blocked on the active rebuild")
+	}
+	close(releaseFirst)
+
+	select {
+	case err := <-completed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("coalesced rebuild did not complete")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if runCount != 2 {
+		t.Fatalf("run count = %d, want one active pass plus one coalesced pass", runCount)
+	}
+	if maxActive != 1 {
+		t.Fatalf("rebuilds overlapped: maximum active = %d", maxActive)
+	}
+	if lastBuilt != 2 {
+		t.Fatalf("last rebuilt generation = %d, want latest generation 2", lastBuilt)
 	}
 }

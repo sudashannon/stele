@@ -126,11 +126,15 @@ func (m *ShareManager) ValidateShare(token string) (*ShareEntry, error) {
 // RevokeShare removes a token and persists the change.
 func (m *ShareManager) RevokeShare(token string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if _, ok := m.tokens[token]; !ok {
+		m.mu.Unlock()
 		return fmt.Errorf("token not found")
 	}
 	delete(m.tokens, token)
+	m.mu.Unlock()
+
+	// save acquires a read lock to snapshot the map. Calling it while holding
+	// the write lock deadlocks sync.RWMutex (and previously hung every revoke).
 	m.save()
 	return nil
 }

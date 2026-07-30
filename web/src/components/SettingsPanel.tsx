@@ -1,20 +1,30 @@
-import { useEffect, useState } from 'react'
-import { fetchChatConfig, updateChatConfig, fetchChatProviders, fetchSyncConfig, updateSyncConfig, triggerSync } from '../api/client'
-import type { ChatProviderInfo } from '../api/types'
+
+import { useEffect, useId, useMemo, useState } from 'react'
+import {
+  fetchChatConfig,
+  updateChatConfig,
+  fetchChatProviders,
+  fetchSyncConfig,
+  updateSyncConfig,
+  triggerSync,
+} from '../api/client'
+import type { ChatProviderConfig, ChatProviderInfo } from '../api/types'
+import { Icon } from './icons'
 
 // 独立的 provider 设置面板：原先内嵌在 ChatBubble 里，现抽出为独立组件，
-// 由 SideRail 的 ⚙️ 入口打开（App.tsx 以 modal 形式渲染）。挂载即拉取
-// provider 列表与当前配置，保存后调用 onClose 关闭 modal。
+// 由 App 通过统一 Modal 包裹。这里只负责弹层内容，不再自行嵌套 modal。
 export function SettingsPanel({ onClose }: { onClose: () => void }) {
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [providers, setProviders] = useState<ChatProviderInfo[]>([])
+  const [providerConfigs, setProviderConfigs] = useState<Record<string, ChatProviderConfig>>({})
   const [providerName, setProviderName] = useState('')
   const [model, setModel] = useState('')
   const [apiKeyPlaceholder, setApiKeyPlaceholder] = useState('')
   const [apiKeyInput, setApiKeyInput] = useState('')
-  const [temperature, setTemperature] = useState(0)
-  const [maxTokens, setMaxTokens] = useState(0)
+  const [temperatureInput, setTemperatureInput] = useState('0.7')
+  const [maxTokensInput, setMaxTokensInput] = useState('4096')
   const [thinking, setThinking] = useState('auto')
   const [apiBase, setApiBase] = useState('')
   const [syncRemote, setSyncRemote] = useState('')
@@ -24,43 +34,128 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [syncing, setSyncing] = useState(false)
   const [syncResultMsg, setSyncResultMsg] = useState('')
 
-  // 挂载时并发拉取可用 provider 列表与当前生效配置，用当前 active_provider
-  // 对应的配置回填表单；provider 列表请求失败也不阻塞配置请求的结果展示
-  // （各自独立捕获错误）。
+  const providerId = useId()
+  const modelId = useId()
+  const apiBaseId = useId()
+  const apiKeyId = useId()
+  const temperatureId = useId()
+  const maxTokensId = useId()
+  const thinkingId = useId()
+  const syncRemoteId = useId()
+  const errorId = useId()
+  const syncErrorId = useId()
+  const saveLabel = saving ? '保存中…' : '保存'
+
   useEffect(() => {
+    let cancelled = false
     setError('')
     setLoading(true)
+
     Promise.all([fetchChatProviders(), fetchChatConfig()])
       .then(([providersResp, config]) => {
+        if (cancelled) return
         setProviders(providersResp.providers ?? [])
+        setProviderConfigs(config.providers ?? {})
         const active = config.active_provider || providersResp.active
         const activeConfig = config.providers?.[active]
         setProviderName(active)
+        setModel(activeConfig?.model ?? providersResp.providers?.find((provider) => provider.name === active)?.models?.[0] ?? '')
         setApiKeyPlaceholder(activeConfig?.api_key ?? '')
         setApiBase(activeConfig?.api_base ?? '')
         setApiKeyInput('')
-        setTemperature(activeConfig?.temperature ?? 0.7)
-        setMaxTokens(activeConfig?.max_tokens ?? 4096)
-        setThinking(activeConfig?.thinking || 'auto')
+        setTemperatureInput(String(activeConfig?.temperature ?? 0.7))
+        setMaxTokensInput(String(activeConfig?.max_tokens ?? 4096))
+        setThinking(activeConfig?.thinking ?? 'auto')
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err))
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  // 独立加载知识库同步配置，不阻塞上面的 provider 加载状态；失败时只在
-  // 同步区域内展示错误，不影响 provider 设置的可用性。
   useEffect(() => {
+    let cancelled = false
     fetchSyncConfig()
       .then((cfg) => {
+        if (cancelled) return
         setSyncRemote(cfg.remote)
         setSyncRemoteInput(cfg.remote)
       })
       .catch((err) => {
-        setSyncError(err instanceof Error ? err.message : String(err))
+        if (!cancelled) setSyncError(err instanceof Error ? err.message : String(err))
       })
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  const selectedProvider = useMemo(
+    () => providers.find((provider) => provider.name === providerName) ?? null,
+    [providers, providerName],
+  )
+
+  function handleProviderChange(name: string) {
+    setProviderName(name)
+    const saved = providerConfigs[name]
+    const info = providers.find((provider) => provider.name === name)
+    setModel(saved?.model ?? info?.models?.[0] ?? '')
+    setApiKeyPlaceholder(saved?.api_key ?? '')
+    setApiBase(saved?.api_base ?? '')
+    setApiKeyInput('')
+    setTemperatureInput(String(saved?.temperature ?? 0.7))
+    setMaxTokensInput(String(saved?.max_tokens ?? 4096))
+    setThinking(saved?.thinking ?? 'auto')
+  }
+
+  async function handleSaveSettings(event?: React.FormEvent) {
+    event?.preventDefault()
+    setError('')
+
+    const temperature = Number(temperatureInput)
+    const maxTokens = Number(maxTokensInput)
+    if (
+      temperatureInput.trim() === ''
+      || !Number.isFinite(temperature)
+      || temperature < 0
+      || temperature > 2
+      || maxTokensInput.trim() === ''
+      || !Number.isFinite(maxTokens)
+      || !Number.isInteger(maxTokens)
+      || maxTokens < 1
+    ) {
+      setError('请填写有效的数值设置：Temperature 需在 0–2 之间，Max Tokens 需为不小于 1 的整数。')
+      return
+    }
+
+    setSaving(true)
+    try {
+      const patch: Parameters<typeof updateChatConfig>[0] = {
+        active_provider: providerName,
+        providers: {
+          [providerName]: {
+            api_base: apiBase,
+            model,
+            temperature,
+            max_tokens: maxTokens,
+            thinking,
+            ...(apiKeyInput.trim() ? { api_key: apiKeyInput.trim() } : {}),
+          },
+        },
+      }
+      await updateChatConfig(patch)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
 
   async function handleSaveSyncRemote() {
     setSyncError('')
@@ -99,204 +194,211 @@ export function SettingsPanel({ onClose }: { onClose: () => void }) {
     }
   }
 
-  function handleProviderChange(name: string) {
-    setProviderName(name)
-    const info = providers.find((p) => p.name === name)
-    setModel(info?.models?.[0] ?? '')
-    // 切换 provider 后原有的已配置 key 提示不再适用；密码框留空，
-    // 保存时若用户没填新 key 就不下发 api_key，交给后端保留原值。
-    setApiKeyPlaceholder('')
-    setApiKeyInput('')
-  }
-
-  async function handleSaveSettings() {
-    setError('')
-    try {
-      const patch: Parameters<typeof updateChatConfig>[0] = {
-        active_provider: providerName,
-        providers: {
-          [providerName]: {
-            api_base: apiBase,
-            model,
-            temperature,
-            max_tokens: maxTokens,
-            thinking,
-            // 留空/未改动则不下发 api_key，PUT 端点按合并语义保留原值。
-            ...(apiKeyInput.trim() ? { api_key: apiKeyInput.trim() } : {}),
-          },
-        },
-      }
-      await updateChatConfig(patch)
-      onClose()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
-  }
-
   return (
-    <div data-testid="chat-settings-panel" className="p-3 text-sm space-y-3">
+    <div data-testid="chat-settings-panel" className="space-y-4 p-4 text-sm">
       {loading ? (
-        <div className="text-[var(--color-text-secondary)]">加载中…</div>
+        <div className="flex items-center gap-2 text-[var(--color-text-secondary)]" role="status">
+          <Icon name="spinner" className="animate-spin" />
+          <span>加载中…</span>
+        </div>
       ) : (
         <>
-          <label className="block">
-            <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Provider</span>
-            <select
-              data-testid="chat-settings-provider"
-              value={providerName}
-              onChange={(e) => handleProviderChange(e.target.value)}
-              className="w-full border border-[var(--color-border)] p-1.5 text-sm"
-            >
-              {providers.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Model</span>
-            <select
-              data-testid="chat-settings-model"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="w-full border border-[var(--color-border)] p-1.5 text-sm"
-            >
-              {(providers.find((p) => p.name === providerName)?.models ?? []).map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">API Base</span>
-            <input
-              data-testid="chat-settings-api-base"
-              type="text"
-              value={apiBase}
-              onChange={(e) => setApiBase(e.target.value)}
-              placeholder="https://api.minimaxi.com"
-              className="w-full border border-[var(--color-border)] p-1.5 text-sm font-mono"
-            />
-          </label>
-          <label className="block">
-            <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">API Key</span>
-            <input
-              data-testid="chat-settings-api-key"
-              type="password"
-              value={apiKeyInput}
-              onChange={(e) => setApiKeyInput(e.target.value)}
-              placeholder={apiKeyPlaceholder || '未配置'}
-              className="w-full border border-[var(--color-border)] p-1.5 text-sm"
-            />
-          </label>
-          <div className="flex gap-2">
-            <label className="block flex-1">
-              <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Temperature</span>
-              <input
-                data-testid="chat-settings-temperature"
-                type="number"
-                step="0.1"
-                min="0"
-                max="2"
-                value={temperature}
-                onChange={(e) => setTemperature(Number(e.target.value))}
-                className="w-full border border-[var(--color-border)] p-1.5 text-sm"
-              />
-            </label>
-            <label className="block flex-1">
-              <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Max Tokens</span>
-              <input
-                data-testid="chat-settings-max-tokens"
-                type="number"
-                min="1"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Number(e.target.value))}
-                className="w-full border border-[var(--color-border)] p-1.5 text-sm"
-              />
-            </label>
-          </div>
-          <label className="block">
-            <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Thinking</span>
-            <select
-              data-testid="chat-settings-thinking"
-              value={thinking}
-              onChange={(e) => setThinking(e.target.value)}
-              className="w-full border border-[var(--color-border)] p-1.5 text-sm"
-            >
-              <option value="auto">auto</option>
-              <option value="disabled">disabled</option>
-            </select>
-          </label>
-          {error && (
-            <div data-testid="chat-settings-error" className="text-[var(--color-danger)] text-xs">
-              {error}
-            </div>
-          )}
-          <div className="flex justify-end gap-2 pt-1">
-            <button
-              type="button"
-              data-testid="chat-settings-cancel"
-              onClick={onClose}
-              className="text-sm text-[var(--color-text-secondary)] px-3 py-1.5 hover:bg-[var(--color-bg)]"
-            >
-              取消
-            </button>
-            <button
-              type="button"
-              data-testid="chat-settings-save"
-              onClick={handleSaveSettings}
-              className="bg-[var(--color-accent)] text-white px-3 py-1.5 text-sm"
-            >
-              保存
-            </button>
-          </div>
+          <form className="space-y-4" onSubmit={handleSaveSettings} aria-describedby={error ? errorId : undefined}>
+            <section className="space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">聊天 Provider</h3>
+                <p className="mt-1 text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+                  这些设置只影响当前面板发起的聊天与摘要能力。
+                </p>
+              </div>
 
-          <div className="border-t border-[var(--color-border)] pt-3 mt-1">
-            <h3 className="text-xs font-medium text-[var(--color-text-secondary)] mb-2">知识库同步</h3>
-            <label className="block mb-2">
-              <span className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">Git Remote URL</span>
+              <label className="block" htmlFor={providerId}>
+                <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">Provider</span>
+                <select
+                  autoFocus
+                  id={providerId}
+                  data-testid="chat-settings-provider"
+                  value={providerName}
+                  onChange={(e) => handleProviderChange(e.target.value)}
+                  className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+                >
+                  {providers.map((provider) => (
+                    <option key={provider.name} value={provider.name}>
+                      {provider.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block" htmlFor={modelId}>
+                <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">Model</span>
+                <select
+                  id={modelId}
+                  data-testid="chat-settings-model"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+                >
+                  {(selectedProvider?.models ?? []).map((providerModel) => (
+                    <option key={providerModel} value={providerModel}>
+                      {providerModel}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block" htmlFor={apiBaseId}>
+                <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">API Base</span>
+                <input
+                  id={apiBaseId}
+                  data-testid="chat-settings-api-base"
+                  type="text"
+                  value={apiBase}
+                  onChange={(e) => setApiBase(e.target.value)}
+                  placeholder="https://api.minimaxi.com"
+                  className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 font-mono text-sm"
+                />
+              </label>
+
+              <label className="block" htmlFor={apiKeyId}>
+                <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">API Key</span>
+                <input
+                  id={apiKeyId}
+                  data-testid="chat-settings-api-key"
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder={apiKeyPlaceholder || '未配置'}
+                  className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+                />
+              </label>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="block" htmlFor={temperatureId}>
+                  <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">Temperature</span>
+                  <input
+                    id={temperatureId}
+                    data-testid="chat-settings-temperature"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="2"
+                    value={temperatureInput}
+                    onChange={(e) => setTemperatureInput(e.target.value)}
+                    className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+                  />
+                </label>
+                <label className="block" htmlFor={maxTokensId}>
+                  <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">Max Tokens</span>
+                  <input
+                    id={maxTokensId}
+                    data-testid="chat-settings-max-tokens"
+                    type="number"
+                    min="1"
+                    value={maxTokensInput}
+                    onChange={(e) => setMaxTokensInput(e.target.value)}
+                    className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+                  />
+                </label>
+              </div>
+
+              <label className="block" htmlFor={thinkingId}>
+                <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">Thinking</span>
+                <select
+                  id={thinkingId}
+                  data-testid="chat-settings-thinking"
+                  value={thinking}
+                  onChange={(e) => setThinking(e.target.value)}
+                  className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+                >
+                  <option value="auto">auto</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </label>
+            </section>
+
+            {error && (
+              <div data-testid="chat-settings-error" id={errorId} role="alert" className="text-[var(--type-caption)] text-[var(--color-danger)]">
+                {error}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-3">
+              <button
+                type="button"
+                data-testid="chat-settings-cancel"
+                onClick={onClose}
+                disabled={saving}
+                className="px-3 py-2 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                data-testid="chat-settings-save"
+                disabled={saving}
+                className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 py-2 text-sm text-[var(--color-text-on-color)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saveLabel}
+              </button>
+            </div>
+          </form>
+
+          <section className="space-y-3 border-t border-[var(--color-border)] pt-4" aria-describedby={syncError ? syncErrorId : undefined}>
+            <div>
+              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">知识库同步</h3>
+              <p className="mt-1 text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+                保存远端后可手动同步知识库索引与文档副本。
+              </p>
+            </div>
+
+            <label className="block" htmlFor={syncRemoteId}>
+              <span className="mb-1 block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">Git Remote URL</span>
               <div className="flex gap-2">
                 <input
+                  id={syncRemoteId}
                   data-testid="sync-remote-input"
                   type="text"
                   value={syncRemoteInput}
                   onChange={(e) => setSyncRemoteInput(e.target.value)}
                   placeholder="git@github.com:user/repo.git"
-                  className="flex-1 border border-[var(--color-border)] p-1.5 text-sm font-mono"
+                  className="flex-1 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 font-mono text-sm"
                 />
                 <button
                   type="button"
                   data-testid="sync-remote-save"
                   onClick={handleSaveSyncRemote}
                   disabled={syncSaving || syncRemoteInput.trim() === syncRemote}
-                  className="text-sm text-[var(--color-accent)] px-3 py-1.5 hover:bg-[var(--color-bg)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="border border-[var(--color-border)] px-3 py-2 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {syncSaving ? '保存中…' : '保存'}
                 </button>
               </div>
             </label>
+
             {syncError && (
-              <div data-testid="sync-error" className="text-[var(--color-danger)] text-xs mb-2">
+              <div data-testid="sync-error" id={syncErrorId} role="alert" className="text-[var(--type-caption)] text-[var(--color-danger)]">
                 {syncError}
               </div>
             )}
+
             <button
               type="button"
               data-testid="sync-trigger-button"
               onClick={handleTriggerSync}
               disabled={syncing}
-              className="w-full bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex w-full items-center justify-center gap-2 border border-[var(--color-border)] bg-[var(--color-layer)] px-3 py-2 text-sm text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {syncing ? '同步中…' : '🔄 同步知识库'}
+              <Icon name="refresh" />
+              <span>{syncing ? '同步中…' : '同步知识库'}</span>
             </button>
+
             {syncResultMsg && (
-              <div data-testid="sync-result" className="text-xs text-[var(--color-text-secondary)] mt-2">
+              <div data-testid="sync-result" role="status" className="text-[var(--type-caption)] text-[var(--color-text-secondary)]">
                 {syncResultMsg}
               </div>
             )}
-          </div>
+          </section>
         </>
       )}
     </div>

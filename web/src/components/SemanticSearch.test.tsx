@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { SemanticSearch } from './SemanticSearch'
 import { searchSemantic, type SemanticSearchResult } from '../api/client'
@@ -8,7 +8,7 @@ vi.mock('../api/client', () => ({
 }))
 
 afterEach(() => {
-  vi.restoreAllMocks()
+  vi.clearAllMocks()
 })
 
 function buildResults(): SemanticSearchResult[] {
@@ -30,7 +30,12 @@ describe('SemanticSearch', () => {
     await waitFor(() => expect(screen.getByText('Matching Doc')).toBeTruthy(), { timeout: 2000 })
     expect(screen.getByText('100%')).toBeTruthy()
     expect(screen.getByText('Unrelated Doc')).toBeTruthy()
-    expect(searchSemantic).toHaveBeenCalledWith('reset my password', 0)
+    expect(searchSemantic).toHaveBeenCalledWith(
+      'reset my password',
+      expect.any(Number),
+      expect.any(AbortSignal),
+    )
+    expect(vi.mocked(searchSemantic).mock.calls[0][1]).toBeGreaterThanOrEqual(1)
 
     // The higher-similarity item's result row must precede the lower one.
     const rows = screen.getAllByRole('button').filter((b) => b.textContent?.includes('Doc'))
@@ -57,7 +62,51 @@ describe('SemanticSearch', () => {
     const input = await waitFor(() => screen.getByLabelText('语义搜索') as HTMLInputElement)
     fireEvent.change(input, { target: { value: 'reset my password' } })
 
-    await waitFor(() => expect(screen.getByText('搜索失败')).toBeTruthy(), { timeout: 2000 })
+    await waitFor(
+      () => expect(screen.getByText('语义搜索暂不可用，请稍后重试')).toBeTruthy(),
+      { timeout: 2000 },
+    )
+  })
+
+  it('aborts the previous request and ignores a stale response during rapid input', async () => {
+    const first = Promise.withResolvers<SemanticSearchResult[]>()
+    const second = Promise.withResolvers<SemanticSearchResult[]>()
+    vi.mocked(searchSemantic)
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+
+    render(<SemanticSearch onNodeClick={() => {}} />)
+    const input = screen.getByLabelText('语义搜索')
+    fireEvent.change(input, { target: { value: 'first' } })
+    await waitFor(() => expect(searchSemantic).toHaveBeenCalledTimes(1), { timeout: 2000 })
+    const firstSignal = vi.mocked(searchSemantic).mock.calls[0][2]
+
+    fireEvent.change(input, { target: { value: 'second' } })
+    await waitFor(() => expect(searchSemantic).toHaveBeenCalledTimes(2), { timeout: 2000 })
+    expect(firstSignal?.aborted).toBe(true)
+
+    second.resolve([{
+      id: 'latest',
+      title: 'Latest result',
+      workspace: 'ws',
+      type: 'design',
+      similarity: 0.9,
+    }])
+    await waitFor(() => expect(screen.getByText('Latest result')).toBeTruthy())
+
+    await act(async () => {
+      first.resolve([{
+        id: 'stale',
+        title: 'Stale result',
+        workspace: 'ws',
+        type: 'design',
+        similarity: 1,
+      }])
+      await first.promise
+    })
+    expect(screen.queryByText('Stale result')).toBeNull()
+    expect(screen.getByText('Latest result')).toBeTruthy()
+    expect(vi.mocked(searchSemantic).mock.calls.every(([, topK]) => topK !== undefined && topK >= 1)).toBe(true)
   })
 
   it('clears results when the query is emptied', async () => {

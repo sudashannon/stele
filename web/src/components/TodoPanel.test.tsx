@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { TodoPanel } from './TodoPanel'
 import type { Todo } from '../api/types'
 
@@ -15,6 +15,7 @@ function makeTodo(overrides: Partial<Todo> = {}): Todo {
     change: null,
     wikiRefs: [],
     metadata: { source: 'ui' as const },
+    externalRef: null,
     createdAt: '2026-07-30T00:00:00Z',
     updatedAt: '2026-07-30T00:00:00Z',
     completedAt: null,
@@ -47,7 +48,7 @@ function nextWeekISO(): string {
 
 const baseProps = {
   todos: [] as Todo[],
-  counts: { total: 0, open: 0, inProgress: 0, done: 0 },
+  counts: { total: 0, open: 0, inProgress: 0, done: 0, blocked: 0, dropped: 0 },
   writable: true,
   loading: false,
   error: null,
@@ -108,6 +109,38 @@ describe('TodoPanel grouping', () => {
     const group = screen.getByTestId('todo-group-done')
     expect(group).toBeTruthy()
     expect(group.textContent).toContain('Done task')
+  })
+
+  it('groups blocked and dropped items in distinct terminal sections', () => {
+    render(<TodoPanel {...baseProps} todos={[
+      makeTodo({ id: 'b1', title: 'Blocked task', status: 'blocked' }),
+      makeTodo({ id: 'x1', title: 'Dropped task', status: 'dropped' }),
+    ]} />)
+    expect(screen.getByTestId('todo-group-blocked').textContent).toContain('Blocked task')
+    expect(screen.getByTestId('todo-group-dropped').textContent).toContain('Dropped task')
+  })
+
+  it('filters each extended status and renders OMP phase and blocker', () => {
+    const blocked = makeTodo({
+      id: 'omp-1',
+      title: 'OMP blocked',
+      status: 'blocked',
+      metadata: { source: 'omp' },
+      externalRef: { system: 'omp', sessionId: 'session', taskKey: '0:0', phase: 'build', blocker: 'waiting' },
+    })
+    const dropped = makeTodo({ id: 'drop-1', title: 'Dropped task', status: 'dropped' })
+    render(<TodoPanel {...baseProps} todos={[blocked, dropped]} counts={{ total: 2, open: 0, inProgress: 0, done: 0, blocked: 1, dropped: 1 }} />)
+    expect(screen.getByText(/1 个阻塞/).textContent).toContain('1 个放弃')
+
+    const origin = screen.getByTestId('todo-omp-origin-omp-1')
+    expect(origin.textContent).toContain('build')
+    expect(origin.textContent).toContain('waiting')
+    fireEvent.click(screen.getByTestId('todo-filter-blocked'))
+    expect(screen.getByText('OMP blocked')).toBeTruthy()
+    expect(screen.queryByText('Dropped task')).toBeNull()
+    fireEvent.click(screen.getByText('OMP blocked'))
+    expect(screen.getByTestId('todo-detail-omp-origin').textContent).toContain('session / 0:0')
+    expect(screen.getByTestId('todo-status-dropped')).toBeTruthy()
   })
 })
 
@@ -171,7 +204,7 @@ describe('TodoPanel detail panel', () => {
     expect(screen.getByTestId('todo-detail')).toBeTruthy()
   })
 
-  it('clears change relation when clear button is clicked', () => {
+  it('clears change relation only after confirmation', async () => {
     const onUpdate = vi.fn().mockResolvedValue(makeTodo({ id: 'cc1', title: 'With change', change: null }))
     const todo = makeTodo({
       id: 'cc1',
@@ -181,10 +214,12 @@ describe('TodoPanel detail panel', () => {
     render(<TodoPanel {...baseProps} todos={[todo]} onUpdate={onUpdate} />)
     fireEvent.click(screen.getByText('With change'))
     fireEvent.click(screen.getByTestId('todo-clear-change'))
-    expect(onUpdate).toHaveBeenCalledWith('cc1', { change: null })
+    expect(onUpdate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('todo-destructive-confirm-submit'))
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('cc1', { change: null }))
   })
 
-  it('removes wiki ref when remove button is clicked', () => {
+  it('removes wiki ref only after confirmation', async () => {
     const onUpdate = vi.fn().mockResolvedValue(makeTodo({ id: 'wr1', title: 'With wiki ref', wikiRefs: [] }))
     const todo = makeTodo({
       id: 'wr1',
@@ -194,10 +229,12 @@ describe('TodoPanel detail panel', () => {
     render(<TodoPanel {...baseProps} todos={[todo]} onUpdate={onUpdate} />)
     fireEvent.click(screen.getByText('With wiki ref'))
     fireEvent.click(screen.getByTestId('todo-remove-wikiref-comp-a'))
-    expect(onUpdate).toHaveBeenCalledWith('wr1', { wikiRefs: [] })
+    expect(onUpdate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('todo-destructive-confirm-submit'))
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('wr1', { wikiRefs: [] }))
   })
 
-  it('shows current-workspace documents newest-first and groups undated documents separately', () => {
+  it('searches documents, prioritizes current workspace, and supports keyboard selection', () => {
     const linkedRef = { componentId: 'linked', workspace: 'ws1', titleSnapshot: 'Already linked' }
     const todo = makeTodo({ id: 'docs1', title: 'Attach docs', wikiRefs: [linkedRef] })
     const onUpdate = vi.fn().mockResolvedValue(todo)
@@ -209,26 +246,55 @@ describe('TodoPanel detail panel', () => {
         wikiComponents={[
           { id: 'old', type: 'design', title: 'Old doc', path: '/old.md', workspace: 'ws1', updatedAt: '2026-07-01T00:00:00Z' },
           { id: 'recent', type: 'proposal', title: 'Recent doc', path: '/recent.md', workspace: 'ws1', updatedAt: '2026-07-29T00:00:00Z' },
-          { id: 'undated', type: 'spec', title: 'Undated doc', path: '/undated.md', workspace: 'ws1' },
-          { id: 'linked', type: 'tasks', title: 'Already linked', path: '/linked.md', workspace: 'ws1', updatedAt: '2026-07-30T00:00:00Z' },
           { id: 'other-workspace', type: 'plan', title: 'Other workspace', path: '/other.md', workspace: 'ws2', updatedAt: '2026-07-31T00:00:00Z' },
+          { id: 'linked', type: 'tasks', title: 'Already linked', path: '/linked.md', workspace: 'ws1', updatedAt: '2026-07-30T00:00:00Z' },
+          { id: 'recent', type: 'proposal', title: 'Duplicate recent', path: '/duplicate.md', workspace: 'ws1', updatedAt: '2026-07-30T00:00:00Z' },
         ]}
       />,
     )
 
     fireEvent.click(screen.getByText('Attach docs'))
-    const select = screen.getByTestId('todo-detail-wiki-select') as HTMLSelectElement
-    expect(Array.from(select.querySelectorAll('optgroup'), (group) => group.label)).toEqual(['最近更新', '其他文档'])
-    expect(Array.from(select.options, (option) => option.value)).toEqual(['', 'recent', 'old', 'undated'])
-    expect(select.options[1].textContent).toContain('proposal: Recent doc')
-
-    fireEvent.change(select, { target: { value: 'recent' } })
+    const combobox = screen.getByTestId('todo-detail-wiki-combobox')
+    fireEvent.focus(combobox)
+    const listbox = screen.getByRole('listbox')
+    expect(listbox.textContent).toContain('当前工作区 · ws1')
+    expect(listbox.textContent).toContain('其他工作区')
+    const options = within(listbox).getAllByRole('option')
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('Recent doc'),
+      expect.stringContaining('Old doc'),
+      expect.stringContaining('Other workspace'),
+    ])
+    fireEvent.keyDown(combobox, { key: 'ArrowDown' })
+    expect(within(listbox).getAllByRole('option')[1].getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(combobox, { key: 'Enter' })
     expect(onUpdate).toHaveBeenCalledWith('docs1', {
       wikiRefs: [
         linkedRef,
-        { componentId: 'recent', workspace: 'ws1', titleSnapshot: 'Recent doc' },
+        { componentId: 'old', workspace: 'ws1', titleSnapshot: 'Old doc' },
       ],
     })
+    fireEvent.focus(combobox)
+    fireEvent.change(combobox, { target: { value: 'other' } })
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(1)
+    fireEvent.keyDown(combobox, { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('limits document combobox results to twenty', () => {
+    const todo = makeTodo({ id: 'docs-limit', title: 'Many docs' })
+    const wikiComponents = Array.from({ length: 25 }, (_, index) => ({
+      id: `doc-${index}`,
+      type: 'spec' as const,
+      title: `Document ${index}`,
+      path: `/doc-${index}.md`,
+      workspace: 'ws1',
+      updatedAt: new Date(Date.UTC(2026, 6, index + 1)).toISOString(),
+    }))
+    render(<TodoPanel {...baseProps} todos={[todo]} wikiComponents={wikiComponents} />)
+    fireEvent.click(screen.getByText('Many docs'))
+    fireEvent.focus(screen.getByTestId('todo-detail-wiki-combobox'))
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(20)
   })
 })
 
@@ -347,7 +413,7 @@ describe('TodoPanel detail change and wiki association', () => {
     const comps = [{ id: 'comp-a', workspace: 'ws1', title: 'Doc A', type: 'spec' as const, path: '/a/doc.md', updatedAt: '2026-01-01T00:00:00Z' }]
     render(<TodoPanel {...baseProps} todos={[todo]} wikiComponents={comps} />)
     fireEvent.click(screen.getByText('Wiki picker'))
-    expect(screen.getByTestId('todo-detail-wiki-select')).toBeTruthy()
+    expect(screen.getByTestId('todo-detail-wiki-combobox')).toBeTruthy()
   })
 
   it('appends a wiki ref on select', () => {
@@ -356,8 +422,9 @@ describe('TodoPanel detail change and wiki association', () => {
     const comps = [{ id: 'comp-b', workspace: 'ws1', title: 'Doc B', type: 'spec' as const, path: '/b/doc.md', updatedAt: '2026-01-01T00:00:00Z' }]
     render(<TodoPanel {...baseProps} todos={[todo]} wikiComponents={comps} onUpdate={onUpdate} />)
     fireEvent.click(screen.getByText('Wiki adder'))
-    const wikiSelect = screen.getByTestId('todo-detail-wiki-select') as HTMLSelectElement
-    fireEvent.change(wikiSelect, { target: { value: 'comp-b' } })
+    const combobox = screen.getByTestId('todo-detail-wiki-combobox')
+    fireEvent.focus(combobox)
+    fireEvent.click(screen.getByRole('option', { name: /Doc B/ }))
     expect(onUpdate).toHaveBeenCalledWith('wp2', { wikiRefs: [{ componentId: 'comp-b', workspace: 'ws1', titleSnapshot: 'Doc B' }] })
   })
 })
@@ -444,5 +511,107 @@ describe('TodoPanel — async workspace fill', () => {
       />,
     )
     expect((screen.getByTestId('todo-qc-workspace') as HTMLSelectElement).value).toBe('ws1')
+  })
+})
+
+describe('TodoPanel row keyboard semantics', () => {
+  it('keeps one row tabbable and moves focus with roving keyboard controls', () => {
+    const first = makeTodo({ id: 'keyboard-1', title: 'Keyboard first' })
+    const second = makeTodo({ id: 'keyboard-2', title: 'Keyboard second' })
+    const third = makeTodo({ id: 'keyboard-3', title: 'Keyboard third' })
+    render(<TodoPanel {...baseProps} todos={[first, second, third]} />)
+    const firstRow = screen.getByRole('button', { name: '查看待办：Keyboard first' })
+    const secondRow = screen.getByRole('button', { name: '查看待办：Keyboard second' })
+    const thirdRow = screen.getByRole('button', { name: '查看待办：Keyboard third' })
+
+    expect(firstRow.getAttribute('tabindex')).toBe('0')
+    expect(secondRow.getAttribute('tabindex')).toBe('-1')
+    expect(thirdRow.getAttribute('tabindex')).toBe('-1')
+
+    firstRow.focus()
+    fireEvent.keyDown(firstRow, { key: 'ArrowDown' })
+    expect(secondRow.getAttribute('tabindex')).toBe('0')
+    expect(document.activeElement).toBe(secondRow)
+    expect(screen.getByTestId('todo-detail')).toBeTruthy()
+
+    fireEvent.keyDown(secondRow, { key: 'End' })
+    expect(document.activeElement).toBe(thirdRow)
+    fireEvent.keyDown(thirdRow, { key: 'Home' })
+    expect(document.activeElement).toBe(firstRow)
+    fireEvent.keyDown(firstRow, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(firstRow)
+
+    fireEvent.keyDown(firstRow, { key: 'Enter' })
+    expect(screen.queryByTestId('todo-detail')).toBeNull()
+    fireEvent.keyDown(firstRow, { key: ' ' })
+    expect(screen.getByTestId('todo-detail')).toBeTruthy()
+  })
+})
+
+describe('TodoPanel destructive confirmation', () => {
+  it('cancels deletion without a request and confirms deletion exactly once', async () => {
+    const todo = makeTodo({ id: 'delete-1', title: 'Delete me' })
+    const onDelete = vi.fn().mockResolvedValue(undefined)
+    render(<TodoPanel {...baseProps} todos={[todo]} onDelete={onDelete} />)
+    fireEvent.click(screen.getByText('Delete me'))
+    fireEvent.click(screen.getByTestId('todo-delete-btn'))
+    expect(onDelete).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('取消'))
+    expect(onDelete).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('todo-delete-btn'))
+    const confirm = screen.getByTestId('todo-destructive-confirm-submit')
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1))
+  })
+  it('keeps confirmation open when the selected todo is refetched', () => {
+    const todo = makeTodo({ id: 'refetch-1', title: 'Refetched todo' })
+    const { rerender } = render(<TodoPanel {...baseProps} todos={[todo]} />)
+    fireEvent.click(screen.getByText('Refetched todo'))
+    fireEvent.click(screen.getByTestId('todo-delete-btn'))
+    expect(screen.getByTestId('todo-destructive-confirm-submit')).toBeTruthy()
+
+    rerender(
+      <TodoPanel
+        {...baseProps}
+        todos={[{ ...todo, title: 'Refetched todo updated', updatedAt: '2026-07-30T01:00:00Z' }]}
+      />,
+    )
+
+    expect(screen.getByTestId('todo-destructive-confirm-submit')).toBeTruthy()
+  })
+
+})
+
+describe('TodoPanel list windowing', () => {
+  it('preserves the full list height and renders the last of 520 items after scrolling', () => {
+    const todos = Array.from({ length: 520 }, (_, index) =>
+      makeTodo({ id: `window-${index}`, title: `Window item ${index}` }),
+    )
+    render(<TodoPanel {...baseProps} todos={todos} />)
+    expect(screen.getAllByTestId(/^todo-row-/).length).toBeLessThanOrEqual(60)
+    expect(screen.queryByText('Window item 519')).toBeNull()
+    expect(screen.getByTestId('todo-list-bottom-spacer').style.height).toBe(`${460 * 56}px`)
+
+    const scroller = screen.getByTestId('todo-list-scroll')
+    fireEvent.scroll(scroller, { target: { scrollTop: 100_000 } })
+    expect(screen.getByText('Window item 519')).toBeTruthy()
+    expect(screen.getByTestId('todo-list-top-spacer').style.height).toBe(`${460 * 56}px`)
+    expect(screen.queryByTestId('todo-list-bottom-spacer')).toBeNull()
+    expect(screen.getAllByTestId(/^todo-row-/).length).toBeLessThanOrEqual(60)
+
+    const lastRow = screen.getByRole('button', { name: '查看待办：Window item 519' })
+    lastRow.focus()
+    fireEvent.keyDown(lastRow, { key: 'Home' })
+    const firstRow = screen.getByRole('button', { name: '查看待办：Window item 0' })
+    expect(document.activeElement).toBe(firstRow)
+    expect(screen.getByTestId('todo-list-bottom-spacer').style.height).toBe(`${460 * 56}px`)
+    expect(screen.queryByTestId('todo-list-top-spacer')).toBeNull()
+
+    fireEvent.keyDown(firstRow, { key: 'End' })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '查看待办：Window item 519' }))
+    expect(screen.getByTestId('todo-list-top-spacer').style.height).toBe(`${460 * 56}px`)
+    expect(screen.queryByTestId('todo-list-bottom-spacer')).toBeNull()
   })
 })

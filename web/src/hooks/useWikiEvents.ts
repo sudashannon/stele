@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 type WikiEventHandlers =
   | (() => void)
@@ -8,35 +8,89 @@ type WikiEventHandlers =
       onTodosUpdated?: (revision: number) => void
     }
 
+type WikiEventType = 'graph-updated' | 'indexing-started' | 'todos-updated'
+type WikiEventSubscriber = (type: WikiEventType, event?: MessageEvent) => void
+
+const subscribers = new Set<WikiEventSubscriber>()
+let sharedEventSource: EventSource | null = null
+
+function reportSubscriberError(error: unknown) {
+  queueMicrotask(() => {
+    const reportError = (globalThis as typeof globalThis & { reportError?: (error: unknown) => void }).reportError
+    if (reportError) {
+      reportError(error)
+      return
+    }
+    console.error('Wiki event subscriber failed', error)
+  })
+}
+
+function dispatch(type: WikiEventType, event?: MessageEvent) {
+  for (const subscriber of subscribers) {
+    try {
+      subscriber(type, event)
+    } catch (error) {
+      reportSubscriberError(error)
+    }
+  }
+}
+
+function ensureEventSource() {
+  if (sharedEventSource || typeof EventSource === 'undefined') return
+  const source = new EventSource('/api/wiki/events')
+  sharedEventSource = source
+  const forward = (type: WikiEventType, event?: MessageEvent) => {
+    if (sharedEventSource === source) dispatch(type, event)
+  }
+  source.addEventListener('graph-updated', () => forward('graph-updated'))
+  source.addEventListener('indexing-started', (event) => forward('indexing-started', event as MessageEvent))
+  source.addEventListener('todos-updated', (event) => forward('todos-updated', event as MessageEvent))
+}
+
 // useWikiEvents subscribes to the backend's /api/wiki/events SSE stream.
 // Backward compatible form: useWikiEvents(onUpdate)
 // Extended form: useWikiEvents({ onUpdate, onIndexingStarted, onTodosUpdated })
 export function useWikiEvents(handlers: WikiEventHandlers) {
-  const onUpdate = typeof handlers === 'function' ? handlers : handlers.onUpdate
-  const onIndexingStarted = typeof handlers === 'function' ? undefined : handlers.onIndexingStarted
-  const onTodosUpdated = typeof handlers === 'function' ? undefined : handlers.onTodosUpdated
+  const handlersRef = useRef(handlers)
+  useLayoutEffect(() => {
+    handlersRef.current = handlers
+  }, [handlers])
+
   useEffect(() => {
     if (typeof EventSource === 'undefined') return
-    const es = new EventSource('/api/wiki/events')
-    if (onUpdate) es.addEventListener('graph-updated', onUpdate)
-    if (onIndexingStarted) {
-      es.addEventListener('indexing-started', (event: MessageEvent) => {
+    const subscriber: WikiEventSubscriber = (type, event) => {
+      const current = handlersRef.current
+      if (type === 'graph-updated') {
+        const callback = typeof current === 'function' ? current : current.onUpdate
+        callback?.()
+        return
+      }
+      if (typeof current === 'function') return
+      if (type === 'indexing-started') {
+        if (!current.onIndexingStarted) return
         let changed: number | null = null
         try {
-          const payload = JSON.parse(event.data ?? '{}')
+          const payload = JSON.parse(event?.data ?? '{}')
           if (typeof payload.changed === 'number') changed = payload.changed
         } catch {}
-        onIndexingStarted(changed)
-      })
+        current.onIndexingStarted(changed)
+        return
+      }
+      if (!current.onTodosUpdated) return
+      try {
+        const payload = JSON.parse(event?.data ?? '{}')
+        if (typeof payload.revision === 'number') current.onTodosUpdated(payload.revision)
+      } catch {}
     }
-    if (onTodosUpdated) {
-      es.addEventListener('todos-updated', (event: MessageEvent) => {
-        try {
-          const payload = JSON.parse(event.data ?? '{}')
-          if (typeof payload.revision === 'number') onTodosUpdated(payload.revision)
-        } catch {}
-      })
+
+    subscribers.add(subscriber)
+    ensureEventSource()
+    return () => {
+      subscribers.delete(subscriber)
+      if (subscribers.size === 0) {
+        sharedEventSource?.close()
+        sharedEventSource = null
+      }
     }
-    return () => es.close()
-  }, [onUpdate, onIndexingStarted, onTodosUpdated])
+  }, [])
 }

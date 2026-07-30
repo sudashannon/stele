@@ -62,6 +62,7 @@ describe('SettingsPanel', () => {
 
     expect(screen.getByTestId('chat-settings-panel')).toBeTruthy()
     await waitFor(() => expect((screen.getByTestId('chat-settings-provider') as HTMLSelectElement).value).toBe('anthropic'))
+    expect(document.activeElement).toBe(screen.getByTestId('chat-settings-provider'))
     expect((screen.getByTestId('chat-settings-model') as HTMLSelectElement).value).toBe('claude-3-5-sonnet')
     expect((screen.getByTestId('chat-settings-api-key') as HTMLInputElement).placeholder).toBe('sk-c****umMM')
     expect((screen.getByTestId('chat-settings-api-base') as HTMLInputElement).value).toBe('')
@@ -125,6 +126,74 @@ describe('SettingsPanel', () => {
     await waitFor(() => expect(updateChatConfig).toHaveBeenCalledTimes(1))
     const patch = vi.mocked(updateChatConfig).mock.calls[0][0]
     expect(patch.providers?.anthropic?.api_key).toBe('sk-newkey123')
+  })
+
+  it('restores each provider saved settings when switching back and forth', async () => {
+    vi.mocked(fetchChatProviders).mockResolvedValue({
+      active: 'anthropic',
+      providers: [
+        { name: 'anthropic', models: ['claude-3-5-sonnet', 'claude-3-opus'], supports_images: true },
+        { name: 'openai', models: ['gpt-4.1', 'gpt-4o'], supports_images: true },
+      ],
+    })
+    vi.mocked(fetchChatConfig).mockResolvedValue({
+      active_provider: 'anthropic',
+      providers: {
+        anthropic: {
+          api_key: 'sk-ant-****',
+          api_base: 'https://api.anthropic.test',
+          model: 'claude-3-opus',
+          temperature: 0.4,
+          max_tokens: 2048,
+          thinking: 'disabled',
+        },
+        openai: {
+          api_key: 'sk-openai-****',
+          api_base: 'https://api.openai.test',
+          model: 'gpt-4o',
+          temperature: 1.2,
+          max_tokens: 8192,
+          thinking: 'auto',
+        },
+      },
+    })
+
+    render(<SettingsPanel onClose={() => {}} />)
+    const provider = await screen.findByTestId('chat-settings-provider') as HTMLSelectElement
+    await waitFor(() => expect(provider.value).toBe('anthropic'))
+
+    fireEvent.change(provider, { target: { value: 'openai' } })
+    expect((screen.getByTestId('chat-settings-model') as HTMLSelectElement).value).toBe('gpt-4o')
+    expect((screen.getByTestId('chat-settings-api-key') as HTMLInputElement).placeholder).toBe('sk-openai-****')
+    expect((screen.getByTestId('chat-settings-api-base') as HTMLInputElement).value).toBe('https://api.openai.test')
+    expect((screen.getByTestId('chat-settings-temperature') as HTMLInputElement).value).toBe('1.2')
+    expect((screen.getByTestId('chat-settings-max-tokens') as HTMLInputElement).value).toBe('8192')
+    expect((screen.getByTestId('chat-settings-thinking') as HTMLSelectElement).value).toBe('auto')
+
+    fireEvent.change(provider, { target: { value: 'anthropic' } })
+    expect((screen.getByTestId('chat-settings-model') as HTMLSelectElement).value).toBe('claude-3-opus')
+    expect((screen.getByTestId('chat-settings-api-key') as HTMLInputElement).placeholder).toBe('sk-ant-****')
+    expect((screen.getByTestId('chat-settings-api-base') as HTMLInputElement).value).toBe('https://api.anthropic.test')
+    expect((screen.getByTestId('chat-settings-temperature') as HTMLInputElement).value).toBe('0.4')
+    expect((screen.getByTestId('chat-settings-max-tokens') as HTMLInputElement).value).toBe('2048')
+    expect((screen.getByTestId('chat-settings-thinking') as HTMLSelectElement).value).toBe('disabled')
+  })
+
+  it('does not save empty or out-of-range numeric values', async () => {
+    render(<SettingsPanel onClose={() => {}} />)
+    await waitFor(() => expect((screen.getByTestId('chat-settings-provider') as HTMLSelectElement).value).toBe('anthropic'))
+    const form = screen.getByTestId('chat-settings-save').closest('form')
+    expect(form).not.toBeNull()
+
+    fireEvent.change(screen.getByTestId('chat-settings-temperature'), { target: { value: '' } })
+    fireEvent.submit(form!)
+    expect(updateChatConfig).not.toHaveBeenCalled()
+    expect(screen.getByTestId('chat-settings-error').textContent).toContain('有效的数值设置')
+
+    fireEvent.change(screen.getByTestId('chat-settings-temperature'), { target: { value: '3' } })
+    fireEvent.change(screen.getByTestId('chat-settings-max-tokens'), { target: { value: '0' } })
+    fireEvent.submit(form!)
+    expect(updateChatConfig).not.toHaveBeenCalled()
   })
 
   it('cancel button calls onClose without saving', async () => {

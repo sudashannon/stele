@@ -1,47 +1,106 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { fetchWorkspaces, addWorkspace, fetchChangesWithMeta, fetchWikiIndex, fetchBookmarks, addBookmark, removeBookmark } from './api/client'
-import type { ChangeSummary, WorkspaceConfig, WikiComponent, Bookmark } from './api/types'
-import { KpiCards, classifyChanges } from './components/KpiCards'
-import { ChangeExplorer } from './components/ChangeExplorer'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  addBookmark,
+  addWorkspace,
+  fetchBookmarks,
+  fetchChangesWithMeta,
+  fetchWikiIndex,
+  fetchWorkspaces,
+  removeBookmark,
+  removeWorkspace,
+} from './api/client'
+import type { Bookmark, ChangeSummary, WorkspaceConfig, WikiComponent } from './api/types'
 import { ChangeDetail } from './components/ChangeDetail'
+import { ChangeExplorer } from './components/ChangeExplorer'
 import { ChatBubble } from './components/ChatBubble'
-import { WorkspaceChips } from './components/WorkspaceChips'
-import { MarkdownViewer } from './components/MarkdownViewer'
-import { WikiGraph } from './components/WikiGraph'
-import { WikiTimeline } from './components/WikiTimeline'
-import { LintPanel } from './components/LintPanel'
-import { RecentPanel } from './components/RecentPanel'
-import { SideRail } from './components/SideRail'
-import { SettingsPanel } from './components/SettingsPanel'
-import { ReportView } from './components/ReportView'
-import { BookmarkPanel } from './components/BookmarkPanel'
-import { SemanticSearch } from './components/SemanticSearch'
-import { ShareList } from './components/ShareList'
-import { CalendarPanel } from './components/CalendarPanel'
-import { TodoPanel } from './components/TodoPanel'
-import { useWikiEvents } from './hooks/useWikiEvents'
-import { useTodos } from './hooks/useTodos'
 import { CommandPalette } from './components/CommandPalette'
-import { useKeyboardShortcuts, formatShortcut } from './hooks/useKeyboardShortcuts'
-import { useCommandPalette } from './hooks/useCommandPalette'
+import { Icon } from './components/icons'
+import { KpiCards, classifyChanges } from './components/KpiCards'
+import { BookmarkPanel } from './components/BookmarkPanel'
+import { Modal } from './components/Modal'
+import { SettingsPanel } from './components/SettingsPanel'
+import { SideRail, SIDE_RAIL_ITEMS, type SideRailView } from './components/SideRail'
+import { StaleBundleNotice } from './components/StaleBundleNotice'
+import { WorkspaceChips } from './components/WorkspaceChips'
 import { useAppZoom } from './hooks/useAppZoom'
+import { useCommandPalette } from './hooks/useCommandPalette'
 import type { CommandAction } from './hooks/useCommandPalette'
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
+import { useTodos } from './hooks/useTodos'
+import { useWikiEvents } from './hooks/useWikiEvents'
+
+const LazyCalendarPanel = lazy(() => import('./components/CalendarPanel').then(({ CalendarPanel }) => ({ default: CalendarPanel })))
+const LazyLintPanel = lazy(() => import('./components/LintPanel').then(({ LintPanel }) => ({ default: LintPanel })))
+const LazyMarkdownViewer = lazy(() => import('./components/MarkdownViewer').then(({ MarkdownViewer }) => ({ default: MarkdownViewer })))
+const LazyRecentPanel = lazy(() => import('./components/RecentPanel').then(({ RecentPanel }) => ({ default: RecentPanel })))
+const LazyReportView = lazy(() => import('./components/ReportView').then(({ ReportView }) => ({ default: ReportView })))
+const LazySemanticSearch = lazy(() => import('./components/SemanticSearch').then(({ SemanticSearch }) => ({ default: SemanticSearch })))
+const LazyShareList = lazy(() => import('./components/ShareList').then(({ ShareList }) => ({ default: ShareList })))
+const LazyTodoPanel = lazy(() => import('./components/TodoPanel').then(({ TodoPanel }) => ({ default: TodoPanel })))
+const LazyWikiGraph = lazy(() => import('./components/WikiGraph').then(({ WikiGraph }) => ({ default: WikiGraph })))
+const LazyWikiTimeline = lazy(() => import('./components/WikiTimeline').then(({ WikiTimeline }) => ({ default: WikiTimeline })))
 
 const STUCK_THRESHOLD_DAYS = 14
+const SHORTCUT_ITEMS = SIDE_RAIL_ITEMS.filter((item) => item.shortcutKey !== undefined)
+const VIEW_LABELS = Object.fromEntries(SIDE_RAIL_ITEMS.map((item) => [item.key, item.label])) as Record<SideRailView, string>
 
 interface ChangeSelection {
   name: string
   workspace?: string
 }
 
-// ── Viewer context helpers ────────────────────────────────────────────────────
-// Shared by all MarkdownViewer onCreateTodo callbacks: resolves the current
-// wiki component and infers a Change from the path pattern, never stale
-// selectedChange.
 interface TodoContext {
   wikiComponent: WikiComponent | null
   changeName: string | null
   changeWorkspace: string | null
+}
+
+interface WorkspaceRefreshOptions {
+  preferredActiveWorkspace?: string | null
+  clearSelected?: boolean
+}
+
+function reconcileSelectedChange(
+  selection: ChangeSelection | null,
+  nextChanges: ChangeSummary[],
+): ChangeSelection | null {
+  if (!selection) return null
+
+  const exactMatch = nextChanges.find(
+    (change) => change.name === selection.name && change.workspace === selection.workspace,
+  )
+  if (exactMatch) {
+    return { name: exactMatch.name, workspace: exactMatch.workspace }
+  }
+
+  const fallbackMatches = nextChanges.filter((change) => change.name === selection.name)
+  if (fallbackMatches.length === 1) {
+    return {
+      name: fallbackMatches[0].name,
+      workspace: fallbackMatches[0].workspace,
+    }
+  }
+
+  return null
+}
+
+function ViewFallback({ label }: { label: string }) {
+  return (
+    <div
+      data-testid="lazy-view-fallback"
+      className="m-4 flex min-h-[10rem] items-center gap-3 border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--spacing-05)] py-[var(--spacing-05)] text-[var(--type-body)] text-[var(--color-text-secondary)] shadow-[var(--shadow-1)]"
+    >
+      <Icon name="spinner" size={16} className="animate-spin text-[var(--color-accent)]" />
+      <div className="space-y-1">
+        <p className="text-[var(--type-caption)] font-medium text-[var(--color-text-primary)]">
+          正在加载{label}
+        </p>
+        <p className="text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+          保持当前上下文，视图资源仅在进入后按需加载。
+        </p>
+      </div>
+    </div>
+  )
 }
 
 export default function App() {
@@ -53,7 +112,7 @@ export default function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null)
   const [failedWorkspaces, setFailedWorkspaces] = useState<string[]>([])
   const [activeKpiFilter, setActiveKpiFilter] = useState<string | null>(null)
-  const [view, setView] = useState<'changes' | 'todos' | 'graph' | 'timeline' | 'search' | 'recent' | 'lint' | 'report' | 'shares' | 'calendar'>('changes')
+  const [view, setView] = useState<SideRailView>('changes')
   const [wikiComponents, setWikiComponents] = useState<WikiComponent[]>([])
   const [viewerPath, setViewerPath] = useState<string | null>(null)
   const [changeArtifacts, setChangeArtifacts] = useState<{ path: string; label: string }[]>([])
@@ -61,8 +120,15 @@ export default function App() {
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false)
   const [wikiIndexing, setWikiIndexing] = useState(false)
   const [wikiIndexingChanged, setWikiIndexingChanged] = useState<number | null>(null)
+  const [workspacePendingRemoval, setWorkspacePendingRemoval] = useState<string | null>(null)
+  const [workspaceRemovalError, setWorkspaceRemovalError] = useState<string | null>(null)
+  const [workspaceRemovalPending, setWorkspaceRemovalPending] = useState(false)
 
-  // ── Todo state ───────────────────────────────────────────────────────────
+  const selectedRef = useRef<ChangeSelection | null>(selected)
+  selectedRef.current = selected
+  const activeWorkspaceRef = useRef<string | null>(activeWorkspace)
+  activeWorkspaceRef.current = activeWorkspace
+
   const {
     todos,
     counts: todoCounts,
@@ -74,6 +140,7 @@ export default function App() {
     deleteTodo,
     refetch: refetchTodos,
   } = useTodos()
+
   type TodoDraft = {
     change?: { workspace: string; name: string }
     wikiRef?: { componentId: string; workspace: string; titleSnapshot: string }
@@ -81,112 +148,178 @@ export default function App() {
   const [todoDraft, setTodoDraft] = useState<TodoDraft | null>(null)
   const todoFocusCaptureRef = useRef<(() => void) | null>(null)
 
-  // ── Command Palette actions ─────────────────────────────────────────────
-  const viewLabels: Record<string, string> = {
-    changes: '变更仪表盘',
-    todos: '待办',
-    graph: '知识图谱',
-    timeline: '时间线',
-    search: '语义搜索',
-    recent: '最近更新',
-    lint: '文档健康检查',
-    report: '报告生成',
-    shares: '分享管理',
-    calendar: '产品日历',
-  }
+  const handleViewChange = useCallback((nextView: SideRailView) => {
+    setViewerPath(null)
+    setView(nextView)
+  }, [])
 
-  const commandActions: CommandAction[] = useMemo(() => [
-    ...Object.entries(viewLabels).map(([v, label]) => ({
-      id: `nav-${v}`,
-      label,
-      category: 'Navigation',
-      icon: '📍',
-      run: () => handleViewChange(v as typeof view),
-    })),
-    { id: 'new-todo', label: '新建待办', category: 'Commands', icon: '✅', run: () => { handleViewChange('todos'); setTimeout(() => todoFocusCaptureRef.current?.(), 100) } },
-    { id: 'bookmarks', label: '收藏夹', category: 'Navigation', icon: '⭐', run: () => setBookmarkPanelOpen((p) => !p) },
-    { id: 'settings', label: '设置', category: 'Navigation', icon: '⚙️', run: () => setSettingsOpen(true) },
-    { id: 'refresh', label: '刷新数据', category: 'Commands', icon: '🔄', run: () => window.location.reload() },
-  ], [])
+  const refreshWikiIndex = useCallback(() => {
+    fetchWikiIndex().then(setWikiComponents).catch(() => setWikiComponents([]))
+  }, [])
+
+  const refreshWorkspaceData = useCallback(
+    async (options?: WorkspaceRefreshOptions) => {
+      const [nextWorkspacesResult, nextChangesResult, nextWikiComponents] = await Promise.all([
+        fetchWorkspaces().catch(() => [] as WorkspaceConfig[]),
+        fetchChangesWithMeta().catch(() => ({ changes: [] as ChangeSummary[], failedWorkspaces: [] as string[] })),
+        fetchWikiIndex().catch(() => [] as WikiComponent[]),
+      ])
+
+      const nextWorkspaces = nextWorkspacesResult ?? []
+      const nextChanges = nextChangesResult.changes ?? []
+      const nextFailedWorkspaces = nextChangesResult.failedWorkspaces ?? []
+      const previousSelection = options?.clearSelected ? null : selectedRef.current
+      const nextSelection = reconcileSelectedChange(previousSelection, nextChanges)
+      const nextKnownAliases = new Set<string>([
+        ...nextWorkspaces.map((workspace) => workspace.alias),
+        ...nextFailedWorkspaces,
+      ])
+
+      let nextActiveWorkspace: string | null = nextSelection?.workspace ?? null
+      if (
+        options?.preferredActiveWorkspace &&
+        nextKnownAliases.has(options.preferredActiveWorkspace)
+      ) {
+        nextActiveWorkspace = options.preferredActiveWorkspace
+      } else if (
+        !options?.clearSelected &&
+        activeWorkspaceRef.current &&
+        nextKnownAliases.has(activeWorkspaceRef.current)
+      ) {
+        nextActiveWorkspace = activeWorkspaceRef.current
+      }
+
+      setWorkspaces(nextWorkspaces)
+      setChanges(nextChanges)
+      setFailedWorkspaces(nextFailedWorkspaces)
+      setWikiComponents(nextWikiComponents)
+      setSelected(nextSelection)
+      setActiveWorkspace(nextActiveWorkspace)
+    },
+    [],
+  )
+
+  const commandActions: CommandAction[] = useMemo(
+    () => [
+      ...SIDE_RAIL_ITEMS.map((item) => ({
+        id: `nav-${item.key}`,
+        label: VIEW_LABELS[item.key],
+        category: 'Navigation',
+        run: () => handleViewChange(item.key),
+      })),
+      {
+        id: 'new-todo',
+        label: '新建待办',
+        category: 'Commands',
+        run: () => {
+          handleViewChange('todos')
+          window.setTimeout(() => todoFocusCaptureRef.current?.(), 100)
+        },
+      },
+      {
+        id: 'bookmarks',
+        label: '收藏夹',
+        category: 'Navigation',
+        run: () => setBookmarkPanelOpen((open) => !open),
+      },
+      {
+        id: 'settings',
+        label: '设置',
+        category: 'Navigation',
+        run: () => setSettingsOpen(true),
+      },
+      {
+        id: 'refresh',
+        label: '刷新数据',
+        category: 'Commands',
+        run: () => window.location.reload(),
+      },
+    ],
+    [handleViewChange],
+  )
 
   const palette = useCommandPalette(commandActions)
   const appZoom = useAppZoom()
 
-  const shortcutDefs = useMemo(() => [
-    { key: 'k', ctrlOrCmd: true, label: '命令面板', run: () => {} },
-    { key: '1', ctrlOrCmd: true, label: '变更仪表盘', run: () => {} },
-    { key: '2', ctrlOrCmd: true, label: '知识图谱', run: () => {} },
-    { key: '3', ctrlOrCmd: true, label: '时间线', run: () => {} },
-    { key: '4', ctrlOrCmd: true, label: '语义搜索', run: () => {} },
-    { key: '5', ctrlOrCmd: true, label: '最近更新', run: () => {} },
-    { key: '6', ctrlOrCmd: true, label: '文档健康', run: () => {} },
-    { key: '7', ctrlOrCmd: true, label: '产品日历', run: () => {} },
-    { key: '8', ctrlOrCmd: true, label: '待办', run: () => {} },
-    { key: 'b', ctrlOrCmd: true, label: '收藏夹', run: () => {} },
-    { key: 'Escape', ctrlOrCmd: false, label: '关闭面板', run: () => {} },
-    { key: "=", ctrlOrCmd: true, label: "放大", run: () => {} },
-    { key: "-", ctrlOrCmd: true, label: "缩小", run: () => {} },
-    { key: "0", ctrlOrCmd: true, label: "重置缩放", run: () => {} },
-  ], [])
+  const shortcutDefs = useMemo(
+    () => [
+      { key: 'k', ctrlOrCmd: true, label: '命令面板', run: () => {} },
+      ...SHORTCUT_ITEMS.map((item) => ({
+        key: String(item.shortcutKey),
+        ctrlOrCmd: true,
+        label: item.label,
+        run: () => {},
+      })),
+      { key: 'b', ctrlOrCmd: true, label: '收藏夹', run: () => {} },
+      { key: 'Escape', ctrlOrCmd: false, label: '关闭面板', run: () => {} },
+      { key: '+', ctrlOrCmd: true, shift: true, label: '放大', run: () => {} },
+      { key: '-', ctrlOrCmd: true, label: '缩小', run: () => {} },
+      { key: '0', ctrlOrCmd: true, label: '重置缩放', run: () => {} },
+    ],
+    [],
+  )
 
-  useKeyboardShortcuts([
-    { key: 'k', ctrlOrCmd: true, label: '命令面板', run: () => palette.togglePalette() },
-    { key: '1', ctrlOrCmd: true, label: '变更仪表盘', run: () => handleViewChange('changes') },
-    { key: '2', ctrlOrCmd: true, label: '知识图谱', run: () => handleViewChange('graph') },
-    { key: '3', ctrlOrCmd: true, label: '时间线', run: () => handleViewChange('timeline') },
-    { key: '4', ctrlOrCmd: true, label: '语义搜索', run: () => handleViewChange('search') },
-    { key: '5', ctrlOrCmd: true, label: '最近更新', run: () => handleViewChange('recent') },
-    { key: '6', ctrlOrCmd: true, label: '文档健康', run: () => handleViewChange('lint') },
-    { key: '7', ctrlOrCmd: true, label: '产品日历', run: () => handleViewChange('calendar') },
-    { key: '8', ctrlOrCmd: true, label: '待办', run: () => handleViewChange('todos') },
-    { key: 'b', ctrlOrCmd: true, label: '收藏夹', run: () => setBookmarkPanelOpen((p) => !p) },
-    { key: 'Escape', ctrlOrCmd: false, label: '关闭面板', run: () => { palette.closePalette(); setViewerPath(null); setBookmarkPanelOpen(false); setSettingsOpen(false) } },
-    { key: "=", ctrlOrCmd: true, label: "放大", run: appZoom.zoomIn },
-    { key: "-", ctrlOrCmd: true, label: "缩小", run: appZoom.zoomOut },
-    { key: "0", ctrlOrCmd: true, label: "重置缩放", run: appZoom.zoomReset },
-  ])
+  const registeredShortcuts = useMemo(
+    () => [
+      { key: 'k', ctrlOrCmd: true, label: '命令面板', run: () => palette.togglePalette() },
+      ...SHORTCUT_ITEMS.map((item) => ({
+        key: String(item.shortcutKey),
+        ctrlOrCmd: true,
+        label: item.label,
+        run: () => handleViewChange(item.key),
+      })),
+      { key: 'b', ctrlOrCmd: true, label: '收藏夹', run: () => setBookmarkPanelOpen((open) => !open) },
+      {
+        key: 'Escape',
+        ctrlOrCmd: false,
+        label: '关闭面板',
+        run: () => {
+          palette.closePalette()
+          setViewerPath(null)
+          setBookmarkPanelOpen(false)
+          setSettingsOpen(false)
+        },
+      },
+      { key: '+', ctrlOrCmd: true, shift: true, label: '放大', run: appZoom.zoomIn },
+      { key: '=', ctrlOrCmd: true, label: '', run: appZoom.zoomIn },
+      { key: '-', ctrlOrCmd: true, label: '缩小', run: appZoom.zoomOut },
+      { key: '0', ctrlOrCmd: true, label: '重置缩放', run: appZoom.zoomReset },
+    ],
+    [appZoom.zoomIn, appZoom.zoomOut, appZoom.zoomReset, handleViewChange, palette],
+  )
 
-  function navigateToChange(changeName: string) {
-    // Resolve workspace: viewer component → unique change match → active → null
-    let workspace: string | undefined
-    if (viewerPath) {
-      workspace = wikiComponents.find((c) => c.path === viewerPath || c.id === viewerPath)?.workspace
-    }
-    if (!workspace) {
-      const matches = changes.filter((c) => c.name === changeName && c.workspace)
-      if (matches.length === 1) workspace = matches[0].workspace
-      else workspace = activeWorkspace ?? undefined
-    }
-    setView('changes')
-    setSelected({ name: changeName, workspace })
-    setActiveWorkspace(workspace ?? null)
-    setViewerPath(null)
-  }
+  useKeyboardShortcuts(registeredShortcuts)
 
-  function handleViewChange(v: 'changes' | 'todos' | 'graph' | 'timeline' | 'search' | 'recent' | 'lint' | 'report' | 'shares' | 'calendar') {
-    setViewerPath(null)
-    setView(v)
-  }
+  const navigateToChange = useCallback(
+    (changeName: string) => {
+      let workspace: string | undefined
+      if (viewerPath) {
+        workspace = wikiComponents.find((component) => component.path === viewerPath || component.id === viewerPath)?.workspace
+      }
+      if (!workspace) {
+        const matches = changes.filter((change) => change.name === changeName && change.workspace)
+        if (matches.length === 1) workspace = matches[0].workspace
+        else workspace = activeWorkspace ?? undefined
+      }
+      setView('changes')
+      setSelected({ name: changeName, workspace })
+      setActiveWorkspace(workspace ?? null)
+      setViewerPath(null)
+    },
+    [activeWorkspace, changes, viewerPath, wikiComponents],
+  )
 
   useEffect(() => {
-    fetchWorkspaces()
-      .then((ws) => setWorkspaces(ws ?? []))
-      .catch(() => setWorkspaces([]))
+    fetchWorkspaces().then((nextWorkspaces) => setWorkspaces(nextWorkspaces ?? [])).catch(() => setWorkspaces([]))
   }, [])
 
   useEffect(() => {
     fetchChangesWithMeta()
-      .then((r) => {
-        setChanges(r.changes ?? [])
-        setFailedWorkspaces(r.failedWorkspaces ?? [])
+      .then((result) => {
+        setChanges(result.changes ?? [])
+        setFailedWorkspaces(result.failedWorkspaces ?? [])
       })
       .catch(() => setChanges([]))
-  }, [])
-
-  const refreshWikiIndex = useCallback(() => {
-    fetchWikiIndex()
-      .then(setWikiComponents)
-      .catch(() => setWikiComponents([]))
   }, [])
 
   useEffect(() => {
@@ -194,9 +327,7 @@ export default function App() {
   }, [refreshWikiIndex])
 
   useEffect(() => {
-    fetchBookmarks()
-      .then(setBookmarks)
-      .catch(() => setBookmarks([]))
+    fetchBookmarks().then(setBookmarks).catch(() => setBookmarks([]))
   }, [])
 
   const handleIndexingStarted = useCallback((changed: number | null) => {
@@ -229,156 +360,263 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [wikiIndexing])
 
-  const isBookmarked = (path: string) => bookmarks.some((b) => b.path === path)
+  const selectedChange = useMemo(
+    () =>
+      selected
+        ? changes.find(
+            (change) => change.name === selected.name && change.workspace === selected.workspace,
+          ) ?? null
+        : null,
+    [changes, selected],
+  )
 
-  function handleToggleStar(path: string, title: string) {
-    if (isBookmarked(path)) {
-      removeBookmark(path)
-        .then(setBookmarks)
-        .catch(() => {})
-    } else {
+  const isBookmarked = useCallback(
+    (path: string) => bookmarks.some((bookmark) => bookmark.path === path),
+    [bookmarks],
+  )
+
+  const handleToggleStar = useCallback(
+    (path: string, title: string) => {
+      if (isBookmarked(path)) {
+        removeBookmark(path).then(setBookmarks).catch(() => {})
+        return
+      }
+
       const type = path.split('.').pop() || 'doc'
-      addBookmark({ path, title, type })
-        .then(setBookmarks)
-        .catch(() => {})
-    }
-  }
+      addBookmark({ path, title, type }).then(setBookmarks).catch(() => {})
+    },
+    [isBookmarked],
+  )
 
-  function handleRemoveBookmark(path: string) {
-    removeBookmark(path)
-      .then(setBookmarks)
-      .catch(() => {})
-  }
+  const handleRemoveBookmark = useCallback((path: string) => {
+    removeBookmark(path).then(setBookmarks).catch(() => {})
+  }, [])
 
-  const selectedChange = selected
-    ? changes.find((change) => change.name === selected.name && change.workspace === selected.workspace) ?? null
-    : null
-
-  // ── Todo change counts for ChangeDetail badge ────────────────────────────
   const todoCountByChangeKey = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const t of todos) {
-      if (t.status === 'done' || !t.change) continue
-      const key = `${t.change.workspace}\x00${t.change.name}`
-      map.set(key, (map.get(key) ?? 0) + 1)
+    const counts = new Map<string, number>()
+    for (const todo of todos) {
+      if (todo.status === 'done' || todo.status === 'dropped' || !todo.change) continue
+      const key = `${todo.change.workspace}\x00${todo.change.name}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
     }
-    return map
+    return counts
   }, [todos])
 
-  // Resolve wiki component + inferred change for onCreateTodo in MarkdownViewer.
-  // Computed once per render; MarkdownViewer only receives the handler when
-  // a wiki component actually matches the current viewerPath.
   const viewerTodoContext = useMemo((): TodoContext => {
-    if (!viewerPath) return { wikiComponent: null, changeName: null, changeWorkspace: null }
-    const wikiComponent = wikiComponents.find((c) => c.path === viewerPath || c.id === viewerPath) ?? null
+    if (!viewerPath) {
+      return { wikiComponent: null, changeName: null, changeWorkspace: null }
+    }
+
+    const wikiComponent =
+      wikiComponents.find((component) => component.path === viewerPath || component.id === viewerPath) ??
+      null
     let changeName: string | null = null
     let changeWorkspace: string | null = null
+
     if (wikiComponent) {
-      const m = viewerPath.match(/\/changes\/([^/]+)\//)
-      if (m) {
-        changeName = m[1]
+      const match = viewerPath.match(/\/changes\/([^/]+)\//)
+      if (match) {
+        changeName = match[1]
         changeWorkspace = wikiComponent.workspace ?? null
         const exists = changeWorkspace
-          ? changes.some((c) => c.name === changeName && c.workspace === changeWorkspace)
+          ? changes.some(
+              (change) => change.name === changeName && change.workspace === changeWorkspace,
+            )
           : false
-        if (!exists) { changeName = null; changeWorkspace = null }
+        if (!exists) {
+          changeName = null
+          changeWorkspace = null
+        }
       }
     }
-    return { wikiComponent, changeName, changeWorkspace }
-  }, [viewerPath, wikiComponents, changes])
 
-  // Shared onCreateTodo for all MarkdownViewer callsites — only passed when
-  // viewerTodoContext.wikiComponent is non-null (button not rendered otherwise).
+    return { wikiComponent, changeName, changeWorkspace }
+  }, [changes, viewerPath, wikiComponents])
+
   const createTodoFromViewer = useCallback(() => {
-    const ctx = viewerTodoContext
-    if (!ctx.wikiComponent) return
+    const context = viewerTodoContext
+    if (!context.wikiComponent) return
     setTodoDraft({
       wikiRef: {
-        componentId: ctx.wikiComponent.id,
-        workspace: ctx.wikiComponent.workspace ?? '',
-        titleSnapshot: ctx.wikiComponent.title,
+        componentId: context.wikiComponent.id,
+        workspace: context.wikiComponent.workspace ?? '',
+        titleSnapshot: context.wikiComponent.title,
       },
-      ...(ctx.changeName && ctx.changeWorkspace
-        ? { change: { workspace: ctx.changeWorkspace, name: ctx.changeName } }
+      ...(context.changeName && context.changeWorkspace
+        ? { change: { workspace: context.changeWorkspace, name: context.changeName } }
         : {}),
     })
     handleViewChange('todos')
-  }, [viewerTodoContext])
+  }, [handleViewChange, viewerTodoContext])
 
   const viewerTodoHandler = viewerTodoContext.wikiComponent ? createTodoFromViewer : undefined
-  // Todo wiki-chip navigation: switch to a viewer-capable view
+
   const handleNavigateWikiFromTodo = useCallback((path: string) => {
     setViewerPath(path)
     setView('search')
   }, [])
 
-  const now = new Date()
+  const today = new Date()
+  const classificationKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`
+  const classificationNow = useMemo(() => new Date(), [classificationKey])
 
-  const workspaceChanges = activeWorkspace
-    ? changes.filter((c) => c.workspace === activeWorkspace)
-    : changes
+  const workspaceChanges = useMemo(
+    () => (activeWorkspace ? changes.filter((change) => change.workspace === activeWorkspace) : changes),
+    [activeWorkspace, changes],
+  )
 
-  const classified = classifyChanges(workspaceChanges, STUCK_THRESHOLD_DAYS, now)
-  const kpiFilterSets: Record<string, ChangeSummary[]> = {
-    active: classified.active,
-    archived: classified.archived,
-    stuck: classified.stuck,
-    'verify-failed': classified.verifyFailed,
-    'incomplete-tasks': classified.incomplete,
-  }
-  const visibleChanges = activeKpiFilter
-    ? kpiFilterSets[activeKpiFilter] ?? []
-    : workspaceChanges
+  const classified = useMemo(
+    () => classifyChanges(workspaceChanges, STUCK_THRESHOLD_DAYS, classificationNow),
+    [classificationNow, workspaceChanges],
+  )
+
+  const visibleChanges = useMemo(() => {
+    const kpiFilterSets: Record<string, ChangeSummary[]> = {
+      active: classified.active,
+      archived: classified.archived,
+      stuck: classified.stuck,
+      'verify-failed': classified.verifyFailed,
+      'incomplete-tasks': classified.incomplete,
+    }
+
+    return activeKpiFilter ? kpiFilterSets[activeKpiFilter] ?? [] : workspaceChanges
+  }, [activeKpiFilter, classified, workspaceChanges])
+
+  const lockedWorkspaceAliases = useMemo(() => {
+    const aliases = new Set<string>()
+    if (activeWorkspace) aliases.add(activeWorkspace)
+    if (selected?.workspace) aliases.add(selected.workspace)
+    if (viewerTodoContext.wikiComponent?.workspace) {
+      aliases.add(viewerTodoContext.wikiComponent.workspace)
+    }
+    return aliases
+  }, [activeWorkspace, selected, viewerTodoContext])
+
+  const openWorkspaceRemoval = useCallback((alias: string) => {
+    setWorkspacePendingRemoval(alias)
+    setWorkspaceRemovalError(null)
+  }, [])
+
+  const closeWorkspaceRemoval = useCallback(() => {
+    setWorkspacePendingRemoval(null)
+    setWorkspaceRemovalError(null)
+  }, [])
+
+  const confirmWorkspaceRemoval = useCallback(async () => {
+    if (!workspacePendingRemoval) return
+
+    setWorkspaceRemovalPending(true)
+    setWorkspaceRemovalError(null)
+    try {
+      await removeWorkspace(workspacePendingRemoval)
+      await refreshWorkspaceData()
+      setWorkspacePendingRemoval(null)
+    } catch (error) {
+      setWorkspaceRemovalError(error instanceof Error ? error.message : '移除工作区失败')
+    } finally {
+      setWorkspaceRemovalPending(false)
+    }
+  }, [refreshWorkspaceData, workspacePendingRemoval])
 
   return (
     <div
-      className="h-screen flex overflow-hidden relative"
+      className="relative flex h-screen overflow-hidden"
       style={{
         zoom: appZoom.zoom,
-        backgroundImage: 'linear-gradient(135deg, var(--color-bg) 0%, var(--color-surface) 55%, var(--color-surface) 100%)',
+        backgroundImage:
+          'linear-gradient(135deg, var(--color-bg) 0%, var(--color-surface) 55%, var(--color-surface) 100%)',
       }}
     >
       <SideRail
         view={view}
         onSelect={handleViewChange}
         onOpenSettings={() => setSettingsOpen(true)}
-        onToggleBookmarks={() => setBookmarkPanelOpen((v) => !v)}
+        onToggleBookmarks={() => setBookmarkPanelOpen((open) => !open)}
         bookmarkPanelOpen={bookmarkPanelOpen}
         onOpenPalette={() => palette.openPalette()}
         zoomPercent={appZoom.zoomPercent}
         todoCount={todoCounts ? todoCounts.open + todoCounts.inProgress : undefined}
       />
-      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <div className="xl:hidden flex items-center p-3 shrink-0">
+
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex items-center p-3 xl:hidden">
           <button
             data-testid="hamburger-toggle"
-            onClick={() => setSidebarOpen((v) => !v)}
-            className="text-sm"
+            onClick={() => setSidebarOpen((open) => !open)}
+            className="border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-primary)]"
           >
-            ☰ 工作区
+            工作区筛选
           </button>
         </div>
 
-      {failedWorkspaces.length > 0 && (
-        <div data-testid="workspace-warning-banner" className="text-xs bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] text-[var(--color-danger)] p-2 m-3 shrink-0">
-          ⚠ 以下 workspace 无法读取，已跳过：{failedWorkspaces.join(', ')}
-        </div>
-      )}
+        {failedWorkspaces.length > 0 && (
+          <div
+            data-testid="workspace-warning-banner"
+            className="mx-3 mb-3 border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] p-3 text-[var(--type-caption)]"
+          >
+            <div className="flex items-start gap-3">
+              <Icon name="warning" size={16} className="mt-0.5 text-[var(--color-danger)]" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <p className="font-medium text-[var(--color-text-primary)]">
+                  以下 workspace 无法读取，已暂时跳过。
+                </p>
+                <ul className="space-y-2">
+                  {failedWorkspaces.map((alias) => {
+                    const removalLocked = lockedWorkspaceAliases.has(alias)
+                    return (
+                      <li key={alias} className="flex flex-wrap items-center gap-2">
+                        <span className="border border-[var(--color-danger)] bg-[var(--color-surface)] px-2 py-1 text-[var(--type-caption)] text-[var(--color-text-primary)]">
+                          {alias}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label={`移除 workspace ${alias}`}
+                          title={
+                            removalLocked
+                              ? '当前正在查看此 workspace，先切换到其他 workspace 再移除'
+                              : `移除 workspace ${alias}`
+                          }
+                          disabled={removalLocked}
+                          onClick={() => openWorkspaceRemoval(alias)}
+                          className={
+                            'border px-2 py-1 text-[var(--type-caption)] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+                            (removalLocked
+                              ? 'cursor-not-allowed border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-tertiary)]'
+                              : 'border-[var(--color-danger)] bg-[var(--color-surface)] text-[var(--color-danger)] hover:bg-[var(--color-danger-subtle)]')
+                          }
+                        >
+                          移除
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
 
-      {wikiIndexing && (
-        <div data-testid="wiki-indexing-banner" className="text-xs bg-[color-mix(in_srgb,var(--color-accent)_10%,var(--color-surface))] text-[var(--color-accent)] p-2 mx-3 mb-3 shrink-0">
-          ℹ {typeof wikiIndexingChanged === 'number' ? `检测到 ${wikiIndexingChanged} 个文件更新，正在进入搜索库…` : '已检测到文档更新，正在进入搜索库…'} 几秒后即可检索
-        </div>
-      )}
+        {wikiIndexing && (
+          <div
+            data-testid="wiki-indexing-banner"
+            className="mx-3 mb-3 flex items-start gap-3 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] p-3 text-[var(--type-caption)]"
+          >
+            <Icon name="info" size={16} className="mt-0.5 text-[var(--color-accent)]" />
+            <p className="text-[var(--color-text-primary)]">
+              {typeof wikiIndexingChanged === 'number'
+                ? `检测到 ${wikiIndexingChanged} 个文件更新，正在进入搜索库…几秒后即可检索`
+                : '已检测到文档更新，正在进入搜索库…几秒后即可检索'}
+            </p>
+          </div>
+        )}
 
-      {view === 'changes' && (
-        <>
-          <div className="flex-1 flex min-h-0">
+        {view === 'changes' && (
+          <div className="flex min-h-0 flex-1">
             <aside
               data-testid="sidebar"
               className={
                 (sidebarOpen ? 'block' : 'hidden') +
-                ' xl:block w-full xl:w-[340px] shrink-0 border-r border-[var(--color-border)] p-3 overflow-y-auto'
+                ' w-full shrink-0 overflow-y-auto border-r border-[var(--color-border)] p-3 xl:block xl:w-[340px]'
               }
             >
               <WorkspaceChips
@@ -390,16 +628,18 @@ export default function App() {
                   setViewerPath(null)
                   setChangeArtifacts([])
                 }}
-                onAdd={async (cfg) => {
-                  await addWorkspace(cfg)
-                  const refreshedWorkspaces = await fetchWorkspaces()
-                  setWorkspaces(refreshedWorkspaces ?? [])
-                  const refreshed = await fetchChangesWithMeta()
-                  setChanges(refreshed.changes ?? [])
-                  setFailedWorkspaces(refreshed.failedWorkspaces ?? [])
+                onAdd={async (config) => {
+                  await addWorkspace(config)
                   setSelected(null)
-                  setActiveWorkspace(cfg.alias)
+                  setViewerPath(null)
+                  setChangeArtifacts([])
+                  await refreshWorkspaceData({
+                    preferredActiveWorkspace: config.alias,
+                    clearSelected: true,
+                  })
                 }}
+                onRemove={openWorkspaceRemoval}
+                removeDisabledAliases={Array.from(lockedWorkspaceAliases)}
               />
               <ChangeExplorer
                 changes={visibleChanges}
@@ -414,24 +654,26 @@ export default function App() {
               />
             </aside>
 
-            <main className="flex-1 min-h-0 overflow-y-auto p-4">
+            <main className="flex-1 overflow-y-auto p-4">
               {viewerPath ? (
-                <MarkdownViewer
-                  path={viewerPath}
-                  artifacts={changeArtifacts}
-                  workspace={selectedChange?.workspace}
-                  onSelectArtifact={setViewerPath}
-                  onClose={() => setViewerPath(null)}
-                  onToggleStar={handleToggleStar}
-                  isStarred={isBookmarked(viewerPath)}
-                  onCreateTodo={viewerTodoHandler}
-                />
+                <Suspense fallback={<ViewFallback label="文档" />}>
+                  <LazyMarkdownViewer
+                    path={viewerPath}
+                    artifacts={changeArtifacts}
+                    workspace={selectedChange?.workspace}
+                    onSelectArtifact={setViewerPath}
+                    onClose={() => setViewerPath(null)}
+                    onToggleStar={handleToggleStar}
+                    isStarred={isBookmarked(viewerPath)}
+                    onCreateTodo={viewerTodoHandler}
+                  />
+                </Suspense>
               ) : (
                 <div className="space-y-4">
                   <KpiCards
                     changes={workspaceChanges}
                     stuckThresholdDays={STUCK_THRESHOLD_DAYS}
-                    now={now}
+                    now={classificationNow}
                     activeFilter={activeKpiFilter}
                     onFilterSelect={setActiveKpiFilter}
                   />
@@ -440,181 +682,219 @@ export default function App() {
                       change={selectedChange}
                       onOpenArtifact={setViewerPath}
                       onArtifactsChanged={setChangeArtifacts}
-                      onChangeUpdated={() =>
-                        fetchChangesWithMeta()
-                          .then((r) => {
-                            setChanges(r.changes ?? [])
-                            setFailedWorkspaces(r.failedWorkspaces ?? [])
-                          })
-                          .catch(() => {})
-                      }
+                      onChangeUpdated={refreshWorkspaceData}
                       onNavigateToTodos={(workspace, changeName) => {
                         setTodoDraft({ change: { workspace, name: changeName } })
                         handleViewChange('todos')
                       }}
-                      todoCount={selectedChange ? todoCountByChangeKey.get(`${selectedChange.workspace}\x00${selectedChange.name}`) ?? 0 : undefined}
+                      todoCount={
+                        selectedChange
+                          ? todoCountByChangeKey.get(
+                              `${selectedChange.workspace}\x00${selectedChange.name}`,
+                            ) ?? 0
+                          : undefined
+                      }
                     />
                   ) : (
                     <div
                       data-testid="change-empty-state"
-                      className="flex flex-col items-center justify-center gap-2 text-center border border-dashed border-[var(--color-border)] bg-white py-24 px-6"
+                      className="flex flex-col items-center justify-center gap-3 border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-24 text-center"
                     >
-                      <span className="text-4xl text-[var(--color-text-tertiary)]" aria-hidden="true">◇</span>
-                      <p className="text-sm font-medium text-[var(--color-text-primary)]">从左侧选择一个变更查看详情</p>
-                      <p className="text-xs text-[var(--color-text-secondary)]">可通过上方 KPI 卡片筛选，或在左侧工作区与搜索中定位目标变更</p>
+                      <Icon name="changes" size={28} className="text-[var(--color-text-tertiary)]" />
+                      <p className="text-[var(--type-body)] font-medium text-[var(--color-text-primary)]">
+                        从左侧选择一个变更查看详情
+                      </p>
+                      <p className="text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+                        可通过上方 KPI 卡片筛选，或在左侧工作区与搜索中定位目标变更
+                      </p>
                     </div>
                   )}
                 </div>
               )}
             </main>
           </div>
-        </>
-      )}
+        )}
 
-      {view === 'todos' && (
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <TodoPanel
-            todos={todos}
-            counts={todoCounts}
-            writable={todoWritable}
-            loading={todoLoading}
-            error={todoError}
-            onCreate={createTodo}
-            onUpdate={updateTodo}
-            onDelete={deleteTodo}
-            workspaces={workspaces}
-            wikiComponents={wikiComponents}
-            changes={changes}
-            onNavigateWiki={handleNavigateWikiFromTodo}
-            onNavigateChange={(workspace, changeName) => {
-              setView('changes')
-              setSelected({ name: changeName, workspace })
-              setActiveWorkspace(workspace)
-            }}
-            draftChange={todoDraft?.change ?? null}
-            draftWikiRef={todoDraft?.wikiRef ?? null}
-            onDraftConsumed={() => setTodoDraft(null)}
-            focusCaptureRef={todoFocusCaptureRef}
-            defaultWorkspace={activeWorkspace}
-          />
-        </div>
-      )}
+        {view === 'todos' && (
+          <Suspense fallback={<ViewFallback label="待办" />}>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <LazyTodoPanel
+                todos={todos}
+                counts={todoCounts}
+                writable={todoWritable}
+                loading={todoLoading}
+                error={todoError}
+                onCreate={createTodo}
+                onUpdate={updateTodo}
+                onDelete={deleteTodo}
+                workspaces={workspaces}
+                wikiComponents={wikiComponents}
+                changes={changes}
+                onNavigateWiki={handleNavigateWikiFromTodo}
+                onNavigateChange={(workspace, changeName) => {
+                  setView('changes')
+                  setSelected({ name: changeName, workspace })
+                  setActiveWorkspace(workspace)
+                }}
+                draftChange={todoDraft?.change ?? null}
+                draftWikiRef={todoDraft?.wikiRef ?? null}
+                onDraftConsumed={() => setTodoDraft(null)}
+                focusCaptureRef={todoFocusCaptureRef}
+                defaultWorkspace={activeWorkspace}
+              />
+            </div>
+          </Suspense>
+        )}
 
-      {view === 'graph' && (
-        <div className="flex-1 min-h-0 p-4">
-          {viewerPath ? (
-            <MarkdownViewer
-              path={viewerPath}
-              onClose={() => setViewerPath(null)}
-              onToggleStar={handleToggleStar}
-              isStarred={isBookmarked(viewerPath)}
-              onCreateTodo={viewerTodoHandler}
-            />
-          ) : (
-            <WikiGraph
-              onNodeClick={(id) => {
-                const component = wikiComponents.find((c) => c.id === id)
-                setViewerPath(component?.path ?? id)
-              }}
-            />
-          )}
-        </div>
-      )}
+        {view === 'graph' && (
+          <Suspense fallback={<ViewFallback label="知识图谱" />}>
+            <div className="flex-1 min-h-0 p-4">
+              {viewerPath ? (
+                <LazyMarkdownViewer
+                  path={viewerPath}
+                  onClose={() => setViewerPath(null)}
+                  onToggleStar={handleToggleStar}
+                  isStarred={isBookmarked(viewerPath)}
+                  onCreateTodo={viewerTodoHandler}
+                />
+              ) : (
+                <LazyWikiGraph
+                  onNodeClick={(id) => {
+                    const component = wikiComponents.find((item) => item.id === id)
+                    setViewerPath(component?.path ?? id)
+                  }}
+                />
+              )}
+            </div>
+          </Suspense>
+        )}
 
-      {view === 'timeline' && (
-        <div className="flex-1 min-h-0 p-4">
-          <WikiTimeline />
-        </div>
-      )}
+        {view === 'timeline' && (
+          <Suspense fallback={<ViewFallback label="时间线" />}>
+            <div className="flex-1 min-h-0 p-4">
+              {viewerPath ? (
+                <LazyMarkdownViewer
+                  path={viewerPath}
+                  onClose={() => setViewerPath(null)}
+                  onToggleStar={handleToggleStar}
+                  isStarred={isBookmarked(viewerPath)}
+                  onNavigateToChange={navigateToChange}
+                  onCreateTodo={viewerTodoHandler}
+                />
+              ) : (
+                <LazyWikiTimeline onOpen={(path) => setViewerPath(path)} />
+              )}
+            </div>
+          </Suspense>
+        )}
 
-      <div className="flex-1 min-h-0 relative overflow-hidden" style={{ display: view === 'search' ? undefined : 'none' }}>
-        <div className="absolute inset-0 overflow-y-auto p-4">
-          <SemanticSearch
-            onNodeClick={(id) => {
-              const component = wikiComponents.find((c) => c.id === id)
-              setViewerPath(component?.path ?? id)
-            }}
-          />
-        </div>
-        {viewerPath && view === 'search' && (
-          <div className="absolute inset-0 z-10 overflow-y-auto bg-white">
-            <MarkdownViewer
-              path={viewerPath}
-              onClose={() => setViewerPath(null)}
-              onToggleStar={handleToggleStar}
-              isStarred={isBookmarked(viewerPath)}
-              onNavigateToChange={navigateToChange}
-              onCreateTodo={viewerTodoHandler}
-            />
-          </div>
+        {view === 'search' && (
+          <Suspense fallback={<ViewFallback label="语义搜索" />}>
+            <div className="relative flex-1 min-h-0 overflow-hidden">
+              <div className="absolute inset-0 overflow-y-auto p-4">
+                <LazySemanticSearch
+                  onNodeClick={(id) => {
+                    const component = wikiComponents.find((item) => item.id === id)
+                    setViewerPath(component?.path ?? id)
+                  }}
+                />
+              </div>
+              {viewerPath && (
+                <div className="absolute inset-0 z-10 overflow-y-auto bg-[var(--color-surface)]">
+                  <LazyMarkdownViewer
+                    path={viewerPath}
+                    onClose={() => setViewerPath(null)}
+                    onToggleStar={handleToggleStar}
+                    isStarred={isBookmarked(viewerPath)}
+                    onNavigateToChange={navigateToChange}
+                    onCreateTodo={viewerTodoHandler}
+                  />
+                </div>
+              )}
+            </div>
+          </Suspense>
+        )}
+
+        {view === 'report' && (
+          <Suspense fallback={<ViewFallback label="报告" />}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              <LazyReportView
+                workspace={activeWorkspace}
+                workspaces={workspaces}
+                onOpenSettings={() => setSettingsOpen(true)}
+              />
+            </div>
+          </Suspense>
+        )}
+
+        {view === 'lint' && (
+          <Suspense fallback={<ViewFallback label="文档健康" />}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              {viewerPath ? (
+                <LazyMarkdownViewer
+                  path={viewerPath}
+                  onClose={() => setViewerPath(null)}
+                  onToggleStar={handleToggleStar}
+                  isStarred={isBookmarked(viewerPath)}
+                  onNavigateToChange={navigateToChange}
+                  onCreateTodo={viewerTodoHandler}
+                />
+              ) : (
+                <LazyLintPanel onOpen={(path) => setViewerPath(path)} />
+              )}
+            </div>
+          </Suspense>
+        )}
+
+        {view === 'recent' && (
+          <Suspense fallback={<ViewFallback label="最近更新" />}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              {viewerPath ? (
+                <LazyMarkdownViewer
+                  path={viewerPath}
+                  onClose={() => setViewerPath(null)}
+                  onToggleStar={handleToggleStar}
+                  isStarred={isBookmarked(viewerPath)}
+                  onNavigateToChange={navigateToChange}
+                  onCreateTodo={viewerTodoHandler}
+                />
+              ) : (
+                <LazyRecentPanel onOpen={(path) => setViewerPath(path)} />
+              )}
+            </div>
+          </Suspense>
+        )}
+
+        {view === 'shares' && (
+          <Suspense fallback={<ViewFallback label="分享" />}>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <LazyShareList />
+            </div>
+          </Suspense>
+        )}
+
+        {view === 'calendar' && (
+          <Suspense fallback={<ViewFallback label="日历" />}>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              {viewerPath ? (
+                <LazyMarkdownViewer
+                  path={viewerPath}
+                  onClose={() => setViewerPath(null)}
+                  onToggleStar={handleToggleStar}
+                  isStarred={isBookmarked(viewerPath)}
+                  onNavigateToChange={navigateToChange}
+                  onCreateTodo={viewerTodoHandler}
+                />
+              ) : (
+                <LazyCalendarPanel onOpen={(path) => setViewerPath(path)} />
+              )}
+            </div>
+          </Suspense>
         )}
       </div>
 
-      {view === 'report' && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          <ReportView workspace={activeWorkspace} workspaces={workspaces} onOpenSettings={() => setSettingsOpen(true)} />
-        </div>
-      )}
-
-      {view === 'lint' && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          {viewerPath ? (
-            <MarkdownViewer
-              path={viewerPath}
-              onClose={() => setViewerPath(null)}
-              onToggleStar={handleToggleStar}
-              isStarred={isBookmarked(viewerPath)}
-              onNavigateToChange={navigateToChange}
-              onCreateTodo={viewerTodoHandler}
-            />
-          ) : (
-            <LintPanel onOpen={(path) => setViewerPath(path)} />
-          )}
-        </div>
-      )}
-
-      {view === 'recent' && (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4">
-          {viewerPath ? (
-            <MarkdownViewer
-              path={viewerPath}
-              onClose={() => setViewerPath(null)}
-              onToggleStar={handleToggleStar}
-              isStarred={isBookmarked(viewerPath)}
-              onNavigateToChange={navigateToChange}
-              onCreateTodo={viewerTodoHandler}
-            />
-          ) : (
-            <RecentPanel onOpen={(path) => setViewerPath(path)} />
-          )}
-        </div>
-      )}
-
-      {view === 'shares' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <ShareList />
-        </div>
-      )}
-
-      {view === 'calendar' && (
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          {viewerPath ? (
-            <MarkdownViewer
-              path={viewerPath}
-              onClose={() => setViewerPath(null)}
-              onToggleStar={handleToggleStar}
-              isStarred={isBookmarked(viewerPath)}
-              onNavigateToChange={navigateToChange}
-              onCreateTodo={viewerTodoHandler}
-            />
-          ) : (
-            <CalendarPanel onOpen={(path) => setViewerPath(path)} />
-          )}
-        </div>
-      )}
-      </div>
       {bookmarkPanelOpen && (
-        <div className="absolute top-5 left-[76px] z-40">
+        <div className="absolute left-[76px] top-5 z-40">
           <BookmarkPanel
             bookmarks={bookmarks}
             onOpen={(path) => {
@@ -626,14 +906,67 @@ export default function App() {
           />
         </div>
       )}
+
       {settingsOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white shadow-2xl w-full max-w-md max-h-[85vh] overflow-y-auto">
-            <SettingsPanel onClose={() => setSettingsOpen(false)} />
-          </div>
-        </div>
+        <Modal
+          title="设置"
+          hideTitle
+          onClose={() => setSettingsOpen(false)}
+          width="max-w-md"
+        >
+          <SettingsPanel onClose={() => setSettingsOpen(false)} />
+        </Modal>
       )}
+
+      {workspacePendingRemoval && (
+        <Modal
+          title="移除工作区"
+          onClose={closeWorkspaceRemoval}
+          dismissible={!workspaceRemovalPending}
+          data-testid="remove-workspace-modal"
+        >
+          <div className="space-y-4 p-4">
+            <p className="text-[var(--type-body)] text-[var(--color-text-primary)]">
+              将从当前面板移除 <strong>{workspacePendingRemoval}</strong>。已同步的文档不会被删除，后续仍可重新添加。
+            </p>
+            {workspaceRemovalError && (
+              <div
+                data-testid="remove-workspace-error"
+                className="border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] px-3 py-2 text-[var(--type-caption)] text-[var(--color-danger)]"
+              >
+                {workspaceRemovalError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeWorkspaceRemoval}
+                disabled={workspaceRemovalPending}
+                className="border border-[var(--color-border)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-remove-workspace"
+                onClick={confirmWorkspaceRemoval}
+                disabled={workspaceRemovalPending}
+                className={
+                  'border px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-on-color)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+                  (workspaceRemovalPending
+                    ? 'cursor-wait border-[var(--color-danger)] bg-[var(--color-danger)]/70'
+                    : 'border-[var(--color-danger)] bg-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_85%,black)]')
+                }
+              >
+                {workspaceRemovalPending ? '正在移除…' : '确认移除'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       <CommandPalette palette={palette} shortcuts={shortcutDefs} />
+      <StaleBundleNotice />
       {viewerPath && (
         <ChatBubble
           key={viewerPath}

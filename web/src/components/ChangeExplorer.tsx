@@ -1,7 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import type { ChangeSummary } from '../api/types'
+import { copyText } from '../utils/clipboard'
 import { useContextMenu } from './ContextMenu'
+import { Icon } from './icons'
+
 
 interface Props {
   changes: ChangeSummary[]
@@ -17,26 +20,27 @@ type PhaseFilter = string
 function barColor(phase: string, pct: number): string {
   if (pct >= 100) return 'var(--color-success)'
   switch (phase) {
-    case 'design': case 'planning': return 'var(--color-accent)'
-    case 'verify': return 'rebeccapurple'
-    case 'archive': case 'completed': return 'var(--color-success)'
-    case 'build': case 'in_progress': return 'var(--color-warn)'
-    case 'rejected': return 'var(--color-danger)'
-    default: return 'var(--color-border-hover)'
+    case 'open': case 'planning': return 'var(--color-phase-open)'
+    case 'design': case 'plan': return 'var(--color-phase-design)'
+    case 'build': case 'in_progress': return 'var(--color-phase-build)'
+    case 'verify': return 'var(--color-phase-verify)'
+    case 'archive': case 'completed': return 'var(--color-phase-archive)'
+    case 'rejected': return 'var(--color-phase-rejected)'
+    default: return 'var(--color-phase-unknown)'
   }
 }
 
 const PHASE_STYLES: Record<string, string> = {
-  open: 'bg-[var(--color-bg)] text-[var(--color-text-secondary)]',
-  planning: 'bg-blue-50 text-[var(--color-accent)]',
-  design: 'bg-blue-50 text-[var(--color-accent)]',
-  plan: 'bg-blue-50 text-[var(--color-accent)]',
-  build: 'bg-amber-50 text-[var(--color-warn)]',
-  in_progress: 'bg-amber-50 text-[var(--color-warn)]',
-  verify: 'bg-violet-50 text-violet-600',
-  archive: 'bg-green-50 text-[var(--color-success)]',
-  completed: 'bg-green-50 text-[var(--color-success)]',
-  rejected: 'bg-red-50 text-[var(--color-danger)]',
+  open: 'bg-[var(--color-accent-subtle)] text-[var(--color-phase-open)]',
+  planning: 'bg-[var(--color-accent-subtle)] text-[var(--color-phase-open)]',
+  design: 'bg-[var(--color-purple-subtle)] text-[var(--color-phase-design)]',
+  plan: 'bg-[var(--color-purple-subtle)] text-[var(--color-phase-design)]',
+  build: 'bg-[var(--color-layer)] text-[var(--color-phase-build)]',
+  in_progress: 'bg-[var(--color-layer)] text-[var(--color-phase-build)]',
+  verify: 'bg-[var(--color-success-subtle)] text-[var(--color-phase-verify)]',
+  archive: 'bg-[var(--color-layer)] text-[var(--color-phase-archive)]',
+  completed: 'bg-[var(--color-layer)] text-[var(--color-phase-archive)]',
+  rejected: 'bg-[var(--color-danger-subtle)] text-[var(--color-phase-rejected)]',
 }
 
 const WORKFLOW_LABELS: Record<string, string> = {
@@ -51,9 +55,20 @@ const SOURCE_LABELS: Record<string, string> = {
   superpowers: 'Superpowers',
 }
 
-function Badge({ className, children }: { className: string; children: ReactNode }) {
+function Badge({
+  className,
+  children,
+  testId,
+}: {
+  className: string
+  children: ReactNode
+  testId?: string
+}) {
   return (
-    <span className={'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none ' + className}>
+    <span
+      data-testid={testId}
+      className={'inline-flex shrink-0 items-center gap-1 border border-[var(--color-border-subtle)] px-1.5 py-1 text-xs font-medium leading-none ' + className}
+    >
       {children}
     </span>
   )
@@ -65,68 +80,91 @@ function ChangeCard({
   change,
   selected,
   onSelect,
+  showWorkspace,
 }: {
   change: ChangeSummary
   selected: boolean
   onSelect: () => void
+  showWorkspace: boolean
 }) {
   const progress = change.tasksTotal > 0 ? change.tasksCompleted / change.tasksTotal : 0
   const phaseStyle = PHASE_STYLES[change.phase] ?? 'bg-[var(--color-bg)] text-[var(--color-text-secondary)]'
+  const workspaceMetadata = showWorkspace ? change.workspace?.trim() ?? '' : ''
+  const nameMetadata = change.title && change.title !== change.name ? change.name.trim() : ''
+  const metadata = `${workspaceMetadata ? `${workspaceMetadata} / ` : ''}${nameMetadata}`
 
   const ctx = useContextMenu()
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const handleCopy = useCallback(() => {
+    void copyText(change.name)
+      .then(() => setCopyError(null))
+      .catch(() => setCopyError('复制失败，请手动复制'))
+  }, [change.name])
+  const handleContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
     ctx.onContextMenu([
-      { id: 'open', label: '打开', icon: '📂', run: onSelect },
-      { id: 'copy-name', label: '复制名称', icon: '📋', run: () => navigator.clipboard.writeText(change.name) },
-    ])(e)
-  }, [change.name, onSelect, ctx])
-
+      { id: 'open', label: '打开', run: onSelect },
+      { id: 'copy-name', label: '复制名称', run: handleCopy },
+    ])(event)
+  }, [handleCopy, onSelect, ctx])
   return (
     <div
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-current={selected ? 'true' : undefined}
+      aria-label={`打开变更 ${change.title || change.name}${change.workspace ? `，工作区 ${change.workspace}` : ''}`}
       onContextMenu={handleContextMenu}
       className={
         'px-2.5 py-2.5 border cursor-pointer ' +
         (selected
-          ? 'border-transparent bg-blue-50 shadow-[inset_0_0_0_1px_var(--color-border)]'
-          : 'border-[var(--color-border)] hover:bg-[var(--color-bg)]')
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent-subtle)]'
+          : 'border-[var(--color-border)] hover:bg-[var(--color-layer)]')
       }
     >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="text-sm font-medium truncate" title={change.title || change.name}>{change.title || change.name}</div>
-          {change.title && change.title !== change.name && (
-            <div className="text-[10px] text-[var(--color-text-secondary)] truncate">{change.name}</div>
+          {metadata && (
+            <div className="truncate text-xs text-[var(--color-text-secondary)]">
+              {metadata}
+            </div>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Badge className={phaseStyle}>{change.phase}</Badge>
-          <Badge className="bg-[var(--color-bg)] text-[var(--color-text-secondary)]">
+          {selected && <Badge className="bg-[var(--color-accent-subtle)] text-[var(--color-accent)]"><Icon name="check" size={13} />已选择</Badge>}
+          <Badge className={phaseStyle}><Icon name="recent" size={13} />{change.phase}</Badge>
+          <Badge className="bg-[var(--color-layer)] text-[var(--color-text-secondary)]">
             {WORKFLOW_LABELS[change.workflow] ?? change.workflow}
           </Badge>
           {change.sourceType && (
-            <Badge className="bg-[var(--color-bg)] text-[var(--color-text-secondary)]">
+            <Badge className="bg-[var(--color-layer)] text-[var(--color-text-secondary)]">
               {SOURCE_LABELS[change.sourceType] ?? change.sourceType}
             </Badge>
           )}
           {change.verifyResult === 'pass' && (
-            <Badge className="bg-green-50 text-[var(--color-success)]">✓ pass</Badge>
+            <Badge className="bg-[var(--color-success-subtle)] text-[var(--color-success)]"><Icon name="check" size={13} />通过</Badge>
           )}
           {change.verifyResult === 'fail' && (
-            <Badge className="bg-red-50 text-[var(--color-danger)]">✗ fail</Badge>
+            <Badge className="bg-[var(--color-danger-subtle)] text-[var(--color-danger)]"><Icon name="warning" size={13} />失败</Badge>
           )}
           {change.stateWarning && (
-            <Badge className="bg-amber-50 text-[var(--color-warn)]" data-testid={`warning-${change.name}`}>
-              ⚠
+            <Badge className="bg-[var(--color-warn-subtle)] text-[var(--color-warn-text)]" testId={`warning-${change.name}`}>
+              <Icon name="warning" size={13} />状态异常
             </Badge>
           )}
         </div>
       </div>
       <div className="mt-1.5 flex items-center gap-2">
-        <div className="h-[5px] flex-1 rounded-full bg-[var(--color-bg)]">
+        <div className="h-[5px] flex-1 bg-[var(--color-layer-accent)]" role="progressbar" aria-label="任务进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
           <div
-            className="h-[5px] rounded-full"
+            className="h-[5px]"
             style={{ width: `${Math.round(progress * 100)}%`, backgroundColor: barColor(change.phase, progress * 100) }}
           />
         </div>
@@ -134,6 +172,11 @@ function ChangeCard({
           {change.tasksCompleted}/{change.tasksTotal}
         </div>
       </div>
+      {copyError && <div role="alert" className="mt-1.5 text-xs text-[var(--color-danger)]">{copyError}</div>}
+      {/* useContextMenu() only wires the handler; the caller must render its
+       * portal. Without this the right-click handler fired and set state while
+       * nothing ever appeared on screen. */}
+      {ctx.renderMenu}
     </div>
   )
 }
@@ -160,6 +203,15 @@ export function ChangeExplorer({ changes, selected, selectedWorkspace, onSelect 
   const [phase, setPhase] = useState<PhaseFilter>('all')
   const workflowOptions = Array.from(new Set(changes.map((change) => change.workflow).filter(Boolean))).sort()
   const phaseOptions = Array.from(new Set(changes.map((change) => change.phase).filter(Boolean))).sort()
+  const duplicateNames = useMemo(() => {
+    const seen = new Set<string>()
+    const duplicates = new Set<string>()
+    for (const change of changes) {
+      if (seen.has(change.name)) duplicates.add(change.name)
+      else seen.add(change.name)
+    }
+    return duplicates
+  }, [changes])
 
   const filtered = changes.filter((c) => matchesFilters(c, search, status, workflow, phase))
   const active = filtered.filter((c) => !c.archived)
@@ -227,13 +279,13 @@ export function ChangeExplorer({ changes, selected, selectedWorkspace, onSelect 
       </div>
       {active.length === 0 && archived.length === 0 && (
         <div className="flex flex-col items-center gap-2 border border-dashed border-[var(--color-border)] py-8 text-center">
-          <span className="text-2xl text-[var(--color-text-tertiary)]" aria-hidden="true">🔍</span>
+          <Icon name="search" size={24} className="text-[var(--color-text-tertiary)]" />
           <div className="text-sm font-medium text-[var(--color-text-secondary)]">无匹配的变更</div>
           <div className="text-xs text-[var(--color-text-tertiary)]">尝试调整搜索关键词或筛选条件</div>
           <button
             type="button"
             onClick={clearFilters}
-            className="mt-1 border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-accent)] hover:bg-blue-50"
+            className="mt-1 border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent-subtle)]"
           >
             清除筛选
           </button>
@@ -245,6 +297,7 @@ export function ChangeExplorer({ changes, selected, selectedWorkspace, onSelect 
           change={c}
           selected={selected === c.name && selectedWorkspace === c.workspace}
           onSelect={() => onSelect(c.name, c.workspace)}
+          showWorkspace={duplicateNames.has(c.name)}
         />
       ))}
       {archived.length > 0 && (
@@ -261,6 +314,7 @@ export function ChangeExplorer({ changes, selected, selectedWorkspace, onSelect 
                   change={c}
                   selected={selected === c.name && selectedWorkspace === c.workspace}
                   onSelect={() => onSelect(c.name, c.workspace)}
+                  showWorkspace={duplicateNames.has(c.name)}
                 />
               ))}
             </div>

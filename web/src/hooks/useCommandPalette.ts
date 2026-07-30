@@ -9,7 +9,7 @@ export interface CommandAction {
   shortcut?: string
   /** Category for grouping in the palette */
   category: string
-  /** Emoji or icon label */
+  /** Optional legacy icon identifier; the palette maps actions to shared icons. */
   icon?: string
   run: () => void
 }

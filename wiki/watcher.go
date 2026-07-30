@@ -29,7 +29,11 @@ type Watcher struct {
 	communityDelay time.Duration
 	watcher        *fsnotify.Watcher
 	stop           chan struct{}
+	stopOnce       sync.Once
 	wg             sync.WaitGroup
+	pathsMu        sync.Mutex
+	roots          map[string]struct{}
+	closed         bool
 	mirror         *Mirror
 }
 
@@ -54,18 +58,60 @@ func (w *Watcher) Start(paths []string) error {
 	if err != nil {
 		return err
 	}
+	w.pathsMu.Lock()
+	if w.closed || w.watcher != nil {
+		w.pathsMu.Unlock()
+		_ = fw.Close()
+		return fmt.Errorf("wiki watcher cannot be started")
+	}
 	w.watcher = fw
-
-	for _, root := range paths {
-		w.addWatchTree(root)
+	w.roots = cleanWatchRoots(paths)
+	for root := range w.roots {
+		w.addWatchTreeLocked(root)
 	}
 
 	log.Printf("wiki watcher: watching %d paths", len(paths))
 	w.wg.Add(1)
-	go w.loop()
+	go w.loop(fw)
+	w.pathsMu.Unlock()
 	return nil
 }
+func cleanWatchRoots(paths []string) map[string]struct{} {
+	roots := make(map[string]struct{}, len(paths))
+	for _, root := range paths {
+		if root == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		roots[filepath.Clean(absolute)] = struct{}{}
+	}
+	return roots
+}
+
+// addWatchTree installs watches for a newly created directory that is still
+// beneath an existing root. Events outside the current roots (including stale
+// events queued before ResetPaths) are intentionally ignored.
 func (w *Watcher) addWatchTree(root string) {
+	w.pathsMu.Lock()
+	defer w.pathsMu.Unlock()
+	if w.watcher == nil || !w.isWithinWatchRootsLocked(root) {
+		return
+	}
+	w.addWatchTreeLocked(root)
+}
+
+func (w *Watcher) addWatchTreeLocked(root string) {
+	w.walkWatchTree(root, func(path string) {
+		if addErr := w.watcher.Add(path); addErr != nil {
+			log.Printf("wiki watcher: failed to watch %s: %v", path, addErr)
+		}
+	})
+}
+
+func (w *Watcher) walkWatchTree(root string, visit func(string)) {
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -89,31 +135,80 @@ func (w *Watcher) addWatchTree(root string) {
 		case (strings.Contains(name, "_sdk") || strings.Contains(name, "_bsp")) && filepath.Dir(path) != root:
 			return filepath.SkipDir
 		}
-		if addErr := w.watcher.Add(path); addErr != nil {
-			log.Printf("wiki watcher: failed to watch %s: %v", path, addErr)
-		}
+		visit(filepath.Clean(path))
 		return nil
 	})
 }
 
-// AddPaths extends a running watcher after a workspace is registered.
-func (w *Watcher) AddPaths(paths []string) {
-	if w.watcher == nil {
+func (w *Watcher) isWithinWatchRootsLocked(path string) bool {
+	path = filepath.Clean(path)
+	for root := range w.roots {
+		rel, err := filepath.Rel(root, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// ResetPaths replaces the watched roots as one synchronized update. Desired
+// trees are installed before stale watches are removed, so overlapping roots
+// retained by another workspace never lose their watches.
+func (w *Watcher) ResetPaths(paths []string) {
+	w.pathsMu.Lock()
+	defer w.pathsMu.Unlock()
+	if w.closed || w.watcher == nil {
 		return
 	}
-	for _, root := range paths {
-		w.addWatchTree(root)
+
+	w.roots = cleanWatchRoots(paths)
+	desired := make(map[string]struct{})
+	for root := range w.roots {
+		w.walkWatchTree(root, func(path string) {
+			desired[path] = struct{}{}
+		})
+	}
+
+	current := make(map[string]struct{})
+	for _, path := range w.watcher.WatchList() {
+		current[filepath.Clean(path)] = struct{}{}
+	}
+	for path := range desired {
+		if _, exists := current[path]; exists {
+			continue
+		}
+		if err := w.watcher.Add(path); err != nil {
+			log.Printf("wiki watcher: failed to watch %s: %v", path, err)
+		}
+	}
+	for path := range current {
+		if _, keep := desired[path]; keep {
+			continue
+		}
+		if err := w.watcher.Remove(path); err != nil {
+			log.Printf("wiki watcher: failed to remove watch %s: %v", path, err)
+		}
 	}
 }
 
 // Stop shuts down the watcher and blocks until its goroutine has exited.
 func (w *Watcher) Stop() {
-	close(w.stop)
-	w.watcher.Close()
+	w.stopOnce.Do(func() {
+		w.pathsMu.Lock()
+		w.closed = true
+		fw := w.watcher
+		w.watcher = nil
+		w.pathsMu.Unlock()
+
+		close(w.stop)
+		if fw != nil {
+			_ = fw.Close()
+		}
+	})
 	w.wg.Wait()
 }
 
-func (w *Watcher) loop() {
+func (w *Watcher) loop(fw *fsnotify.Watcher) {
 	defer w.wg.Done()
 
 	var pending []string
@@ -148,7 +243,7 @@ func (w *Watcher) loop() {
 		select {
 		case <-w.stop:
 			return
-		case event, ok := <-w.watcher.Events:
+		case event, ok := <-fw.Events:
 			if !ok {
 				return
 			}
@@ -176,7 +271,7 @@ func (w *Watcher) loop() {
 			}
 			pending = append(pending, event.Name)
 			resetTimer()
-		case err, ok := <-w.watcher.Errors:
+		case err, ok := <-fw.Errors:
 			if !ok {
 				return
 			}

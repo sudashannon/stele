@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -123,7 +124,7 @@ var mcpTools = []mcpTool{
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"status":          map[string]any{"type": "string", "description": "筛选状态: open, in_progress, done"},
+				"status":          map[string]any{"type": "string", "enum": []string{"open", "in_progress", "done", "blocked", "dropped"}, "description": "筛选状态"},
 				"workspace":       map[string]any{"type": "string", "description": "按 Todo 所属工作区筛选"},
 				"change":          map[string]any{"type": "string", "description": "按关联 Change 名称筛选"},
 				"wikiComponentId": map[string]any{"type": "string", "description": "按关联的 Wiki 组件 ID 筛选"},
@@ -140,7 +141,7 @@ var mcpTools = []mcpTool{
 				"workspace": map[string]any{"type": "string", "description": "所属工作区别名(必填)"},
 				"title":     map[string]any{"type": "string", "description": "待办标题(必填)"},
 				"notes":     map[string]any{"type": "string", "description": "备注"},
-				"status":    map[string]any{"type": "string", "description": "状态: open, in_progress, done (默认 open)"},
+				"status":    map[string]any{"type": "string", "enum": []string{"open", "in_progress", "done", "blocked", "dropped"}, "description": "状态 (默认 open)"},
 				"priority":  map[string]any{"type": "string", "description": "优先级: urgent, high, normal, low (默认 normal)"},
 				"dueAt":     map[string]any{"type": "string", "description": "截止时间 RFC3339"},
 				"change":    map[string]any{"type": "object", "description": "关联 Change: {workspace, name}"},
@@ -159,7 +160,7 @@ var mcpTools = []mcpTool{
 				"workspace": map[string]any{"type": "string", "description": "新工作区"},
 				"title":     map[string]any{"type": "string", "description": "新标题"},
 				"notes":     map[string]any{"type": "string", "description": "新备注"},
-				"status":    map[string]any{"type": "string", "description": "新状态"},
+				"status":    map[string]any{"type": "string", "enum": []string{"open", "in_progress", "done", "blocked", "dropped"}, "description": "新状态"},
 				"priority":  map[string]any{"type": "string", "description": "新优先级"},
 				"dueAt":     map[string]any{"type": []string{"string", "null"}, "description": "新截止时间 RFC3339, null 清除"},
 				"change":    map[string]any{"type": []string{"object", "null"}, "description": "新 Change 关联 {workspace,name}, null 清除"},
@@ -177,6 +178,36 @@ var mcpTools = []mcpTool{
 				"id": map[string]any{"type": "string", "description": "待办 ID(必填)"},
 			},
 			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "todo_sync_omp",
+		Description: "原子同步一个 OMP 会话的完整 Todo 快照。仅供本机 OMP 扩展使用，需要 loopback + Bearer token 鉴权。",
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"workspace":   map[string]any{"type": "string"},
+				"sessionId":   map[string]any{"type": "string"},
+				"snapshotSeq": map[string]any{"type": "integer", "minimum": 0},
+				"mode":        map[string]any{"type": "string", "enum": []string{"upsert", "reconcile"}},
+				"todos": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type":                 "object",
+						"additionalProperties": false,
+						"properties": map[string]any{
+							"taskKey": map[string]any{"type": "string"},
+							"phase":   map[string]any{"type": "string"},
+							"title":   map[string]any{"type": "string"},
+							"status":  map[string]any{"type": "string", "enum": []string{"open", "in_progress", "done", "blocked", "dropped"}},
+							"blocker": map[string]any{"type": "string"},
+						},
+						"required": []string{"taskKey", "phase", "title", "status"},
+					},
+				},
+			},
+			"required": []string{"workspace", "sessionId", "snapshotSeq", "mode", "todos"},
 		},
 	},
 }
@@ -277,6 +308,8 @@ func (a *API) mcpToolsCall(w http.ResponseWriter, r *http.Request, req jsonRPCRe
 		result = a.mcpTodoUpdate(r, params.Arguments)
 	case "todo_delete":
 		result = a.mcpTodoDelete(r, params.Arguments)
+	case "todo_sync_omp":
+		result = a.mcpTodoSyncOMP(r, params.Arguments)
 	default:
 		result = mcpToolResult{
 			Content: []mcpContent{{Type: "text", Text: "unknown tool: " + params.Name}},
@@ -633,7 +666,7 @@ func (a *API) mcpTodoList(args map[string]any) mcpToolResult {
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "# Todos (%d total, %d open, %d in_progress, %d done) revision %d\n\n", counts.Total, counts.Open, counts.InProgress, counts.Done, revision)
+	fmt.Fprintf(&sb, "# Todos (%d total, %d open, %d in_progress, %d done, %d blocked, %d dropped) revision %d\n\n", counts.Total, counts.Open, counts.InProgress, counts.Done, counts.Blocked, counts.Dropped, revision)
 	if len(items) == 0 {
 		sb.WriteString("(no items)\n")
 	} else {
@@ -654,7 +687,11 @@ func (a *API) mcpTodoList(args map[string]any) mcpToolResult {
 			if item.Notes != "" {
 				notesStr = " notes:" + item.Notes
 			}
-			fmt.Fprintf(&sb, "- [%s] %s (%s/%s/%s)%s%s%s%s\n", item.ID[:8], item.Title, item.Workspace, item.Status, item.Priority, dueStr, changeStr, wikiStr, notesStr)
+			originStr := ""
+			if item.ExternalRef != nil {
+				originStr = fmt.Sprintf(" external:%s/%s/%s", item.ExternalRef.System, item.ExternalRef.SessionID, item.ExternalRef.TaskKey)
+			}
+			fmt.Fprintf(&sb, "- [%s] %s (%s/%s/%s)%s%s%s%s%s\n", item.ID[:8], item.Title, item.Workspace, item.Status, item.Priority, dueStr, changeStr, wikiStr, notesStr, originStr)
 		}
 	}
 	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: sb.String()}}}
@@ -820,6 +857,36 @@ func (a *API) mcpTodoDelete(r *http.Request, args map[string]any) mcpToolResult 
 		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "delete failed: " + err.Error()}}, IsError: true}
 	}
 	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "deleted " + id}}}
+}
+
+func (a *API) mcpTodoSyncOMP(r *http.Request, args map[string]any) mcpToolResult {
+	store, token := a.TodoStoreSnapshot()
+	if store == nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "todo store not available"}}, IsError: true}
+	}
+	if !a.mcpAuth(r, token) {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "write access denied: loopback + Bearer token required"}}, IsError: true}
+	}
+
+	data, err := json.Marshal(args)
+	if err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "invalid sync arguments: " + err.Error()}}, IsError: true}
+	}
+	var in todo.OMPSyncInput
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "invalid sync arguments: " + err.Error()}}, IsError: true}
+	}
+	result, err := store.SyncOMP(in)
+	if err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "sync failed: " + err.Error()}}, IsError: true}
+	}
+	output, err := json.Marshal(result)
+	if err != nil {
+		return mcpToolResult{Content: []mcpContent{{Type: "text", Text: "sync response failed: " + err.Error()}}, IsError: true}
+	}
+	return mcpToolResult{Content: []mcpContent{{Type: "text", Text: string(output)}}}
 }
 
 func stringArg(args map[string]any, key string) string {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { fetchTodos, createTodo, updateTodo, deleteTodo, type TodoQueryParams } from '../api/client'
 import type { Todo, TodoCounts, CreateTodoInput, UpdateTodoInput, TodoListResponse } from '../api/types'
 
@@ -15,27 +15,38 @@ export interface UseTodosReturn {
   refetch: (params?: TodoQueryParams) => Promise<void>
 }
 
+const EMPTY_TODOS: Todo[] = []
+
 export function useTodos(): UseTodosReturn {
   const [data, setData] = useState<TodoListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const requestIdRef = useRef(0)
+  const mountedRef = useRef(true)
 
   const refetch = useCallback(async (params?: TodoQueryParams) => {
+    const requestId = ++requestIdRef.current
     setLoading(true)
     setError(null)
     try {
       const result = await fetchTodos(params)
-      setData(result)
+      if (mountedRef.current && requestId === requestIdRef.current) setData(result)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '获取待办失败')
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setError(e instanceof Error ? e.message : '获取待办失败')
+      }
     } finally {
-      setLoading(false)
+      if (mountedRef.current && requestId === requestIdRef.current) setLoading(false)
     }
   }, [])
 
-  // Initial fetch on mount
   useEffect(() => {
+    mountedRef.current = true
     refetch()
+    return () => {
+      mountedRef.current = false
+      requestIdRef.current++
+    }
   }, [refetch])
 
   // SSE refetch is registered by the App-level useWikiEvents caller,
@@ -76,8 +87,8 @@ export function useTodos(): UseTodosReturn {
     }
   }, [refetch])
 
-  return {
-    todos: data?.items ?? [],
+  return useMemo(() => ({
+    todos: data?.items ?? EMPTY_TODOS,
     counts: data?.counts ?? null,
     revision: data?.revision ?? 0,
     writable: data === null ? true : data.writable,
@@ -87,5 +98,5 @@ export function useTodos(): UseTodosReturn {
     updateTodo: update,
     deleteTodo: remove,
     refetch,
-  }
+  }), [data, loading, error, create, update, remove, refetch])
 }

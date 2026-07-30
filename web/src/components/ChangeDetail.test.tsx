@@ -279,4 +279,78 @@ describe('ChangeDetail', () => {
     expect(onNavigateToTodos).toHaveBeenCalledWith('superpowers-ws', 'super-change')
     await waitFor(() => {})
   })
+
+  it('renders workflow, source, mode, auto-transition, verification result, and local verified time metadata when present', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/changes/')) {
+        return { ok: true, json: async () => ({ name: 'metadata-change', phases: [] }) } as Response
+      }
+      return { ok: true, json: async () => ({ component: {}, forward: [], backlinks: [] }) } as Response
+    })
+    const verifiedAt = '2026-07-30T08:15:00Z'
+    const change: ChangeSummary = {
+      name: 'metadata-change',
+      workspace: 'product',
+      sourceType: 'openspec',
+      workflow: 'full',
+      phase: 'verify',
+      archived: false,
+      tasksCompleted: 4,
+      tasksTotal: 4,
+      verifyResult: 'pass',
+      createdAt: '2026-07-29',
+      artifacts: {},
+      buildMode: 'subagent-driven-development',
+      reviewMode: 'standard',
+      tddMode: 'tdd',
+      autoTransition: false,
+      verifiedAt,
+    }
+
+    render(<ChangeDetail change={change} onChangeUpdated={() => {}} onOpenArtifact={() => {}} />)
+
+    expect(screen.getByTestId('metadata-workflow').textContent).toContain('full')
+    expect(screen.getByTestId('metadata-source').textContent).toContain('OpenSpec')
+    expect(screen.getByTestId('metadata-build-mode').textContent).toContain('subagent-driven-development')
+    expect(screen.getByTestId('metadata-review-mode').textContent).toContain('standard')
+    expect(screen.getByTestId('metadata-tdd-mode').textContent).toContain('tdd')
+    expect(screen.getByTestId('metadata-auto-transition').textContent).toContain('已关闭')
+    expect(screen.getByTestId('metadata-verified-at').textContent).toContain(new Date(verifiedAt).toLocaleString())
+    expect(screen.getByTestId('change-verify-result').textContent).toContain('已通过')
+    await waitFor(() => {})
+  })
+
+  it('omits optional mode, source, auto-transition, and verified-time metadata when absent', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      if (url.includes('/api/changes/')) {
+        return { ok: true, json: async () => ({ name: 'legacy-change', phases: [] }) } as Response
+      }
+      return { ok: true, json: async () => ({ component: {}, forward: [], backlinks: [] }) } as Response
+    })
+    const change: ChangeSummary = {
+      name: 'legacy-change',
+      workflow: 'full',
+      phase: 'open',
+      archived: false,
+      tasksCompleted: 0,
+      tasksTotal: 0,
+      verifyResult: 'backend_specific_unknown',
+      createdAt: '',
+      artifacts: {},
+    }
+
+    render(<ChangeDetail change={change} onChangeUpdated={() => {}} onOpenArtifact={() => {}} />)
+
+    expect(screen.queryByTestId('metadata-source')).toBeNull()
+    expect(screen.queryByTestId('metadata-build-mode')).toBeNull()
+    expect(screen.queryByTestId('metadata-review-mode')).toBeNull()
+    expect(screen.queryByTestId('metadata-tdd-mode')).toBeNull()
+    expect(screen.queryByTestId('metadata-auto-transition')).toBeNull()
+    expect(screen.queryByTestId('metadata-verified-at')).toBeNull()
+    expect(screen.getByTestId('change-verify-result').textContent).toContain('未知')
+    expect(screen.getByTestId('change-verify-result').textContent).not.toContain('backend_specific_unknown')
+    await waitFor(() => {})
+  })
 })

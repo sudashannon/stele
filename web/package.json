@@ -13,6 +13,7 @@
     "@fontsource/inter": "^5.1.0",
     "cytoscape": "^3.30.2",
     "github-slugger": "^2.0.0",
+    "lucide-react": "^1.27.0",
     "mermaid": "^11.16.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -158,6 +158,7 @@ Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI a
 | `todo_create` | 创建待办（loopback + Bearer） |
 | `todo_update` | 更新或清空待办字段（loopback + Bearer） |
 | `todo_delete` | 按 ID 删除单条待办（loopback + Bearer） |
+| `todo_sync_omp` | 原子同步 OMP 会话完整 Todo 快照，支持 upsert/reconcile 与单调序列防回滚（loopback + Bearer） |
 
 **Agent 配置示例** (OpenCode `mcp.json`):
 ```json

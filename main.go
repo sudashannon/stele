@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"html"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"comet-ui/chat"
@@ -31,12 +33,84 @@ import (
 //go:embed web/dist
 var webDist embed.FS
 
+// staticHandler serves the embedded SPA. The embed FS reports a zero ModTime,
+// so http.FileServer emits neither Last-Modified nor ETag: without explicit
+// cache directives a browser is free to keep serving a previously loaded
+// index.html, which pins an already-open tab to the old asset hashes and makes
+// a freshly deployed binary look like it changed nothing. Vite fingerprints
+// everything under /assets/, so those are safe to cache forever while the
+// entry document must always be revalidated.
 func staticHandler() http.Handler {
 	sub, err := fs.Sub(webDist, "web/dist")
 	if err != nil {
 		log.Fatalf("embed sub: %v", err)
 	}
-	return http.FileServer(http.FS(sub))
+	files := http.FileServer(http.FS(sub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		files.ServeHTTP(w, r)
+	})
+}
+
+// coalescedRebuilder runs rebuilds one at a time. Requests arriving during a
+// rebuild collapse into one additional pass, which observes the latest live
+// workspace registry instead of allowing an older pass to publish last.
+type coalescedRebuilder struct {
+	mu        sync.Mutex
+	run       func() error
+	complete  func(error, bool)
+	running   bool
+	requested bool
+	notify    bool
+}
+
+func newCoalescedRebuilder(run func() error, complete func(error, bool)) *coalescedRebuilder {
+	return &coalescedRebuilder{run: run, complete: complete}
+}
+
+// Request schedules work and returns without waiting for the rebuild. start,
+// when non-nil, runs after the request is recorded but before any completion
+// event can be emitted, preserving the SSE started-before-completed order.
+func (r *coalescedRebuilder) Request(start func()) {
+	r.mu.Lock()
+	r.requested = true
+	if start != nil {
+		r.notify = true
+		start()
+	}
+	if r.running {
+		r.mu.Unlock()
+		return
+	}
+	r.running = true
+	r.mu.Unlock()
+	go r.loop()
+}
+
+func (r *coalescedRebuilder) loop() {
+	var err error
+	for {
+		r.mu.Lock()
+		if !r.requested {
+			r.running = false
+			notify := r.notify
+			r.notify = false
+			if r.complete != nil {
+				// Completion is emitted only after the coalesced latest-state
+				// pass, never between an old pass and its queued successor.
+				r.complete(err, notify)
+			}
+			r.mu.Unlock()
+			return
+		}
+		r.requested = false
+		r.mu.Unlock()
+		err = r.run()
+	}
 }
 
 func main() {
@@ -112,13 +186,22 @@ func main() {
 			watcher.SetMirror(mirror)
 		}
 	}
-	go func() {
+	rebuilder := newCoalescedRebuilder(func() error {
 		if err := wikiAPI.Rebuild(); err != nil {
-			log.Printf("wiki index build failed (non-fatal, dashboard still serves): %v", err)
-			return
+			return err
 		}
 		watcher.SyncMirror()
-	}()
+		return nil
+	}, func(err error, notify bool) {
+		if err != nil {
+			log.Printf("wiki index rebuild failed (non-fatal, dashboard still serves): %v", err)
+			return
+		}
+		if notify {
+			sseHub.Broadcast(`{"changed":1}`)
+		}
+	})
+	rebuilder.Request(nil)
 	var watchPaths []string
 	for _, workspace := range runtimeWorkspaces {
 		watchPaths = append(watchPaths, source.WatchRoots(workspace)...)
@@ -129,34 +212,22 @@ func main() {
 		defer watcher.Stop()
 	}
 	mux.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			handleListWorkspaces(w, r, reg)
-		case http.MethodPost:
-			added := handleAddWorkspace(w, r, reg)
-			if added == nil {
-				return
+		handleWorkspaces(w, r, reg, func() {
+			var paths []string
+			for _, workspace := range workspacesForRuntime(reg.List(), *baseDir) {
+				paths = append(paths, source.WatchRoots(workspace)...)
 			}
-			watcher.AddPaths(source.WatchRoots(*added))
-			sseHub.BroadcastNamed("indexing-started", `{"changed":1}`)
-			go func() {
-				if err := wikiAPI.Rebuild(); err != nil {
-					log.Printf("wiki index rebuild after workspace add failed: %v", err)
-					return
-				}
-				watcher.SyncMirror()
-				sseHub.Broadcast(`{"changed":1}`)
-			}()
-		default:
-			writeJSONError(w, "method not allowed", 405)
-		}
+			watcher.ResetPaths(paths)
+			rebuilder.Request(func() {
+				sseHub.BroadcastNamed("indexing-started", `{"changed":1}`)
+			})
+		})
 	})
 
 	mux.HandleFunc("/api/wiki/index", wikiAPI.HandleIndex)
 	mux.HandleFunc("/api/wiki/graph", wikiAPI.HandleGraph)
 	mux.HandleFunc("/api/wiki/recent", wikiAPI.HandleRecent)
 	mux.HandleFunc("/api/wiki/component/", wikiAPI.HandleComponent)
-	mux.HandleFunc("/api/wiki/search", wikiAPI.HandleSearch)
 	mux.HandleFunc("/api/wiki/rebuild", wikiAPI.HandleRebuild)
 	mux.HandleFunc("/api/wiki/lint", wikiAPI.HandleLint)
 	mux.HandleFunc("/api/wiki/summarize", wikiAPI.HandleSummarize)
@@ -296,6 +367,41 @@ func resolveWorkspaceConfig(r *http.Request, defaultDir string, reg *WorkspaceRe
 		}
 	}
 	return WorkspaceConfig{}, fmt.Errorf("unknown workspace %q", alias)
+}
+
+func handleWorkspaces(w http.ResponseWriter, r *http.Request, reg *WorkspaceRegistry, onChanged func()) {
+	switch r.Method {
+	case http.MethodGet:
+		handleListWorkspaces(w, r, reg)
+	case http.MethodPost:
+		if added := handleAddWorkspace(w, r, reg); added != nil && onChanged != nil {
+			onChanged()
+		}
+	case http.MethodDelete:
+		if handleDeleteWorkspace(w, r, reg) && onChanged != nil {
+			onChanged()
+		}
+	default:
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleDeleteWorkspace(w http.ResponseWriter, r *http.Request, reg *WorkspaceRegistry) bool {
+	alias := r.URL.Query().Get("alias")
+	if alias == "" {
+		writeJSONError(w, "alias is required", http.StatusBadRequest)
+		return false
+	}
+	if err := reg.Remove(alias); err != nil {
+		if errors.Is(err, ErrWorkspaceNotFound) {
+			writeJSONError(w, err.Error(), http.StatusNotFound)
+			return false
+		}
+		writeJSONError(w, err.Error(), http.StatusInternalServerError)
+		return false
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return true
 }
 
 func handleListWorkspaces(w http.ResponseWriter, r *http.Request, reg *WorkspaceRegistry) {

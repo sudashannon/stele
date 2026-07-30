@@ -1,21 +1,23 @@
+import { Icon } from './icons'
+
 interface Props {
-  visualized: boolean
-  designReviewed: boolean
-  verifyReviewed: boolean
+  visualized?: boolean
+  designReviewed?: boolean
+  verifyReviewed?: boolean
 }
 
-function Pill({ testId, tone, label }: { testId: string; tone: 'ok' | 'neutral'; label: string }) {
+function Badge({ testId, tone, label }: { testId: string; tone: 'ok' | 'neutral'; label: string }) {
   const toneClass =
     tone === 'ok'
-      ? 'bg-[color-mix(in_srgb,var(--color-success)_12%,var(--color-surface))] text-[var(--color-success)]'
-      : 'bg-[var(--color-bg)] text-[var(--color-text-secondary)]'
+      ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)]'
+      : 'bg-[var(--color-layer)] text-[var(--color-text-secondary)]'
   return (
     <span
       data-testid={testId}
       data-tone={tone}
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${toneClass}`}
+      className={`inline-flex items-center gap-1 border border-[var(--color-border-subtle)] px-2 py-1 text-xs font-semibold ${toneClass}`}
     >
-      {tone === 'ok' ? '✓ ' : '○ '}
+      <Icon name={tone === 'ok' ? 'check' : 'info'} size={14} />
       {label}
     </span>
   )
@@ -24,9 +26,9 @@ function Pill({ testId, tone, label }: { testId: string; tone: 'ok' | 'neutral';
 export function ReviewBadges({ visualized, designReviewed, verifyReviewed }: Props) {
   return (
     <div className="flex gap-2">
-      <Pill testId="badge-visualized" tone={visualized ? 'ok' : 'neutral'} label="可视化" />
-      <Pill testId="badge-design-reviewed" tone={designReviewed ? 'ok' : 'neutral'} label="设计已审" />
-      <Pill testId="badge-verify-reviewed" tone={verifyReviewed ? 'ok' : 'neutral'} label="验证已审" />
+      <Badge testId="badge-visualized" tone={visualized ? 'ok' : 'neutral'} label={visualized ? '可视化已完成' : '未可视化'} />
+      <Badge testId="badge-design-reviewed" tone={designReviewed ? 'ok' : 'neutral'} label={designReviewed ? '设计已审' : '设计未审'} />
+      <Badge testId="badge-verify-reviewed" tone={verifyReviewed ? 'ok' : 'neutral'} label={verifyReviewed ? '验证已审' : '验证未审'} />
     </div>
   )
 }

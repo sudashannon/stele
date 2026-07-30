@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { searchSemantic } from '../api/client'
 import type { SemanticSearchResult } from '../api/client'
-import { TYPE_COLORS } from './WikiGraph'
+import { Icon } from './icons'
+import { typeBadgeClass } from './graphPalette'
 
 const DEBOUNCE_MS = 300
+const SEARCH_LIMIT = 100
 const PAGE_SIZE = 20
 
 function componentFilename(id: string): string {
@@ -19,6 +21,7 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SemanticSearchResult[]>([])
   const [loadError, setLoadError] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(0)
   const [typeFilter, setTypeFilter] = useState<string | null>(null)
   const types = useMemo(() => {
@@ -30,32 +33,44 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
     () => typeFilter ? results.filter(r => r.type === typeFilter) : results,
     [results, typeFilter]
   )
-  const debounceRef = useRef<number | undefined>(undefined)
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
-    if (debounceRef.current !== undefined) window.clearTimeout(debounceRef.current)
+    const requestId = ++requestIdRef.current
     const trimmed = query.trim()
     if (trimmed === '') {
       setResults([])
       setLoadError(false)
+      setLoading(false)
       setPage(0)
+      setTypeFilter(null)
       return
     }
-    debounceRef.current = window.setTimeout(() => {
-      searchSemantic(trimmed, 0)
-        .then((data) => {
-          setResults(data)
-          setLoadError(false)
-          setPage(0)
-          setTypeFilter(null)
-        })
-        .catch(() => {
-          setResults([])
-          setLoadError(true)
-        })
+
+    const controller = new AbortController()
+    setResults([])
+    setLoadError(false)
+    setLoading(true)
+    const timer = window.setTimeout(async () => {
+      try {
+        const data = await searchSemantic(trimmed, SEARCH_LIMIT, controller.signal)
+        if (requestId !== requestIdRef.current) return
+        setResults(data)
+        setLoadError(false)
+        setPage(0)
+        setTypeFilter(null)
+      } catch {
+        if (controller.signal.aborted || requestId !== requestIdRef.current) return
+        setResults([])
+        setLoadError(true)
+      } finally {
+        if (requestId === requestIdRef.current) setLoading(false)
+      }
     }, DEBOUNCE_MS)
+
     return () => {
-      if (debounceRef.current !== undefined) window.clearTimeout(debounceRef.current)
+      window.clearTimeout(timer)
+      controller.abort()
     }
   }, [query])
 
@@ -75,8 +90,13 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
         aria-label="语义搜索"
         className="w-full border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
       />
-      {loadError && <div className="text-[var(--color-danger)]">搜索失败</div>}
-      {!loadError && query.trim() !== '' && results.length === 0 && (
+      {loading && <div className="text-[var(--color-text-secondary)]">搜索中…</div>}
+      {loadError && (
+        <div role="alert" className="text-[var(--color-danger)]">
+          语义搜索暂不可用，请稍后重试
+        </div>
+      )}
+      {!loading && !loadError && query.trim() !== '' && results.length === 0 && (
         <div className="text-[var(--color-text-secondary)]">无匹配结果</div>
       )}
       {results.length > 0 && (
@@ -88,10 +108,10 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
                 type="button"
                 aria-pressed={typeFilter === null}
                 onClick={() => { setTypeFilter(null); setPage(0) }}
-                className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                className={`px-2.5 py-0.5 text-xs font-medium transition-colors ${
                   typeFilter === null
-                    ? 'bg-[var(--color-accent)] text-white'
-                    : 'bg-[var(--color-bg)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)]'
+                    ? 'bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
+                    : 'bg-[var(--color-layer)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)]'
                 }`}
               >全部</button>
               {types.map((t) => (
@@ -100,12 +120,11 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
                   type="button"
                   aria-pressed={typeFilter === t}
                   onClick={() => { setTypeFilter(typeFilter === t ? null : t); setPage(0) }}
-                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                  className={`px-2.5 py-0.5 text-xs font-medium transition-colors ${
                     typeFilter === t
-                      ? 'text-white'
-                      : 'bg-[var(--color-bg)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)]'
+                      ? 'bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
+                      : 'bg-[var(--color-layer)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)]'
                   }`}
-                  style={typeFilter === t ? { backgroundColor: TYPE_COLORS[t] ?? 'var(--color-text-secondary)' } : undefined}
                 >{t}</button>
               ))}
             </div>
@@ -122,16 +141,13 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
                 onClick={() => onNodeClick(item.id)}
                 className="w-full flex items-center gap-2 border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-bg)]"
               >
-                <span
-                  className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium text-white"
-                  style={{ backgroundColor: TYPE_COLORS[item.type] ?? 'var(--color-text-secondary)' }}
-                >
+                <span className={`shrink-0 px-1.5 py-0.5 text-xs font-medium ${typeBadgeClass(item.type)}`}>
                   {item.type}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{item.title}</span>
                   {filename !== item.title && (
-                    <span className="block truncate text-[11px] text-[var(--color-text-secondary)]">{filename}</span>
+                    <span className="block truncate text-xs text-[var(--color-text-secondary)]">{filename}</span>
                   )}
                 </span>
                 <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>
@@ -151,7 +167,8 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
             onClick={() => setPage(page - 1)}
             className="border border-[var(--color-border)] px-2 py-1 disabled:opacity-30"
           >
-            ← 上一页
+            <Icon name="chevron-left" />
+            上一页
           </button>
           <span className="text-[var(--color-text-secondary)]">
             {page + 1} / {totalPages}
@@ -162,7 +179,8 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
             onClick={() => setPage(page + 1)}
             className="border border-[var(--color-border)] px-2 py-1 disabled:opacity-30"
           >
-            下一页 →
+            下一页
+            <Icon name="chevron-right" />
           </button>
         </div>
       )}

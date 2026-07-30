@@ -1,5 +1,5 @@
 import { encodeTodoId, normalizeTodo } from './types'
-import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, CreateTodoInput, UpdateTodoInput } from './types'
+import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, TodoStatus, CreateTodoInput, UpdateTodoInput } from './types'
 
 export async function fetchChanges(): Promise<ChangeSummary[]> {
   const res = await fetch('/api/changes')
@@ -25,6 +25,19 @@ export async function addWorkspace(cfg: WorkspaceConfig): Promise<void> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.error || `添加工作区失败 (${res.status})`)
+  }
+}
+
+// removeWorkspace unregisters a workspace by alias. Without it, a workspace
+// whose path stopped resolving (the "以下 workspace 无法读取" banner) was a
+// dead end -- the only fix was hand-editing ~/.comet-panel/workspaces.yaml.
+export async function removeWorkspace(alias: string): Promise<void> {
+  const res = await fetch('/api/workspaces?alias=' + encodeURIComponent(alias), {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || `移除工作区失败 (${res.status})`)
   }
 }
 
@@ -292,14 +305,59 @@ export interface SemanticSearchResult {
 // query server-side (bun scripts/embed.ts) and ranks it against every
 // precomputed component embedding by cosine similarity, returning only the
 // top matches -- no corpus fetch or client-side WASM encoder required.
-export async function searchSemantic(query: string, topK = 10): Promise<SemanticSearchResult[]> {
+//
+// `topK` MUST be >= 1. The backend only truncates when `req.TopK > 0`
+// (wiki/api.go HandleSemanticSearch), so passing 0 silently asks for the
+// entire matching corpus -- SemanticSearch.tsx used to do exactly that.
+// `signal` lets a caller cancel a superseded keystroke instead of racing it.
+export async function searchSemantic(
+  query: string,
+  topK = 10,
+  signal?: AbortSignal,
+): Promise<SemanticSearchResult[]> {
+  if (topK < 1) throw new Error(`searchSemantic: topK must be >= 1, got ${topK}`)
   const res = await fetch('/api/wiki/search-semantic', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, topK }),
+    signal,
   })
-  if (!res.ok) return []
+  // A failed embed is not "no results" -- surface it so the UI can say the
+  // search backend is degraded rather than showing an empty state.
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(detail || `searchSemantic failed: ${res.status}`)
+  }
   return res.json()
+}
+
+// summarizeDocument reaches GET /api/wiki/summarize, an LLM summary cached
+// under ~/.comet-panel/wiki/summaries. The endpoint has been registered in
+// main.go since the wiki API landed but had no caller, so the capability was
+// unreachable for a human user.
+export async function summarizeDocument(id: string): Promise<string> {
+  const res = await fetch('/api/wiki/summarize?id=' + encodeURIComponent(id))
+  if (res.status === 404) throw new Error('该文档不在当前索引中')
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as { error?: string })
+    throw new Error(body.error || `summarizeDocument failed: ${res.status}`)
+  }
+  const data = (await res.json()) as { summary: string }
+  return data.summary
+}
+
+// fetchCommunityOverview reaches GET /api/wiki/overview. Like summarize it was
+// registered but uncalled, so only MCP agents could read community overviews.
+// The backend returns 404 for communities smaller than 3 members.
+export async function fetchCommunityOverview(community: number): Promise<string> {
+  const res = await fetch('/api/wiki/overview?community=' + encodeURIComponent(String(community)))
+  if (res.status === 404) throw new Error('该社区成员少于 3 个，未生成综述')
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}) as { error?: string })
+    throw new Error(body.error || `fetchCommunityOverview failed: ${res.status}`)
+  }
+  const data = (await res.json()) as { body: string }
+  return data.body
 }
 
 export async function rebuildWiki(): Promise<void> {
@@ -355,7 +413,7 @@ export async function revokeShareLink(token: string): Promise<void> {
 // ── Todo API ─────────────────────────────────────────────────────────────────
 
 export interface TodoQueryParams {
-  status?: string
+  status?: TodoStatus
   workspace?: string
   change?: string
   wikiComponentId?: string

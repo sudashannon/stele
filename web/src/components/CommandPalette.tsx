@@ -1,13 +1,32 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ScoredAction, UseCommandPaletteReturn } from '../hooks/useCommandPalette'
 import { highlightMatches } from '../hooks/useCommandPalette'
 import { formatShortcut } from '../hooks/useKeyboardShortcuts'
 import type { ShortcutDef } from '../hooks/useKeyboardShortcuts'
+import { Modal } from './Modal'
+import { Icon } from './icons'
+import type { IconName } from './icons'
 
 interface Props {
   palette: UseCommandPaletteReturn
   shortcuts?: ShortcutDef[]
 }
+const ACTION_ICONS: Readonly<Record<string, IconName>> = {
+  'new-todo': 'check',
+  bookmarks: 'bookmark',
+  settings: 'settings',
+  refresh: 'refresh',
+  'nav-changes': 'changes',
+  'nav-todos': 'todos',
+  'nav-graph': 'graph',
+  'nav-timeline': 'timeline',
+  'nav-search': 'search',
+  'nav-recent': 'recent',
+  'nav-lint': 'lint',
+  'nav-report': 'report',
+  'nav-calendar': 'calendar',
+}
+
 
 /** Group actions by category, preserving scored order within each group. */
 function groupByCategory(items: ScoredAction[]): Map<string, ScoredAction[]> {
@@ -25,21 +44,24 @@ function groupByCategory(items: ScoredAction[]): Map<string, ScoredAction[]> {
 }
 
 export function CommandPalette({ palette, shortcuts }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null)
-  const listRef = useRef<HTMLDivElement>(null)
-  const selIdx = useRef(0)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const { query, setQuery, results, closePalette } = palette
+  const orderedResults = useMemo(
+    () => Array.from(groupByCategory(results).values()).flat(),
+    [results],
+  )
 
-  const { query, setQuery, results, openPalette, closePalette } = palette
-
-  // Focus input when opening
   useEffect(() => {
-    if (palette.open) {
-      selIdx.current = 0
-      // Slight delay so the modal is in the DOM
-      const timer = setTimeout(() => inputRef.current?.focus(), 50)
-      return () => clearTimeout(timer)
-    }
+    if (palette.open) setSelectedIndex(0)
   }, [palette.open])
+
+  useEffect(() => {
+    setSelectedIndex((current) => Math.min(current, Math.max(orderedResults.length - 1, 0)))
+  }, [orderedResults.length])
+
+  useEffect(() => {
+    document.getElementById(`palette-option-${selectedIndex}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [selectedIndex])
 
   const selectAction = useCallback((action: ScoredAction['action']) => {
     action.run()
@@ -47,143 +69,120 @@ export function CommandPalette({ palette, shortcuts }: Props) {
   }, [closePalette])
 
   const onKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        closePalette()
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSelectedIndex((current) =>
+          Math.max(Math.min(current + 1, orderedResults.length - 1), 0),
+        )
         return
       }
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        selIdx.current = Math.min(selIdx.current + 1, results.length - 1)
-        // Scroll selected into view
-        const el = listRef.current?.querySelector(`[data-palette-idx="${selIdx.current}"]`)
-        el?.scrollIntoView({ block: 'nearest' })
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSelectedIndex((current) => Math.max(current - 1, 0))
         return
       }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        selIdx.current = Math.max(selIdx.current - 1, 0)
-        const el = listRef.current?.querySelector(`[data-palette-idx="${selIdx.current}"]`)
-        el?.scrollIntoView({ block: 'nearest' })
-        return
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        if (results.length > 0) {
-          selectAction(results[selIdx.current].action)
-        }
-        return
+      if (event.key === 'Enter' && orderedResults.length > 0) {
+        event.preventDefault()
+        selectAction(orderedResults[selectedIndex].action)
       }
     },
-    [results, selectAction, closePalette],
+    [orderedResults, selectAction, selectedIndex],
   )
 
-  // ── Shortcut reference mode (?) ──────────────────────────────────────────
   const isShortcutMode = query.startsWith('?')
 
   if (!palette.open) return null
 
   return (
-    <div
+    <Modal
+      title="命令面板"
+      hideTitle
+      onClose={closePalette}
+      width="max-w-xl"
       data-testid="command-palette"
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]"
-      style={{ backgroundColor: 'var(--palette-bg)' }}
-      onClick={closePalette}
-      role="dialog"
-      aria-label="命令面板"
     >
-      <div
-        className="w-full max-w-xl rounded-lg shadow-xl overflow-hidden flex flex-col"
-        style={{
-          backgroundColor: 'var(--palette-surface)',
-          boxShadow: 'var(--shadow-modal)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Input */}
-        <div
-          className="flex items-center gap-3 px-4 py-3 border-b"
-          style={{ borderColor: 'var(--palette-separator)' }}
-        >
-          <span className="text-base shrink-0">🔍</span>
+      <div className="flex flex-col bg-[var(--color-surface)]">
+        <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3">
+          <Icon name="search" className="shrink-0 text-[var(--color-text-secondary)]" />
           <input
-            ref={inputRef}
             type="text"
+            role="combobox"
+            aria-label="搜索命令"
+            aria-expanded="true"
+            aria-controls="command-palette-results"
+            aria-activedescendant={
+              !isShortcutMode && orderedResults.length > 0
+                ? `palette-option-${selectedIndex}`
+                : undefined
+            }
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
-              selIdx.current = 0
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setSelectedIndex(0)
             }}
             onKeyDown={onKeyDown}
             placeholder={isShortcutMode ? '快捷键速查…' : '搜索命令…  (Ctrl+K 开关)'}
-            className="flex-1 bg-transparent border-none outline-none text-base text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)]"
+            className="flex-1 border-none bg-transparent text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
             autoComplete="off"
             spellCheck={false}
           />
-          <kbd
-            className="text-xs px-1.5 py-0.5 rounded font-mono shrink-0"
-            style={{
-              backgroundColor: 'var(--color-bg)',
-              border: `1px solid var(--color-border)`,
-              color: 'var(--color-text-secondary)',
-            }}
-          >
-            esc
+          <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-secondary)]">
+            Esc
           </kbd>
         </div>
 
-        {/* Results */}
         <div
-          ref={listRef}
+          id="command-palette-results"
           className="max-h-[400px] overflow-y-auto p-2"
-          role="listbox"
+          role={isShortcutMode ? 'list' : 'listbox'}
+          aria-label={isShortcutMode ? '快捷键' : '命令'}
         >
           {isShortcutMode && shortcuts ? (
             <ShortcutList shortcuts={shortcuts} />
-          ) : results.length === 0 ? (
-            <div
-              className="text-center py-6 text-sm"
-              style={{ color: 'var(--color-text-secondary)' }}
-            >
+          ) : orderedResults.length === 0 ? (
+            <div className="py-6 text-center text-sm text-[var(--color-text-secondary)]">
               {query ? '无匹配命令' : '输入关键词搜索…'}
             </div>
           ) : (
             <ActionList
-              results={results}
-              selectedIdx={selIdx.current}
+              results={orderedResults}
+              selectedIdx={selectedIndex}
+              onSelectedIndexChange={setSelectedIndex}
               onSelect={selectAction}
             />
           )}
         </div>
 
-        {/* Footer hint */}
-        <div
-          className="px-4 py-2 text-xs flex items-center gap-4 border-t"
-          style={{
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text-secondary)',
-          }}
-        >
-          <span>↑↓ 导航</span>
-          <span>↵ 执行</span>
-          <span>esc 关闭</span>
+        <div className="flex items-center gap-4 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+          <span className="inline-flex items-center gap-1">
+            <Icon name="chevron-down" />
+            导航
+          </span>
+          <span>Enter 执行</span>
+          <span>Esc 关闭</span>
           <span className="ml-auto">? 快捷键</span>
         </div>
       </div>
-    </div>
+    </Modal>
   )
 }
 
 // ── Action list with category groups ────────────────────────────────────────
 
+function iconForAction(id: string, category: string): IconName {
+  return ACTION_ICONS[id] ?? (category === 'Navigation' ? 'chevron-right' : 'changes')
+}
+
 function ActionList({
   results,
   selectedIdx,
+  onSelectedIndexChange,
   onSelect,
 }: {
   results: ScoredAction[]
   selectedIdx: number
+  onSelectedIndexChange: (index: number) => void
   onSelect: (action: ScoredAction['action']) => void
 }) {
   const groups = groupByCategory(results)
@@ -215,23 +214,21 @@ function ActionList({
       const isSelected = idx === selectedIdx
       rows.push(
         <div
+          id={`palette-option-${idx}`}
           key={item.action.id}
           data-palette-idx={idx}
           role="option"
           aria-selected={isSelected}
-          className="flex items-center gap-3 px-3 py-2 rounded cursor-pointer text-sm"
+          className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm"
           style={{
             backgroundColor: isSelected ? 'var(--palette-highlight)' : 'transparent',
             color: 'var(--color-text-primary)',
           }}
           onClick={() => onSelect(item.action)}
-          onMouseEnter={() => {
-            // eslint-disable-next-line react-compiler/react-compiler
-            selectedIdx = idx
-          }}
+          onMouseEnter={() => onSelectedIndexChange(idx)}
         >
-          <span className="shrink-0 w-5 text-center">
-            {item.action.icon ?? '•'}
+          <span className="w-5 shrink-0 text-center text-[var(--color-text-secondary)]">
+            <Icon name={iconForAction(item.action.id, item.action.category)} />
           </span>
           <span className="flex-1">
             <span
@@ -256,14 +253,7 @@ function ActionList({
             )}
           </span>
           {item.action.shortcut && (
-            <kbd
-              className="text-xs px-1.5 py-0.5 rounded font-mono shrink-0"
-              style={{
-                backgroundColor: 'var(--color-bg)',
-                border: `1px solid var(--color-border)`,
-                color: 'var(--color-text-secondary)',
-              }}
-            >
+            <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-secondary)]">
               {item.action.shortcut}
             </kbd>
           )}
@@ -272,7 +262,7 @@ function ActionList({
     }
   })
 
-  return <div role="listbox">{rows}</div>
+  return <div>{rows}</div>
 }
 
 // ── Shortcut reference list (mode "?") ─────────────────────────────────────
@@ -290,17 +280,11 @@ function ShortcutList({ shortcuts }: { shortcuts: ShortcutDef[] }) {
         <div
           key={i}
           className="flex items-center justify-between px-3 py-2 text-sm"
+          role="listitem"
           style={{ color: 'var(--color-text-primary)' }}
         >
           <span>{s.label}</span>
-          <kbd
-            className="text-xs px-1.5 py-0.5 rounded font-mono shrink-0"
-            style={{
-              backgroundColor: 'var(--color-bg)',
-              border: `1px solid var(--color-border)`,
-              color: 'var(--color-text-secondary)',
-            }}
-          >
+          <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-secondary)]">
             {formatShortcut(s)}
           </kbd>
         </div>

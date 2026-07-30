@@ -17,6 +17,12 @@ html {
   --color-success: #24a148;
   --color-danger: #da1e28;
   --color-warn: #f1c21b;
+  /* Warn as a TEXT/BORDER color: #f1c21b fails contrast on white at small
+   * sizes, so anything that renders warn as glyphs or 1px strokes must use
+   * this darker amber instead of --color-warn (which stays a fill-only tone). */
+  --color-warn-text: #8e6a00;
+  --color-purple: #8a3ffc;
+  --color-teal: #007d79;
 
   /* ── Neutral palette (Carbon gray scale) ── */
   --color-bg: #f4f4f4;
@@ -33,7 +39,35 @@ html {
   --color-link: #0f62fe;
   --color-link-hover: #0043ce;
 
-  /* ── Carbon radii (sharp, 0-4px) ── */
+  /* ── Subtle surfaces ──
+   * The "semantic color at ~10% over surface" pattern was hand-written in
+   * App.tsx, KpiCards, WorkspaceChips, ShareModal and TodoPanel with slightly
+   * different percentages each time. These are the canonical mixes; never
+   * inline color-mix() for a status tint again. */
+  --color-accent-subtle: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+  --color-success-subtle: color-mix(in srgb, var(--color-success) 10%, var(--color-surface));
+  --color-danger-subtle: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+  --color-warn-subtle: color-mix(in srgb, var(--color-warn) 18%, var(--color-surface));
+  --color-purple-subtle: color-mix(in srgb, var(--color-purple) 10%, var(--color-surface));
+
+  /* ── Lifecycle phase palette ──
+   * WikiTimeline hard-coded nine hex values for these; ChangeExplorer used
+   * Tailwind's bg-blue-50/bg-violet-50 for the same states. Both now resolve
+   * here so a phase is one color everywhere it appears. */
+  --color-phase-open: var(--color-accent);
+  --color-phase-design: var(--color-purple);
+  --color-phase-build: var(--color-teal);
+  --color-phase-verify: var(--color-success);
+  --color-phase-archive: var(--color-text-secondary);
+  --color-phase-rejected: var(--color-danger);
+  --color-phase-unknown: var(--color-text-tertiary);
+
+  /* ── Carbon radii ──
+   * Carbon's product language is sharp. Containers, controls, chips, inputs,
+   * badges, panels and overlays MUST stay square — do not reach for
+   * rounded or pill shapes. The one exemption is a chart mark whose geometry
+   * is inherently circular (progress ring, graph node), which is data, not
+   * chrome. */
   --radius-sm: 0px;
   --radius-md: 0px;
   --radius-lg: 0px;
@@ -69,9 +103,15 @@ html {
   --spacing-08: 2.5rem;    /* 40px */
   --spacing-09: 3rem;      /* 48px */
 
-  /* ── Carbon type scale (16px base) ── */
+  /* ── Carbon type scale (16px base) ──
+   * 12px is the floor for anything a user reads to make a decision: labels,
+   * values, statuses, list rows. --type-micro is reserved for uppercase
+   * section eyebrows only. Nothing renders below 11px. */
+  --type-micro: 0.6875rem;   /* 11px — uppercase eyebrow labels ONLY */
+  --type-caption: 0.75rem;   /* 12px — Carbon label-01, the readable floor */
   --type-body: 0.875rem;     /* 14px — Carbon body-01 */
   --type-body-short: 1rem;   /* 16px — Carbon body-02 */
+  --type-heading: 1.125rem;  /* 18px — Carbon heading-03 */
 }
 
 body {

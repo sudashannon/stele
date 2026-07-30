@@ -19,6 +19,10 @@ import {
   createTodo,
   updateTodo,
   deleteTodo,
+  removeWorkspace,
+  searchSemantic,
+  summarizeDocument,
+  fetchCommunityOverview,
 } from './client'
 import type { ChatStreamEvent } from './client'
 
@@ -552,8 +556,8 @@ describe('createShareLink', () => {
 describe('fetchTodos', () => {
   it('calls GET /api/todos and returns the parsed response', async () => {
     const response = {
-      items: [{ id: 'a1', workspace: 'ws1', title: 'Test', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }],
-      counts: { total: 1, open: 1, inProgress: 0, done: 0 },
+      items: [{ id: 'a1', workspace: 'ws1', title: 'Test', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, externalRef: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }],
+      counts: { total: 1, open: 1, inProgress: 0, done: 0, blocked: 0, dropped: 0 },
       revision: 42,
       writable: true,
     }
@@ -567,7 +571,7 @@ describe('fetchTodos', () => {
   })
 
   it('appends query params for status, workspace, change, wikiComponentId, and q', async () => {
-    const response = { items: [], counts: { total: 0, open: 0, inProgress: 0, done: 0 }, revision: 0, writable: true }
+    const response = { items: [], counts: { total: 0, open: 0, inProgress: 0, done: 0, blocked: 0, dropped: 0 }, revision: 0, writable: true }
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => response,
@@ -593,17 +597,18 @@ describe('fetchTodos', () => {
 describe('fetchTodos normalization', () => {
   it('fills in omitted Go omitempty defaults via normalizeTodo', async () => {
     const sparse = { id: 'sp1', workspace: 'ws1', title: 'Sparse', status: 'open', priority: 'normal', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' }
-    const response = { items: [sparse], counts: { total: 1, open: 1, inProgress: 0, done: 0 }, revision: 1, writable: true }
+    const response = { items: [sparse], counts: { total: 1, open: 1, inProgress: 0, done: 0, blocked: 0, dropped: 0 }, revision: 1, writable: true }
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => response } as Response)
     const result = await fetchTodos()
     expect(result.items[0].notes).toBe('')
     expect(result.items[0].dueAt).toBeNull()
     expect(result.items[0].change).toBeNull()
+    expect(result.items[0].externalRef).toBeNull()
     expect(result.items[0].wikiRefs).toEqual([])
     expect(result.items[0].completedAt).toBeNull()
   })
   it('POSTs to /api/todos with JSON body and returns the created todo', async () => {
-    const todo = { id: 'new1', workspace: 'ws1', title: 'New todo', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
+    const todo = { id: 'new1', workspace: 'ws1', title: 'New todo', notes: '', status: 'open', priority: 'normal', dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, externalRef: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => todo,
@@ -621,7 +626,7 @@ describe('fetchTodos normalization', () => {
 
 describe('updateTodo', () => {
   it('PATCHes /api/todos/:id with JSON body and returns the updated todo', async () => {
-    const todo = { id: 'a1', workspace: 'ws1', title: 'Updated', notes: '', status: 'in_progress' as const, priority: 'high' as const, dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
+    const todo = { id: 'a1', workspace: 'ws1', title: 'Updated', notes: '', status: 'in_progress' as const, priority: 'high' as const, dueAt: null, change: null, wikiRefs: [], metadata: { source: 'ui' as const }, externalRef: null, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', completedAt: null }
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
       json: async () => todo,
@@ -663,5 +668,91 @@ describe('deleteTodo', () => {
       json: async () => ({ error: 'not found' }),
     } as Response)
     await expect(deleteTodo('missing')).rejects.toThrow('not found')
+  })
+})
+
+describe('removeWorkspace', () => {
+  it('DELETEs the URL-encoded workspace alias', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true } as Response)
+
+    await removeWorkspace('miao / test')
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workspaces?alias=miao%20%2F%20test', {
+      method: 'DELETE',
+    })
+  })
+
+  it('surfaces the backend error message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'workspace not found' }),
+    } as Response)
+
+    await expect(removeWorkspace('missing')).rejects.toThrow('workspace not found')
+  })
+})
+
+describe('searchSemantic', () => {
+  it('sends a positive result limit and caller abort signal', async () => {
+    const controller = new AbortController()
+    const response = [{ id: 'doc', title: 'Document', workspace: 'miao', type: 'spec', similarity: 0.9 }]
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => response,
+    } as Response)
+
+    await expect(searchSemantic('document', 8, controller.signal)).resolves.toEqual(response)
+    expect(fetchSpy).toHaveBeenCalledWith('/api/wiki/search-semantic', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: 'document', topK: 8 }),
+      signal: controller.signal,
+    })
+  })
+
+  it('rejects a non-positive limit before issuing a request', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    await expect(searchSemantic('document', 0)).rejects.toThrow('topK must be >= 1')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not disguise an embedding failure as an empty result', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => 'embedding unavailable',
+    } as Response)
+
+    await expect(searchSemantic('document')).rejects.toThrow('embedding unavailable')
+  })
+})
+
+describe('wiki summaries', () => {
+  it('returns a document summary from the registered summarize endpoint', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ summary: 'The document summary.' }),
+    } as Response)
+
+    await expect(summarizeDocument('/miao/docs/a b.md')).resolves.toBe('The document summary.')
+    expect(fetchSpy).toHaveBeenCalledWith('/api/wiki/summarize?id=%2Fmiao%2Fdocs%2Fa%20b.md')
+  })
+
+  it('returns a community overview from the registered overview endpoint', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ body: 'Community overview.' }),
+    } as Response)
+
+    await expect(fetchCommunityOverview(7)).resolves.toBe('Community overview.')
+    expect(fetchSpy).toHaveBeenCalledWith('/api/wiki/overview?community=7')
+  })
+
+  it('explains why a small community has no overview', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 404 } as Response)
+
+    await expect(fetchCommunityOverview(2)).rejects.toThrow('社区成员少于 3 个')
   })
 })

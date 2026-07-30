@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"comet-ui/internal/source"
@@ -95,6 +98,127 @@ func TestWorkspaceRegistry_AddDuplicateAliasRejected(t *testing.T) {
 	err := reg.Add(WorkspaceConfig{Alias: "miao", Path: pathY, Color: "#111"})
 	if err == nil {
 		t.Fatal("expected an error when adding a duplicate alias")
+	}
+}
+
+func TestWorkspaceRegistry_RemovePersistsAndPreservesSync(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "workspaces.yaml")
+	content := `workspaces:
+  - alias: keep
+    path: /tmp/keep
+  - alias: remove
+    path: /tmp/remove
+sync:
+  enabled: true
+  remote: git@example.com:team/knowledge.git
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewWorkspaceRegistry(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reg.Remove("remove"); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.List(); len(got) != 1 || got[0].Alias != "keep" {
+		t.Fatalf("unexpected in-memory workspaces after removal: %+v", got)
+	}
+	persisted, err := LoadWorkspaces(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || persisted[0].Alias != "keep" {
+		t.Fatalf("unexpected persisted workspaces after removal: %+v", persisted)
+	}
+	syncCfg, err := LoadSyncConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !syncCfg.Enabled || syncCfg.Remote != "git@example.com:team/knowledge.git" {
+		t.Fatalf("sync config was not preserved: %+v", syncCfg)
+	}
+}
+
+func TestWorkspaceRegistry_RemoveUnknownAlias(t *testing.T) {
+	reg, err := NewWorkspaceRegistry(filepath.Join(t.TempDir(), "workspaces.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Remove("missing"); !errors.Is(err, ErrWorkspaceNotFound) {
+		t.Fatalf("expected ErrWorkspaceNotFound, got %v", err)
+	}
+}
+
+func TestWorkspaceRegistry_RemovePersistenceFailureLeavesMemoryUnchanged(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reg := &WorkspaceRegistry{
+		workspaces: []WorkspaceConfig{{Alias: "keep"}, {Alias: "remove"}},
+		configPath: filepath.Join(blocker, "workspaces.yaml"),
+		syncCfg:    SyncConfig{Enabled: true, Remote: "origin"},
+	}
+
+	if err := reg.Remove("remove"); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	got := reg.List()
+	if len(got) != 2 || got[0].Alias != "keep" || got[1].Alias != "remove" {
+		t.Fatalf("registry changed despite persistence failure: %+v", got)
+	}
+}
+
+func TestWorkspaceRegistry_RemoveConcurrent(t *testing.T) {
+	const count = 16
+	configPath := filepath.Join(t.TempDir(), "workspaces.yaml")
+	workspaces := make([]WorkspaceConfig, count)
+	for i := range workspaces {
+		workspaces[i] = WorkspaceConfig{Alias: fmt.Sprintf("workspace-%d", i), Path: "/tmp"}
+	}
+	if err := persistWorkspaces(configPath, workspaces, SyncConfig{Enabled: true, Remote: "origin"}); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := NewWorkspaceRegistry(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := range workspaces {
+		wg.Add(1)
+		go func(alias string) {
+			defer wg.Done()
+			errs <- reg.Remove(alias)
+		}(workspaces[i].Alias)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Remove failed: %v", err)
+		}
+	}
+	if got := reg.List(); len(got) != 0 {
+		t.Fatalf("expected empty in-memory registry, got %+v", got)
+	}
+	persisted, err := LoadWorkspaces(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 0 {
+		t.Fatalf("expected empty persisted registry, got %+v", persisted)
+	}
+	syncCfg, err := LoadSyncConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !syncCfg.Enabled || syncCfg.Remote != "origin" {
+		t.Fatalf("sync config was not preserved: %+v", syncCfg)
 	}
 }
 

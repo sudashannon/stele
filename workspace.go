@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,8 @@ type workspacesFile struct {
 	Workspaces []WorkspaceConfig `yaml:"workspaces"`
 	Sync       SyncConfig        `yaml:"sync"`
 }
+
+var ErrWorkspaceNotFound = errors.New("workspace not found")
 
 // SyncConfig configures the optional knowledge-mirror git repository: a
 // single git repo at ~/.comet-panel/knowledge-repo mirroring all indexed
@@ -153,6 +156,31 @@ func (r *WorkspaceRegistry) Add(cfg WorkspaceConfig) error {
 	return nil
 }
 
+func (r *WorkspaceRegistry) Remove(alias string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	index := -1
+	for i := range r.workspaces {
+		if r.workspaces[i].Alias == alias {
+			index = i
+			break
+		}
+	}
+	if index == -1 {
+		return fmt.Errorf("%w: %q", ErrWorkspaceNotFound, alias)
+	}
+
+	updated := make([]WorkspaceConfig, 0, len(r.workspaces)-1)
+	updated = append(updated, r.workspaces[:index]...)
+	updated = append(updated, r.workspaces[index+1:]...)
+	if err := persistWorkspaces(r.configPath, updated, r.syncCfg); err != nil {
+		return err
+	}
+	r.workspaces = updated
+	return nil
+}
+
 // validateWorkspacePath preserves the legacy auto-detecting validation entry
 // point used by tests and callers that do not yet provide a source type.
 func validateWorkspacePath(path string) error {
@@ -209,10 +237,34 @@ func persistWorkspaces(configPath string, ws []WorkspaceConfig, syncCfg SyncConf
 	if err != nil {
 		return err
 	}
-	if dir := filepath.Dir(configPath); dir != "." {
+
+	dir := filepath.Dir(configPath)
+	if dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(configPath, data, 0644)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(configPath)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err := tmp.Chmod(0644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, configPath)
 }

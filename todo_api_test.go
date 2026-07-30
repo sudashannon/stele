@@ -474,3 +474,42 @@ func TestTodoAPI_PatchClearDueAt(t *testing.T) {
 		t.Fatalf("expected dueAt cleared in store, got %s", items[0].DueAt)
 	}
 }
+
+func TestTodoAPI_ListRendersExtendedStatusesAndOMPIdentity(t *testing.T) {
+	_, store, srv := helperTodoAPI(t)
+	if _, err := store.Create(todo.CreateInput{Workspace: "ws", Title: "blocked", Status: todo.StatusBlocked}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(todo.CreateInput{Workspace: "ws", Title: "dropped", Status: todo.StatusDropped}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncOMP(todo.OMPSyncInput{
+		Workspace: "ws", SessionID: "session", SnapshotSeq: 1, Mode: todo.OMPSyncReconcile,
+		Todos: []todo.OMPSyncTodo{{TaskKey: "0:0", Phase: "build", Title: "omp blocked", Status: todo.StatusBlocked, Blocker: "waiting"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := doReq(t, http.MethodGet, srv.URL+"/api/todos", nil, nil)
+	defer resp.Body.Close()
+	var body struct {
+		Items  []todo.Todo `json:"items"`
+		Counts todo.Counts `json:"counts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Counts.Blocked != 2 || body.Counts.Dropped != 1 || body.Counts.Total != 3 {
+		t.Fatalf("unexpected extended counts: %+v", body.Counts)
+	}
+	foundOMP := false
+	for _, item := range body.Items {
+		if item.Metadata.Source == todo.SourceOMP {
+			foundOMP = item.ExternalRef != nil && item.ExternalRef.System == "omp" &&
+				item.ExternalRef.SessionID == "session" && item.ExternalRef.Blocker == "waiting"
+		}
+	}
+	if !foundOMP {
+		t.Fatalf("OMP external identity missing from REST response: %+v", body.Items)
+	}
+}

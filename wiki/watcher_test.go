@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestIsWikiFile(t *testing.T) {
@@ -87,6 +88,114 @@ func TestWatcherPrunesTrellisRuntime(t *testing.T) {
 	if watched[runtimeDir] || watched[filepath.Dir(runtimeDir)] {
 		t.Fatalf(".trellis runtime must not be watched: %v", watched)
 	}
+}
+
+func TestWatcherResetPathsReplacesTreesAndPreservesOverlappingRoot(t *testing.T) {
+	oldRoot := t.TempDir()
+	oldOnly := filepath.Join(oldRoot, "old-only")
+	retainedRoot := filepath.Join(oldRoot, "retained")
+	retainedChild := filepath.Join(retainedRoot, "child")
+	newRoot := t.TempDir()
+	newChild := filepath.Join(newRoot, "new-child")
+	for _, dir := range []string{oldOnly, retainedChild, newChild} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	watcher := NewWatcher(NewAPI(BuildGraph(nil, nil)), "")
+	if err := watcher.Start([]string{oldRoot}); err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Stop()
+
+	watcher.ResetPaths([]string{retainedRoot, newRoot})
+
+	watched := map[string]bool{}
+	for _, path := range watcher.watcher.WatchList() {
+		watched[filepath.Clean(path)] = true
+	}
+	for _, stale := range []string{oldRoot, oldOnly} {
+		if watched[stale] {
+			t.Fatalf("stale tree remains watched after roots reset: %s", stale)
+		}
+	}
+	for _, desired := range []string{retainedRoot, retainedChild, newRoot, newChild} {
+		if !watched[desired] {
+			t.Fatalf("desired tree is not watched after roots reset: %s (watches: %v)", desired, watched)
+		}
+	}
+}
+
+func TestWatcherRelativeRootWatchesCreatedSubtree(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	relativeRoot, err := filepath.Rel(cwd, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	watcher := NewWatcher(NewAPI(BuildGraph(nil, nil)), "")
+	watcher.debounce = time.Hour
+	if err := watcher.Start([]string{relativeRoot}); err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Stop()
+
+	absoluteRoot, err := filepath.Abs(relativeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absoluteRoot = filepath.Clean(absoluteRoot)
+	if _, ok := watcher.roots[absoluteRoot]; !ok {
+		t.Fatalf("relative watch root was not normalized to %q: %v", absoluteRoot, watcher.roots)
+	}
+
+	child := filepath.Join(absoluteRoot, "created", "subtree")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		watched := false
+		for _, path := range watcher.watcher.WatchList() {
+			if filepath.Clean(path) == child {
+				watched = true
+				break
+			}
+		}
+		if watched {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("created subtree %q was not watched: %v", child, watcher.watcher.WatchList())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWatcherStopAndResetAreSafeAcrossLifecycle(t *testing.T) {
+	notStarted := NewWatcher(NewAPI(BuildGraph(nil, nil)), "")
+	notStarted.ResetPaths([]string{t.TempDir()})
+	notStarted.Stop()
+	notStarted.Stop()
+
+	if err := notStarted.Start([]string{t.TempDir()}); err == nil {
+		t.Fatal("Start after Stop unexpectedly succeeded")
+	}
+	notStarted.ResetPaths([]string{t.TempDir()})
+	notStarted.Stop()
+
+	started := NewWatcher(NewAPI(BuildGraph(nil, nil)), "")
+	if err := started.Start([]string{t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	started.Stop()
+	started.ResetPaths([]string{t.TempDir()})
+	started.Stop()
 }
 
 func TestRequiresFullRebuildForSuperpowersArtifacts(t *testing.T) {

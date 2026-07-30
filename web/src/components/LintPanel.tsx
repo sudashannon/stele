@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { fetchLintIssues, fixDeadLinks } from '../api/client'
 import type { LintIssue } from '../api/types'
 import type { FixDeadLinkRequest } from '../api/client'
+import { Icon } from './icons'
 
 const POLL_INTERVAL_MS = 3000
 const MAX_POLL_ATTEMPTS = 20
@@ -113,10 +114,10 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
 
   return (
     <div className="space-y-4 text-xs">
-      {fixError && <div className="rounded border border-[var(--color-warn)] px-2 py-1 text-[var(--color-warn)]">{fixError}</div>}
+      {fixError && <div className="border border-[var(--color-warn)] px-2 py-1 text-[var(--color-warn)]">{fixError}</div>}
       {[...groups.entries()].map(([rule, items]) => (
         <section key={rule}>
-          <div className="sticky top-0 flex items-center gap-2 bg-white/95 py-1 border-b border-[var(--color-border)] mb-1">
+          <div className="sticky top-0 mb-1 flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] py-1">
             <span className="shrink-0 text-[var(--color-warn)] font-mono font-semibold whitespace-nowrap">{rule}</span>
             <span className="text-[var(--color-text-secondary)]">({items.length})</span>
             {rule === 'dead-link' && selected.size > 0 && (
@@ -124,7 +125,7 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
                 type="button"
                 onClick={handleFix}
                 disabled={fixing}
-                className="ml-auto shrink-0 rounded border border-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2 py-0.5 text-[11px] text-[var(--color-accent)] hover:bg-[var(--color-accent)]/20 disabled:opacity-50"
+                className="ml-auto shrink-0 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] px-2 py-0.5 text-[var(--type-caption)] text-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:opacity-50"
               >
                 {fixing ? '修复中…' : `修复选中 (${selected.size})`}
               </button>
@@ -171,9 +172,12 @@ function LintDetail({
     <button
       type="button"
       onClick={() => onOpen(componentId)}
-      className="shrink-0 ml-1 text-[var(--color-accent)] hover:underline"
+      className="ml-1 shrink-0 text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
       title={`打开来源: ${componentId}`}
-    >📄</button>
+      aria-label={`打开来源: ${componentId}`}
+    >
+      <Icon name="open" size={14} />
+    </button>
   ) : null
 
   if (!match) {

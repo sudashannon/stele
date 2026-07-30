@@ -1,61 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import cytoscape from 'cytoscape'
-import { fetchWikiGraph, searchSemantic } from '../api/client'
+import { fetchCommunityOverview, fetchWikiGraph, searchSemantic } from '../api/client'
 import type { WikiComponent, WikiEdge } from '../api/types'
 import { GraphFilters } from './GraphFilters'
 import { useWikiEvents } from '../hooks/useWikiEvents'
+import { Modal } from './Modal'
+import { Icon } from './icons'
+import { COMMUNITY_COLORS, TYPE_COLORS } from './graphPalette'
 
-/**
- * Color legend for the 8 WikiComponent types shown in the WikiGraph force-directed view.
- *
- * Reused categories map to the app's semantic CSS variables; the remaining
- * categories are derived from those same variables with color-mix() so no
- * hardcoded hex values remain here.
- *
- * Reused mappings:
- *   change   -> --color-accent
- *   tasks    -> --color-warn
- *   plan     -> --color-success
- *   diagram  -> --color-danger
- *   artifact -> --color-text-secondary
- */
-export const TYPE_COLORS: Record<string, string> = {
-  change: 'var(--color-accent)',
-  proposal: 'color-mix(in srgb, var(--color-accent) 45%, var(--color-danger))',
-  design: 'color-mix(in srgb, var(--color-success) 55%, var(--color-accent))',
-  tasks: 'var(--color-warn)',
-  spec: 'color-mix(in srgb, var(--color-warn) 70%, var(--color-danger))',
-  plan: 'var(--color-success)',
-  artifact: 'var(--color-text-secondary)',
-  diagram: 'var(--color-danger)',
-}
-
-// EDGE_COLORS distinguishes the three edge kinds the wiki index actually
-// computes (see wiki/links.go): implements (design_doc/plan), references
-// (verification_report/markdown links), generates (artifact convention).
-// These reuse the app's semantic palette directly, since edges are a separate
-// visual channel (line color, not fill) from node type colors.
-const EDGE_COLORS: Record<string, string> = {
-  implements: 'var(--color-accent)',
-  references: 'var(--color-success)',
-  generates: 'var(--color-warn)',
-}
-const EDGE_FALLBACK_COLOR = 'var(--color-text-secondary)'
-
-export const COMMUNITY_COLORS = [
-  'var(--color-accent)',
-  'var(--color-success)',
-  'var(--color-danger)',
-  'var(--color-warn)',
-  'color-mix(in srgb, var(--color-accent) 60%, var(--color-success))',
-  'color-mix(in srgb, var(--color-accent) 60%, var(--color-danger))',
-  'color-mix(in srgb, var(--color-success) 60%, var(--color-warn))',
-  'color-mix(in srgb, var(--color-danger) 60%, var(--color-warn))',
-  'color-mix(in srgb, var(--color-accent) 70%, var(--color-surface))',
-  'color-mix(in srgb, var(--color-success) 70%, var(--color-surface))',
-  'color-mix(in srgb, var(--color-danger) 70%, var(--color-surface))',
-  'color-mix(in srgb, var(--color-warn) 70%, var(--color-surface))',
-]
 
 type RGB = readonly [number, number, number]
 
@@ -93,6 +45,7 @@ function createCytoscapePalette() {
   const danger = readColorToken(styles, '--color-danger', '#da1e28')
   const warn = readColorToken(styles, '--color-warn', '#f1c21b')
   const surface = readColorToken(styles, '--color-surface', '#ffffff')
+  const layer = readColorToken(styles, '--color-layer', '#f4f4f4')
   const textPrimary = readColorToken(styles, '--color-text-primary', '#161616')
   const textSecondary = readColorToken(styles, '--color-text-secondary', '#525252')
 
@@ -114,6 +67,7 @@ function createCytoscapePalette() {
 
   return {
     accent: serializeRGB(accent),
+    layer: serializeRGB(layer),
     surface: serializeRGB(surface),
     textPrimary: serializeRGB(textPrimary),
     textSecondary: serializeRGB(textSecondary),
@@ -139,28 +93,33 @@ function createCytoscapePalette() {
 const POLL_INTERVAL_MS = 3000
 const MAX_POLL_ATTEMPTS = 20
 const SEARCH_DEBOUNCE_MS = 300
+const MAX_COSE_NODE_COUNT = 250
+
+function labelForCommunity(id: number, labels: Record<string, string>) {
+  return labels[String(id)] ?? `#${id}`
+}
+
 export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
+  const overviewRequestRef = useRef(0)
   const [components, setComponents] = useState<WikiComponent[]>([])
   const [edges, setEdges] = useState<WikiEdge[]>([])
   const [communities, setCommunities] = useState<Record<string, number>>({})
   const [communityLabels, setCommunityLabels] = useState<Record<string, string>>({})
   const [gaveUp, setGaveUp] = useState(false)
   const [hover, setHover] = useState<{ title: string; x: number; y: number } | null>(null)
-  // 关系边只占 794 个节点里的一小部分（约 222 条边、189 个有关联节点），其余
-  // 605 个孤立节点会被 cose/grid 布局铺成一整屏色点，反而把真正的关系子图挤到
-  // 角落。默认只显示有关联的节点，把关系子图放到画面中心；没有边时该开关无意义
-  // （筛选后会清空画布），因此仅显示全部节点。
   const [connectedOnly, setConnectedOnly] = useState(true)
   const [activeWorkspaces, setActiveWorkspaces] = useState<Set<string> | null>(null)
   const [activeCommunity, setActiveCommunity] = useState<number | null>(null)
-  // Search-box state: each debounced keystroke calls POST
-  // /api/wiki/search-semantic (server-side embed + cosine ranking) and
-  // highlights the returned node ids in place, rather than fetching the
-  // whole corpus and embedding client-side.
   const [searchQuery, setSearchQuery] = useState('')
   const [matchedIds, setMatchedIds] = useState<Set<string> | null>(null)
+  const [searchState, setSearchState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [selectedNodeTitle, setSelectedNodeTitle] = useState<string | null>(null)
+  const [overviewOpen, setOverviewOpen] = useState(false)
+  const [overviewLoading, setOverviewLoading] = useState(false)
+  const [overviewError, setOverviewError] = useState<string | null>(null)
+  const [overviewBody, setOverviewBody] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -176,10 +135,13 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             setEdges(data.edges)
             setCommunities(data.communities ?? {})
             setCommunityLabels(data.communityLabels ?? {})
+            setGaveUp(false)
             return
           }
           setComponents([])
           setEdges([])
+          setCommunities({})
+          setCommunityLabels({})
           attempts += 1
           if (attempts >= MAX_POLL_ATTEMPTS) {
             setGaveUp(true)
@@ -191,7 +153,14 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           if (cancelled) return
           setComponents([])
           setEdges([])
-          setGaveUp(true)
+          setCommunities({})
+          setCommunityLabels({})
+          attempts += 1
+          if (attempts >= MAX_POLL_ATTEMPTS) {
+            setGaveUp(true)
+            return
+          }
+          timer = window.setTimeout(poll, POLL_INTERVAL_MS)
         })
     }
 
@@ -203,9 +172,6 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     }
   }, [])
 
-  // Refetches the graph once on demand -- wired to the SSE hook below so a
-  // watcher-triggered rebuild (see wiki/watcher.go processBatch) refreshes
-  // the canvas immediately instead of waiting for the next poll tick.
   const refetchGraph = useCallback(() => {
     fetchWikiGraph()
       .then((data) => {
@@ -213,6 +179,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         setEdges(data.edges)
         setCommunities(data.communities ?? {})
         setCommunityLabels(data.communityLabels ?? {})
+        setGaveUp(false)
       })
       .catch(() => {})
   }, [])
@@ -222,126 +189,207 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     const trimmed = searchQuery.trim()
     if (trimmed === '') {
       setMatchedIds(null)
+      setSearchState('idle')
       return
     }
+    const controller = new AbortController()
     let cancelled = false
+    setMatchedIds(null)
+    setSearchState('loading')
     const timer = window.setTimeout(() => {
-      searchSemantic(trimmed)
+      searchSemantic(trimmed, 10, controller.signal)
         .then((results) => {
           if (cancelled) return
-          setMatchedIds(new Set(results.map((r) => r.id)))
+          setMatchedIds(new Set(results.map((result) => result.id)))
+          setSearchState('ready')
         })
-        .catch(() => {
-          if (cancelled) return
+        .catch((error) => {
+          if (cancelled || error?.name === 'AbortError') return
           setMatchedIds(new Set())
+          setSearchState('error')
         })
     }, SEARCH_DEBOUNCE_MS)
     return () => {
       cancelled = true
+      controller.abort()
       window.clearTimeout(timer)
     }
   }, [searchQuery])
 
-  const hasEdges = edges.length > 0
-  const topCommunities = Object.entries(
-    Object.values(communities).reduce<Record<number, number>>((counts, id) => {
-      if (id >= 0) counts[id] = (counts[id] ?? 0) + 1
-      return counts
-    }, {}),
+  const typeOrder = useMemo(() => Object.keys(TYPE_COLORS), [])
+  const sortedComponents = useMemo(
+    () => [...components].sort((a, b) => typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type)),
+    [components, typeOrder],
   )
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([id]) => Number(id))
-  // 后端提供了带语义的 communityLabels 时优先使用；否则退回 "#id" 占位符，
-  // 保持旧数据（无 communityLabels 字段）下图例仍可用。
-  const effectiveCommunityLabels = useMemo(() => {
-    const hasLabels = Object.keys(communityLabels).length > 0
-    return topCommunities.reduce<Record<string, string>>((acc, id) => {
-      acc[String(id)] = hasLabels ? (communityLabels[String(id)] ?? `#${id}`) : `#${id}`
-      return acc
-    }, {})
-  }, [communityLabels, topCommunities])
+
   const workspaces = useMemo(() => {
     const set = new Set<string>()
-    components.forEach((c) => set.add(c.workspace))
+    components.forEach((component) => set.add(component.workspace))
     return [...set].sort()
   }, [components])
 
-  function toggleWorkspace(ws: string) {
+  useEffect(() => {
     setActiveWorkspaces((prev) => {
-      // null means "all active"; materialize the full set minus the clicked
-      // one so a single click deselects it instead of selecting only it.
-      const base = prev ?? new Set(workspaces)
-      const next = new Set(base)
-      if (next.has(ws)) next.delete(ws)
-      else next.add(ws)
+      if (workspaces.length === 0) return null
+      if (prev === null) return null
+      const next = new Set([...prev].filter((workspace) => workspaces.includes(workspace)))
+      if (next.size === workspaces.length) return null
       return next
     })
-  }
+  }, [workspaces])
+
+  const toggleWorkspace = useCallback((workspace: string) => {
+    setActiveWorkspaces((prev) => {
+      const base = prev ?? new Set(workspaces)
+      const next = new Set(base)
+      if (next.has(workspace)) next.delete(workspace)
+      else next.add(workspace)
+      if (next.size === workspaces.length) return null
+      return next
+    })
+  }, [workspaces])
+
+  const resetFilters = useCallback(() => {
+    setActiveWorkspaces(null)
+    setActiveCommunity(null)
+  }, [])
+
+  const workspaceFilteredComponents = useMemo(() => {
+    if (activeWorkspaces === null) return sortedComponents
+    return sortedComponents.filter((component) => activeWorkspaces.has(component.workspace))
+  }, [sortedComponents, activeWorkspaces])
+
+  const communityCounts = useMemo(() => {
+    const counts: Record<number, number> = {}
+    workspaceFilteredComponents.forEach((component) => {
+      const communityId = communities[component.id]
+      if (communityId === null || communityId === undefined || communityId < 0) return
+      counts[communityId] = (counts[communityId] ?? 0) + 1
+    })
+    return counts
+  }, [workspaceFilteredComponents, communities])
+
+  const topCommunities = useMemo(
+    () =>
+      Object.entries(communityCounts)
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 8)
+        .map(([id]) => Number(id)),
+    [communityCounts],
+  )
+
+  const effectiveCommunityLabels = useMemo(() => {
+    const labels: Record<string, string> = { ...communityLabels }
+    topCommunities.forEach((id) => {
+      labels[String(id)] = labels[String(id)] ?? `#${id}`
+    })
+    return labels
+  }, [communityLabels, topCommunities])
 
   useEffect(() => {
-    if (!containerRef.current || components.length === 0) return
-    const typeOrder = Object.keys(TYPE_COLORS)
-    const sorted = [...components].sort(
-      (a, b) => typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type),
-    )
-    // null 表示"未筛选，显示全部"（初始态或用户重新全选）。
-    const wsFiltered =
-      activeWorkspaces === null ? sorted : sorted.filter((c) => activeWorkspaces.has(c.workspace))
-    const filtered =
-      activeCommunity === null ? wsFiltered : wsFiltered.filter((c) => communities[c.id] === activeCommunity)
-    const componentIds = new Set(filtered.map((c) => c.id))
-    // Edges may reference an endpoint the frontend never fetched a node for
-    // (e.g. a markdown link target outside the scanned workspace) -- cytoscape
-    // throws if an edge names a nonexistent node, so drop those defensively
-    // rather than let one bad edge blank the whole graph.
-    // Exclude vector/similar edges from visualization — they're too dense
-    // (2500+) and make the force layout crawl. They serve search/community,
-    // not the graph view. Only structural edges (yaml, markdown-link,
-    // convention-internal) are rendered.
-    const validEdges = edges
-      .filter((e) => e.source !== 'vector' && e.source !== 'bm25')
-      .filter((e) => componentIds.has(e.from) && componentIds.has(e.to))
-    const connectedIds = new Set<string>()
-    validEdges.forEach((e) => {
-      connectedIds.add(e.from)
-      connectedIds.add(e.to)
+    if (activeCommunity === null) return
+    if (communityCounts[activeCommunity] === null || communityCounts[activeCommunity] === undefined) {
+      setActiveCommunity(null)
+    }
+  }, [activeCommunity, communityCounts])
+
+  const communityFilteredComponents = useMemo(() => {
+    if (activeCommunity === null) return workspaceFilteredComponents
+    return workspaceFilteredComponents.filter((component) => communities[component.id] === activeCommunity)
+  }, [workspaceFilteredComponents, communities, activeCommunity])
+
+  const structuralEdges = useMemo(
+    () => edges.filter((edge) => edge.source !== 'vector' && edge.source !== 'bm25'),
+    [edges],
+  )
+
+  const componentIds = useMemo(
+    () => new Set(communityFilteredComponents.map((component) => component.id)),
+    [communityFilteredComponents],
+  )
+
+  const validEdges = useMemo(
+    () => structuralEdges.filter((edge) => componentIds.has(edge.from) && componentIds.has(edge.to)),
+    [structuralEdges, componentIds],
+  )
+
+  const connectedIds = useMemo(() => {
+    const ids = new Set<string>()
+    validEdges.forEach((edge) => {
+      ids.add(edge.from)
+      ids.add(edge.to)
     })
-    // 794 个节点里约 605 个是孤立节点（无任何关系边），全部铺开会把布局压成
-    // 一整屏色点，把真正有价值的关系子图挤到角落。仅显示有关联的节点时把
-    // 孤立节点滤掉，让关系子图占满画布；没有边时该过滤没有意义（会清空画布）。
-    const visible =
-      connectedOnly && validEdges.length > 0 ? filtered.filter((c) => connectedIds.has(c.id)) : filtered
-    const visibleIds = new Set(visible.map((c) => c.id))
-    const visibleEdges = validEdges.filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to))
+    return ids
+  }, [validEdges])
+
+  const visibleComponents = useMemo(() => {
+    if (!connectedOnly || validEdges.length === 0) return communityFilteredComponents
+    return communityFilteredComponents.filter((component) => connectedIds.has(component.id))
+  }, [communityFilteredComponents, connectedIds, connectedOnly, validEdges.length])
+
+  const visibleIds = useMemo(() => new Set(visibleComponents.map((component) => component.id)), [visibleComponents])
+  const visibleEdges = useMemo(
+    () => validEdges.filter((edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to)),
+    [validEdges, visibleIds],
+  )
+
+  const hiddenByFilters = components.length - communityFilteredComponents.length
+  const hiddenByConnectedOnly = communityFilteredComponents.length - visibleComponents.length
+  const activeCommunityLabel =
+    activeCommunity === null ? null : labelForCommunity(activeCommunity, effectiveCommunityLabels)
+  const visibilitySummary = useMemo(() => {
+    const parts = [`显示 ${visibleComponents.length} / ${components.length} 节点`]
+    if (hiddenByFilters > 0) parts.push(`筛选隐藏 ${hiddenByFilters} 个`)
+    if (hiddenByConnectedOnly > 0) parts.push(`仅关联视图隐藏 ${hiddenByConnectedOnly} 个孤立节点`)
+    return parts.join(' · ')
+  }, [components.length, hiddenByConnectedOnly, hiddenByFilters, visibleComponents.length])
+
+  const filterSummary = useMemo(() => {
+    const hidden = components.length - communityFilteredComponents.length
+    const parts = [`工作区/社区范围 ${communityFilteredComponents.length} / ${components.length}`]
+    if (hidden > 0) parts.push(`隐藏 ${hidden} 个`)
+    return parts.join(' · ')
+  }, [communityFilteredComponents.length, components.length])
+
+  const searchSummary = useMemo(() => {
+    if (searchQuery.trim() === '') return null
+    if (searchState === 'loading') return '正在搜索语义相近节点…'
+    if (searchState === 'error') return '语义搜索暂时不可用'
+    if (matchedIds) return `匹配 ${matchedIds.size} 个节点`
+    return null
+  }, [matchedIds, searchQuery, searchState])
+
+  useEffect(() => {
+    setSelectedNodeTitle(null)
     const container = containerRef.current
-    // Cytoscape parses colors itself rather than through the browser CSS engine.
-    // Resolve Carbon tokens and color mixes to concrete rgb() values first.
+    if (!container || visibleComponents.length === 0) return
     const palette = createCytoscapePalette()
+    let selectedNode: cytoscape.NodeSingular | null = null
     const cy = cytoscape({
       container,
       elements: [
-        ...visible.map((c) => {
+        ...visibleComponents.map((component) => {
+          const communityId = communities[component.id]
           const commColor =
-            communities[c.id] != null && communities[c.id] >= 0
-              ? palette.communityColors[communities[c.id] % palette.communityColors.length]
+            communityId !== null && communityId !== undefined && communityId >= 0
+              ? palette.communityColors[communityId % palette.communityColors.length]
               : palette.surface
           return {
             data: {
-              id: c.id,
-              label: c.title,
-              color: palette.typeColors[c.type] ?? palette.textSecondary,
+              id: component.id,
+              label: component.title,
+              color: palette.typeColors[component.type] ?? palette.textSecondary,
               commColor,
             },
           }
         }),
-        ...visibleEdges.map((e, i) => ({
+        ...visibleEdges.map((edge, index) => ({
           data: {
-            id: `e${i}`,
-            source: e.from,
-            target: e.to,
-            kind: e.kind,
-            color: palette.edgeColors[e.kind] ?? palette.textSecondary,
+            id: `e${index}`,
+            source: edge.from,
+            target: edge.to,
+            kind: edge.kind,
+            color: palette.edgeColors[edge.kind] ?? palette.textSecondary,
           },
         })),
       ],
@@ -351,13 +399,16 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           style: {
             'background-color': 'data(color)',
             label: 'data(label)',
-            'font-size': 7,
+            'font-size': 9,
             'min-zoomed-font-size': 9,
             color: palette.textPrimary,
             'text-valign': 'bottom',
-            'text-margin-y': 3,
+            'text-margin-y': 4,
             'text-wrap': 'ellipsis',
-            'text-max-width': '80px',
+            'text-max-width': '96px',
+            'text-background-color': palette.surface,
+            'text-background-opacity': 0.92,
+            'text-background-padding': '2px',
             width: 14,
             height: 14,
             'border-width': 2,
@@ -367,14 +418,22 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         {
           selector: 'node.hovered',
           style: {
-            'border-width': 2.5,
+            'border-width': 3,
             'border-color': palette.accent,
+          },
+        },
+        {
+          selector: 'node.selected',
+          style: {
+            'border-width': 3.5,
+            'border-color': palette.textPrimary,
+            'text-background-color': palette.layer,
           },
         },
         {
           selector: 'edge',
           style: {
-            width: 0.75,
+            width: 0.9,
             'line-color': 'data(color)',
             'target-arrow-color': 'data(color)',
             'target-arrow-shape': 'triangle',
@@ -413,30 +472,35 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           },
         },
       ],
-      // 只要索引提供了关系边，就用 cose 力导向布局把结构关系可视化出来（implements/
-      // references/generates）；极少数没有任何关系边的情况下退回固定网格布局，
-      // 保证 fit() 之后所有节点仍在可视区域内、大小一致、按类型分组。
       layout:
-        visibleEdges.length > 0
-          ? { name: 'cose', animate: false, padding: 30, nodeRepulsion: 8000 }
-          : { name: 'grid', avoidOverlap: true, avoidOverlapPadding: 8, condense: false },
+        visibleEdges.length === 0
+          ? { name: 'grid', avoidOverlap: true, avoidOverlapPadding: 8, condense: false }
+          : visibleComponents.length <= MAX_COSE_NODE_COUNT
+            ? { name: 'cose', animate: false, padding: 30, nodeRepulsion: 8000 }
+            : { name: 'concentric', animate: false, padding: 30, minNodeSpacing: 12, avoidOverlap: true },
       userZoomingEnabled: true,
       userPanningEnabled: true,
       wheelSensitivity: 0.2,
     })
     cyRef.current = cy
     cy.one('layoutstop', () => cy.fit(undefined, 30))
-    cy.on('tap', 'node', (evt) => onNodeClick(evt.target.id()))
-    cy.on('mouseover', 'node', (evt) => {
-      const node = evt.target
+    cy.on('tap', 'node', (event) => {
+      selectedNode?.removeClass('selected')
+      selectedNode = event.target as cytoscape.NodeSingular
+      selectedNode.addClass('selected')
+      setSelectedNodeTitle(selectedNode.data('label') as string)
+      onNodeClick(event.target.id())
+    })
+    cy.on('mouseover', 'node', (event) => {
+      const node = event.target
       node.addClass('hovered')
       node.connectedEdges().addClass('highlighted')
       container.style.cursor = 'pointer'
       const pos = node.renderedPosition()
       setHover({ title: node.data('label') as string, x: pos.x, y: pos.y })
     })
-    cy.on('mouseout', 'node', (evt) => {
-      const node = evt.target
+    cy.on('mouseout', 'node', (event) => {
+      const node = event.target
       node.removeClass('hovered')
       node.connectedEdges().removeClass('highlighted')
       container.style.cursor = 'default'
@@ -446,12 +510,8 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
       cy.destroy()
       cyRef.current = null
     }
-  }, [components, edges, communities, connectedOnly, activeWorkspaces, activeCommunity, onNodeClick])
+  }, [communities, onNodeClick, visibleComponents, visibleEdges])
 
-  // Applies/clears the highlight classes on the LIVE cytoscape instance
-  // whenever the match set or the underlying graph changes -- separate from
-  // the graph-build effect above so re-searching doesn't tear down and
-  // rebuild the whole cytoscape instance (which would reset pan/zoom/layout).
   useEffect(() => {
     const cy = cyRef.current
     if (!cy) return
@@ -466,33 +526,121 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         node.toggleClass('search-dim', !isMatch)
       })
     })
-  }, [matchedIds, components, edges, communities, connectedOnly, activeWorkspaces, activeCommunity])
+  }, [matchedIds, visibleComponents, visibleEdges])
+
+  useEffect(() => {
+    if (!overviewOpen || activeCommunity === null) return
+    const requestId = ++overviewRequestRef.current
+    setOverviewLoading(true)
+    setOverviewError(null)
+    setOverviewBody('')
+    fetchCommunityOverview(activeCommunity)
+      .then((body) => {
+        if (requestId !== overviewRequestRef.current) return
+        setOverviewBody(body)
+        setOverviewLoading(false)
+      })
+      .catch((error) => {
+        if (requestId !== overviewRequestRef.current) return
+        setOverviewError(error instanceof Error ? error.message : '加载社区综述失败')
+        setOverviewLoading(false)
+      })
+  }, [activeCommunity, overviewOpen])
+
+  useEffect(() => {
+    if (activeCommunity !== null) return
+    setOverviewOpen(false)
+  }, [activeCommunity])
 
   return (
     <div className="flex h-[calc(100vh-160px)] min-h-[500px] w-full flex-col">
-      {components.length > 0 && workspaces.length > 1 && (
+      {components.length > 0 && (
         <GraphFilters
           workspaces={workspaces}
           activeWorkspaces={activeWorkspaces ?? new Set(workspaces)}
           onToggleWorkspace={toggleWorkspace}
-          communityLabels={{}}
+          onResetFilters={resetFilters}
+          communityLabels={effectiveCommunityLabels}
+          communityCounts={communityCounts}
           activeCommunity={activeCommunity}
           onSelectCommunity={setActiveCommunity}
+          summary={filterSummary}
         />
       )}
-      <div className="relative flex-1">
-        <div ref={containerRef} data-testid="wiki-graph-canvas" className="w-full h-full" />
+      <div className="relative flex-1 border-x border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+        {components.length > 0 && (
+          <div className="absolute left-3 top-3 z-10 flex max-w-[28rem] flex-col gap-2">
+            <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-sm">
+              <label className="block text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)]" htmlFor="wiki-graph-search">
+                语义搜索
+              </label>
+              <div className="mt-1 flex items-center gap-2">
+                <Icon name="search" size={14} className="text-[var(--color-text-secondary)]" />
+                <input
+                  id="wiki-graph-search"
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="搜索相近节点标题…"
+                  aria-label="图谱语义搜索"
+                  className="w-56 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                />
+              </div>
+              {searchSummary && (
+                <div className="mt-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{searchSummary}</div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-sm">
+              <button
+                type="button"
+                onClick={() => cyRef.current?.fit(undefined, 30)}
+                className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+              >
+                <Icon name="refresh" size={14} />
+                适应窗口
+              </button>
+              {visibleComponents.length > 0 && (
+                <div
+                  data-testid="wiki-graph-visibility-summary"
+                  className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
+                >
+                  {visibilitySummary}
+                </div>
+              )}
+              {edges.length > 0 && (
+                <label className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
+                  <input
+                    type="checkbox"
+                    checked={connectedOnly}
+                    onChange={(event) => setConnectedOnly(event.target.checked)}
+                  />
+                  仅显示有关联的节点
+                </label>
+              )}
+              {selectedNodeTitle && (
+                <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                  已选中：<span className="text-[var(--color-text-primary)]">{selectedNodeTitle}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div ref={containerRef} data-testid="wiki-graph-canvas" className="h-full w-full" />
+
         {hover && (
           <div
             data-testid="wiki-graph-tooltip"
-            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full rounded border border-[var(--color-border)] bg-white px-2 py-1 text-xs text-[var(--color-text-primary)] shadow-sm"
+            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm"
             style={{ left: hover.x, top: hover.y - 10 }}
           >
             {hover.title}
           </div>
         )}
+
         {components.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--color-text-secondary)]">
+          <div className="absolute inset-0 flex items-center justify-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             {gaveUp ? (
               <span>索引为空，请先注册工作区并重建（POST /api/wiki/rebuild）</span>
             ) : (
@@ -500,58 +648,49 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             )}
           </div>
         )}
+
+        {components.length > 0 && visibleComponents.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+            没有匹配当前筛选条件的节点
+          </div>
+        )}
+
         {components.length > 0 && (
           <>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="语义搜索节点…"
-              aria-label="图谱语义搜索"
-              className="absolute left-2 top-2 z-10 w-48 rounded border border-[var(--color-border)] bg-white px-2 py-1 text-xs text-[var(--color-text-primary)] shadow-sm outline-none focus:border-[var(--color-accent)]"
-            />
-            <div className="absolute left-2 top-11 z-10 flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => cyRef.current?.fit(undefined, 30)}
-                className="rounded border border-[var(--color-border)] bg-white px-2 py-1 text-xs text-[var(--color-text-primary)] shadow-sm hover:bg-[var(--color-bg)]"
-              >
-                适应窗口
-              </button>
-              {hasEdges && (
-                <label className="flex items-center gap-1 rounded border border-[var(--color-border)] bg-white px-2 py-1 text-xs text-[var(--color-text-primary)] shadow-sm">
-                  <input
-                    type="checkbox"
-                    checked={connectedOnly}
-                    onChange={(e) => setConnectedOnly(e.target.checked)}
-                  />
-                  仅显示有关联的节点
-                </label>
-              )}
-            </div>
-            {/* 类型图例 — 左下角 */}
             <div
               data-testid="wiki-graph-legend"
-              className="absolute left-2 bottom-2 z-10 w-28 max-h-[50vh] overflow-y-auto border border-[var(--color-border)] bg-white/95 px-2 py-1.5 text-xs text-[var(--color-text-primary)] shadow-sm"
+              className="absolute bottom-3 left-3 z-10 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm"
             >
-              <div className="mb-1 font-medium text-[var(--color-text-secondary)]">类型</div>
-              <ul className="space-y-0.5">
+              <div className="mb-2 font-semibold text-[var(--color-text-secondary)]">类型</div>
+              <ul className="space-y-1">
                 {Object.entries(TYPE_COLORS).map(([type, color]) => (
-                  <li key={type} className="flex items-center gap-1.5">
-                    <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                  <li key={type} className="flex items-center gap-2">
+                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
                     <span className="truncate">{type}</span>
                   </li>
                 ))}
               </ul>
             </div>
-            {/* 社区图例 — 右下角 */}
+
             {topCommunities.length > 0 && (
               <div
                 data-testid="wiki-graph-community-legend"
-                className="absolute right-2 bottom-2 z-10 w-44 max-h-[50vh] overflow-y-auto border border-[var(--color-border)] bg-white/95 px-2 py-1.5 text-xs text-[var(--color-text-primary)] shadow-sm"
+                className="absolute bottom-3 right-3 z-10 w-60 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm"
               >
-                <div className="mb-1 font-medium text-[var(--color-text-secondary)]">社区</div>
-                <ul className="space-y-0.5">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-[var(--color-text-secondary)]">社区</span>
+                  {activeCommunity !== null && (
+                    <button
+                      type="button"
+                      onClick={() => setOverviewOpen(true)}
+                      className="inline-flex items-center gap-1 border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+                    >
+                      <Icon name="info" size={14} />
+                      社区综述
+                    </button>
+                  )}
+                </div>
+                <ul className="space-y-1">
                   {topCommunities.map((id) => {
                     const active = activeCommunity === id
                     return (
@@ -563,15 +702,18 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                           onClick={() => setActiveCommunity(active ? null : id)}
                           className={
                             active
-                              ? 'flex w-full items-center gap-1 bg-[color-mix(in_srgb,var(--color-text-primary)_10%,var(--color-surface))] px-1 py-0.5 text-left'
-                              : 'flex w-full items-center gap-1 px-1 py-0.5 text-left hover:bg-[var(--color-bg)]'
+                              ? 'flex w-full items-center justify-between gap-2 border border-[var(--color-text-primary)] bg-[var(--color-layer)] px-2 py-1 text-left'
+                              : 'flex w-full items-center justify-between gap-2 border border-transparent px-2 py-1 text-left hover:border-[var(--color-border)] hover:bg-[var(--color-layer)]'
                           }
                         >
-                          <span
-                            className="inline-block h-2 w-2 shrink-0 rounded-full border border-[color-mix(in_srgb,var(--color-text-primary)_10%,var(--color-surface))]"
-                            style={{ backgroundColor: COMMUNITY_COLORS[id % COMMUNITY_COLORS.length] }}
-                          />
-                          <span className="truncate">{effectiveCommunityLabels[String(id)] ?? `#${id}`}</span>
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                              style={{ backgroundColor: COMMUNITY_COLORS[id % COMMUNITY_COLORS.length] }}
+                            />
+                            <span className="truncate">{labelForCommunity(id, effectiveCommunityLabels)}</span>
+                          </span>
+                          <span className="shrink-0 text-[var(--color-text-secondary)]">{communityCounts[id] ?? 0}</span>
                         </button>
                       </li>
                     )
@@ -582,6 +724,27 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           </>
         )}
       </div>
+
+      {overviewOpen && activeCommunity !== null && (
+        <Modal
+          title={`${activeCommunityLabel ?? `#${activeCommunity}`} 综述`}
+          onClose={() => setOverviewOpen(false)}
+          width="max-w-2xl"
+          data-testid="community-overview-modal"
+        >
+          <div className="space-y-3 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
+            {overviewLoading && <p>正在加载社区综述…</p>}
+            {!overviewLoading && overviewError && (
+              <p className="text-[var(--color-danger)]">{overviewError}</p>
+            )}
+            {!overviewLoading && !overviewError && overviewBody && (
+              <div data-testid="community-overview-body" className="whitespace-pre-wrap leading-6">
+                {overviewBody}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

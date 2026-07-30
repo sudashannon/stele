@@ -264,4 +264,74 @@ describe('ChangeExplorer', () => {
     expect(screen.getByText('Superpowers')).toBeTruthy()
     expect(screen.queryByText('OpenSpec')).toBeNull()
   })
+
+  it('opens a change from the keyboard and preserves the workspace argument', () => {
+    const onSelect = vi.fn()
+    render(
+      <ChangeExplorer
+        changes={[makeChange({ name: 'shared', workspace: 'alpha' })]}
+        selected={null}
+        onSelect={onSelect}
+      />,
+    )
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /打开变更 shared，工作区 alpha/ }), { key: 'Enter' })
+    expect(onSelect).toHaveBeenCalledWith('shared', 'alpha')
+  })
+
+  it('shows workspace labels when change names collide across workspaces', () => {
+    render(
+      <ChangeExplorer
+        changes={[
+          makeChange({ name: 'shared', workspace: 'alpha' }),
+          makeChange({ name: 'shared', workspace: 'beta' }),
+        ]}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/alpha \//)).toBeTruthy()
+    expect(screen.getByText(/beta \//)).toBeTruthy()
+  })
+  it('omits empty metadata subtitles and only renders non-empty workspace metadata', () => {
+    render(
+      <ChangeExplorer
+        changes={[
+          makeChange({ name: 'duplicate', workspace: '   ' }),
+          makeChange({ name: 'duplicate', workspace: 'ideas' }),
+        ]}
+        selected={null}
+        onSelect={vi.fn()}
+      />,
+    )
+
+    const cards = screen.getAllByRole('button', { name: /打开变更 duplicate/ })
+    const hasEmptySubtitle = Array.from(cards[0].querySelectorAll('div')).some(
+      (element) => element.classList.contains('text-xs') && element.textContent === '',
+    )
+    expect(hasEmptySubtitle).toBe(false)
+    expect(cards[1].textContent).toContain('ideas')
+  })
+  it('opens a context menu on right-click with the card actions', async () => {
+    const onSelect = vi.fn()
+    render(
+      <ChangeExplorer changes={[makeChange({ name: 'foo' })]} selected={null} onSelect={onSelect} />,
+    )
+
+    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.contextMenu(screen.getByRole('button', { name: /打开变更 foo/ }), {
+      clientX: 120,
+      clientY: 240,
+    })
+
+    const menu = await screen.findByRole('menu')
+    expect(menu.getAttribute('aria-orientation')).toBe('vertical')
+    const labels = Array.from(menu.querySelectorAll('[role=menuitem]')).map((item) => item.textContent)
+    expect(labels).toEqual(['打开', '复制名称'])
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '打开' }))
+    expect(onSelect).toHaveBeenCalledWith('foo', undefined)
+  })
+
 })

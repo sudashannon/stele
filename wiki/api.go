@@ -20,6 +20,7 @@ import (
 
 type API struct {
 	mu              sync.RWMutex
+	rebuildMu       sync.Mutex
 	graph           *Graph
 	ws              []WorkspaceConfig
 	indexCacheDir   string
@@ -323,21 +324,6 @@ func (a *API) HandleGraph(w http.ResponseWriter, r *http.Request) {
 		edges = append(edges, es...)
 	}
 	json.NewEncoder(w).Encode(graphResponse{Components: components, Edges: edges, Communities: a.graph.Communities(), CommunityLabels: a.graph.CommunityLabels()})
-}
-
-func (a *API) HandleSearch(w http.ResponseWriter, r *http.Request) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	q := strings.ToLower(r.URL.Query().Get("q"))
-	w.Header().Set("Content-Type", "application/json")
-	var matches []Component
-	for id := range a.graph.components {
-		c, _ := a.graph.Component(id)
-		if strings.Contains(strings.ToLower(c.Title), q) {
-			matches = append(matches, c)
-		}
-	}
-	json.NewEncoder(w).Encode(matches)
 }
 
 // semanticSearchRequest is the POST /api/wiki/search-semantic request body:
@@ -719,13 +705,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// Rebuild reruns BuildIndex against the current workspace set (preferring
-// the live lister set via SetLister over the construction-time snapshot in
-// a.ws) and swaps the result into a.graph under lock. It is safe to call
-// from a background goroutine — e.g. main.go kicks off the initial index
-// build this way right after NewAPIWithWorkspacesAsync so the HTTP server
-// can bind without waiting for a full workspace scan.
+// Rebuild serializes the complete live-workspace snapshot, BuildIndex, and
+// graph swap. Taking rebuildMu before consulting the lister ensures a caller
+// that waited for an older rebuild observes the newest registry state when its
+// own pass begins, so an old graph can never be published after a newer one.
+// The index build remains outside a.mu so readers continue serving the current
+// graph while the replacement is prepared.
 func (a *API) Rebuild() error {
+	a.rebuildMu.Lock()
+	defer a.rebuildMu.Unlock()
 	a.mu.RLock()
 	lister := a.lister
 	ws := a.ws

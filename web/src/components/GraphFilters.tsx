@@ -1,49 +1,73 @@
-import { COMMUNITY_COLORS } from './WikiGraph'
+import { useMemo } from 'react'
+import { COMMUNITY_COLORS } from './graphPalette'
+import { Icon } from './icons'
 
 interface GraphFiltersProps {
   workspaces: string[]
   activeWorkspaces: Set<string>
   onToggleWorkspace: (ws: string) => void
+  onResetFilters: () => void
   communityLabels: Record<string, string>
+  communityCounts: Record<number, number>
   activeCommunity: number | null
   onSelectCommunity: (id: number | null) => void
+  communitySelectable?: boolean
+  summary?: string
 }
 
-// Shared filter toolbar for the two wiki graph views (WikiGraph, WikiTimeline):
-// a row of workspace chips (multi-select toggle) and a community legend row
-// where clicking a dot filters down to that single community, clicking it
-// again clears the filter. Purely presentational -- all filter state lives
-// in the parent component's local useState.
+function labelForCommunity(id: number, communityLabels: Record<string, string>) {
+  return communityLabels[String(id)] ?? `#${id}`
+}
+
 export function GraphFilters({
   workspaces,
   activeWorkspaces,
   onToggleWorkspace,
+  onResetFilters,
   communityLabels,
+  communityCounts,
   activeCommunity,
   onSelectCommunity,
+  communitySelectable = true,
+  summary,
 }: GraphFiltersProps) {
-  const communityIds = Object.keys(communityLabels)
-    .map(Number)
-    .sort((a, b) => a - b)
+  const communityIds = useMemo(
+    () =>
+      Object.keys(communityCounts)
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && (communityCounts[id] ?? 0) > 0)
+        .sort((a, b) => {
+          const countDifference = (communityCounts[b] ?? 0) - (communityCounts[a] ?? 0)
+          return countDifference !== 0 ? countDifference : a - b
+        }),
+    [communityCounts],
+  )
+
+  const chipClass =
+    'inline-flex shrink-0 items-center gap-1.5 border px-2 py-1 text-[length:var(--type-caption)] leading-none transition-colors'
 
   return (
-    <div data-testid="graph-filters" className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] px-2 py-1.5">
+    <div
+      data-testid="graph-filters"
+      className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
+    >
       {(activeCommunity !== null || activeWorkspaces.size < workspaces.length) && (
         <button
           type="button"
           data-testid="filter-reset"
-          onClick={() => {
-            onSelectCommunity(null)
-            workspaces.forEach((ws) => { if (!activeWorkspaces.has(ws)) onToggleWorkspace(ws) })
-          }}
-          className="rounded-full border border-[var(--color-danger)] bg-[var(--color-danger)]/10 px-2 py-0.5 text-[11px] text-[var(--color-danger)]"
+          onClick={onResetFilters}
+          className={`${chipClass} border-[var(--color-danger)] bg-[var(--color-danger-subtle)] text-[var(--color-danger)]`}
         >
-          ✕ 重置筛选
+          <Icon name="close" size={12} />
+          重置筛选
         </button>
       )}
+
       {workspaces.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="text-[10px] font-medium text-[var(--color-text-secondary)]">工作区</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
+            工作区
+          </span>
           {workspaces.map((ws) => {
             const active = activeWorkspaces.has(ws)
             return (
@@ -55,8 +79,8 @@ export function GraphFilters({
                 onClick={() => onToggleWorkspace(ws)}
                 className={
                   active
-                    ? 'rounded-full border border-[var(--color-accent)] bg-[var(--color-accent)]/10 px-2 py-0.5 text-[11px] text-[var(--color-accent)]'
-                    : 'rounded-full border border-[var(--color-border)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]'
+                    ? `${chipClass} border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]`
+                    : `${chipClass} border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]`
                 }
               >
                 {ws}
@@ -65,32 +89,51 @@ export function GraphFilters({
           })}
         </div>
       )}
+
       {communityIds.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="text-[10px] font-medium text-[var(--color-text-secondary)]">社区</span>
+        <div
+          data-testid="community-filter-strip"
+          aria-label="社区筛选"
+          className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
+        >
+          <span className="sticky left-0 z-[1] shrink-0 bg-[var(--color-surface)] pr-2 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
+            社区
+          </span>
           {communityIds.map((id) => {
             const active = activeCommunity === id
+            const count = communityCounts[id] ?? 0
             return (
               <button
                 key={id}
                 type="button"
                 data-testid="community-chip"
-                aria-pressed={active}
+                aria-pressed={communitySelectable ? active : undefined}
+                disabled={!communitySelectable}
                 onClick={() => onSelectCommunity(active ? null : id)}
                 className={
                   active
-                    ? 'flex items-center gap-1 rounded-full border border-[var(--color-text-primary)] bg-[var(--color-text-primary)]/5 px-2 py-0.5 text-[11px] text-[var(--color-text-primary)]'
-                    : 'flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-text-secondary)]'
+                    ? `${chipClass} border-[var(--color-text-primary)] bg-[var(--color-layer)] text-[var(--color-text-primary)]`
+                    : `${chipClass} border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)] disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-surface)] disabled:opacity-100`
                 }
               >
                 <span
-                  className="inline-block h-2 w-2 rounded-full"
+                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
                   style={{ backgroundColor: COMMUNITY_COLORS[id % COMMUNITY_COLORS.length] }}
                 />
-                {communityLabels[String(id)]}
+                <span>{labelForCommunity(id, communityLabels)}</span>
+                <span className="text-[var(--color-text-tertiary)]">{count}</span>
               </button>
             )
           })}
+        </div>
+      )}
+
+      {summary && (
+        <div
+          data-testid="graph-filter-summary"
+          className="ml-auto text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
+        >
+          {summary}
         </div>
       )}
     </div>

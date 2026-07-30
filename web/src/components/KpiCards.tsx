@@ -1,4 +1,7 @@
 import type { ChangeSummary } from '../api/types'
+import { Icon } from './icons'
+import type { IconName } from './icons'
+
 
 interface Props {
   changes: ChangeSummary[]
@@ -53,22 +56,31 @@ export function KpiCards({
     0,
   )
 
-  const cards = [
+  const cards: Array<{
+    key: string
+    label: string
+    value: number
+    testId: string
+    icon: IconName
+    chip: string
+    warn?: boolean
+    danger?: boolean
+  }> = [
     {
       key: 'active',
       label: '活跃变更',
       value: classification.active.length,
       testId: 'kpi-active',
-      icon: '◔',
-      chip: 'bg-[color-mix(in_srgb,var(--color-accent)_10%,white)] text-[var(--color-accent)]',
+      icon: 'changes',
+      chip: 'bg-[var(--color-accent-subtle)] text-[var(--color-accent)]',
     },
     {
       key: 'archived',
       label: '已归档',
       value: classification.archived.length,
       testId: 'kpi-archived',
-      icon: '✓',
-      chip: 'bg-[color-mix(in_srgb,var(--color-success)_10%,white)] text-[var(--color-success)]',
+      icon: 'check',
+      chip: 'bg-[var(--color-success-subtle)] text-[var(--color-success)]',
     },
     {
       key: 'stuck',
@@ -76,8 +88,8 @@ export function KpiCards({
       value: classification.stuck.length,
       testId: 'kpi-stuck',
       warn: classification.stuck.length > 0,
-      icon: '⚠',
-      chip: 'bg-[color-mix(in_srgb,var(--color-warn)_10%,white)] text-[var(--color-warn)]',
+      icon: 'warning',
+      chip: 'bg-[var(--color-warn-subtle)] text-[var(--color-warn-text)]',
     },
     {
       key: 'verify-failed',
@@ -85,16 +97,16 @@ export function KpiCards({
       value: classification.verifyFailed.length,
       testId: 'kpi-verify-failed',
       danger: classification.verifyFailed.length > 0,
-      icon: '◎',
-      chip: 'bg-[color-mix(in_srgb,var(--color-danger)_10%,white)] text-[var(--color-danger)]',
+      icon: 'warning',
+      chip: 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)]',
     },
     {
       key: 'incomplete-tasks',
       label: '未完成任务',
       value: incompleteTasks,
       testId: 'kpi-incomplete-tasks',
-      icon: '▤',
-      chip: 'bg-[color-mix(in_srgb,var(--color-text-secondary)_10%,white)] text-[var(--color-text-secondary)]',
+      icon: 'todos',
+      chip: 'bg-[var(--color-layer)] text-[var(--color-text-secondary)]',
     },
   ]
 
@@ -105,37 +117,32 @@ export function KpiCards({
         const selectCard = () => onFilterSelect(isFilterActive ? null : c.key)
 
         return (
-          <div
+          <button
+            type="button"
             key={c.key}
             data-testid={c.testId}
             data-filter-active={isFilterActive ? 'true' : 'false'}
-            role="button"
-            tabIndex={0}
+            aria-pressed={isFilterActive}
             onClick={selectCard}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                selectCard()
-              }
-            }}
             className={
-              'bg-white px-4 py-4 shadow-[var(--shadow-card)] cursor-pointer flex flex-col gap-2.5' +
-              (c.warn ? ' outline outline-[1.5px] outline-[var(--color-warn)] bg-[color-mix(in_srgb,var(--color-warn)_4%,white)]' : '') +
-              (isFilterActive ? ' ring-2 ring-[var(--color-accent)]' : '')
+              'flex cursor-pointer flex-col gap-2.5 bg-[var(--color-surface)] px-4 py-4 text-left shadow-[var(--shadow-card)]' +
+              (c.warn ? ' border-l-4 border-[var(--color-warn-text)] bg-[var(--color-warn-subtle)]' : ' border-l-4 border-transparent') +
+              (isFilterActive ? ' outline outline-2 outline-[var(--color-accent)]' : '')
             }
           >
             <div className="flex items-center gap-2.5">
-              <div className={'w-[34px] h-[34px] grid place-items-center text-base ' + c.chip}>
-                <span aria-hidden="true">{c.icon}</span>
+              <div className={'grid h-[34px] w-[34px] place-items-center ' + c.chip}>
+                <Icon name={c.icon} size={18} />
               </div>
-              <div className={'text-[13px] ' + (c.warn ? 'text-[var(--color-warn)] font-semibold' : 'text-[var(--color-text-secondary)]')}>
+              <div className={'text-[13px] ' + (c.warn ? 'text-[var(--color-warn-text)] font-semibold' : 'text-[var(--color-text-secondary)]')}>
                 {c.label}
               </div>
+              {isFilterActive && <span className="text-xs font-semibold text-[var(--color-accent)]">筛选中</span>}
             </div>
-            <div className={'text-[27px] font-bold leading-none tracking-tight ' + (c.warn ? 'text-[var(--color-warn)]' : c.danger ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]')}>
+            <div className={'text-[27px] font-bold leading-none tracking-tight ' + (c.warn ? 'text-[var(--color-warn-text)]' : c.danger ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]')}>
               {c.value}
             </div>
-          </div>
+          </button>
         )
       })}
     </div>
