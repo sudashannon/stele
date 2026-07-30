@@ -99,8 +99,19 @@ func (g *Graph) RemoveEdgesTo(id string) {
 	}
 }
 
+type edgeIdentity struct {
+	from   string
+	to     string
+	kind   string
+	source string
+}
+
+func identityOfEdge(edge Edge) edgeIdentity {
+	return edgeIdentity{from: edge.From, to: edge.To, kind: edge.Kind, source: edge.Source}
+}
+
 func sameEdge(a, b Edge) bool {
-	return a.From == b.From && a.To == b.To && a.Kind == b.Kind && a.Source == b.Source
+	return identityOfEdge(a) == identityOfEdge(b)
 }
 
 // UpdateEmbedding inserts a vector without cache-validity metadata. Durable

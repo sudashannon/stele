@@ -1,8 +1,13 @@
 package wiki
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -125,5 +130,179 @@ func TestBuildIndex_ArchiveChangesGetYAMLEdges(t *testing.T) {
 	edges := g.Forward(yamlID)
 	if len(edges) == 0 {
 		t.Errorf("expected YAML edges from archived change, got 0")
+	}
+}
+
+func TestBuildIndexEnrichesLiveGraphButStripsSyntheticTagsFromCache(t *testing.T) {
+	root := t.TempDir()
+	openspecDir := filepath.Join(root, "openspec")
+	changeDir := filepath.Join(openspecDir, "changes", "kmc-rollout")
+	if err := os.MkdirAll(changeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	yamlPath := filepath.Join(changeDir, ".comet.yaml")
+	designPath := filepath.Join(changeDir, "design.md")
+	yamlSource := []byte("tags: [orin]\ndesign_doc: design.md\n")
+	designSource := []byte("# Design\n\nSource content stays unchanged.\n")
+	if err := os.WriteFile(yamlPath, yamlSource, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(designPath, designSource, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	installFakeBun(t, yamlPath, make([]float64, 384))
+
+	cacheDir := t.TempDir()
+	graph, err := BuildIndex(
+		[]WorkspaceConfig{{Alias: "test", Path: openspecDir}},
+		cacheDir,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	change, ok := graph.Component(yamlPath)
+	if !ok || change.Frontmatter[derivedTagsKey] == nil {
+		t.Fatalf("live change component lacks derived provenance: %+v, ok=%v", change, ok)
+	}
+	design, ok := graph.Component(designPath)
+	if !ok || design.Frontmatter[inheritedTagsKey] == nil {
+		t.Fatalf("live design component lacks inherited provenance: %+v, ok=%v", design, ok)
+	}
+
+	cacheData, err := os.ReadFile(filepath.Join(cacheDir, "index.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached []Component
+	if err := json.Unmarshal(cacheData, &cached); err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range cached {
+		if _, exists := component.Frontmatter[derivedTagsKey]; exists {
+			t.Fatalf("cache persisted %s for %s", derivedTagsKey, component.ID)
+		}
+		if _, exists := component.Frontmatter[inheritedTagsKey]; exists {
+			t.Fatalf("cache persisted %s for %s", inheritedTagsKey, component.ID)
+		}
+	}
+
+	gotYAML, err := os.ReadFile(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotDesign, err := os.ReadFile(designPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotYAML) != string(yamlSource) || string(gotDesign) != string(designSource) {
+		t.Fatal("full indexing modified source artifacts")
+	}
+}
+
+func TestBuildIndexIncludesTagEdgesInGraphAndCache(t *testing.T) {
+	root := t.TempDir()
+	openspecDir := filepath.Join(root, "openspec")
+	changesDir := filepath.Join(openspecDir, "changes")
+	taggedIDs := make(map[string]bool, 3)
+	for i := range 100 {
+		changeDir := filepath.Join(changesDir, fmt.Sprintf("change-%03d", i))
+		if err := os.MkdirAll(changeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("{}\n")
+		if i < 3 {
+			content = []byte("tags: [orin]\n")
+		}
+		id := filepath.Join(changeDir, ".comet.yaml")
+		if err := os.WriteFile(id, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if i < 3 {
+			taggedIDs[id] = true
+		}
+	}
+
+	firstTaggedID := filepath.Join(changesDir, "change-000", ".comet.yaml")
+	installFakeBun(t, firstTaggedID, make([]float64, 384))
+	cacheDir := t.TempDir()
+	graph, err := BuildIndex(
+		[]WorkspaceConfig{{Alias: "test", Path: openspecDir}},
+		cacheDir,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var graphTagEdges []Edge
+	for id := range graph.Components() {
+		for _, edge := range graph.Forward(id) {
+			if edge.Source == "tag" {
+				graphTagEdges = append(graphTagEdges, edge)
+			}
+		}
+	}
+	if len(graphTagEdges) != 3 {
+		t.Fatalf("full graph tag edge count = %d, want one 3-member cycle: %+v", len(graphTagEdges), graphTagEdges)
+	}
+	for _, edge := range graphTagEdges {
+		if !taggedIDs[edge.From] || !taggedIDs[edge.To] {
+			t.Fatalf("tag edge connects an untagged component: %+v", edge)
+		}
+		if edge.Kind != "shares-tag:orin" || edge.Weight <= 0 {
+			t.Fatalf("unexpected tag edge identity or weight: %+v", edge)
+		}
+	}
+
+	cacheData, err := os.ReadFile(filepath.Join(cacheDir, "graph.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cachedEdges []Edge
+	if err := json.Unmarshal(cacheData, &cachedEdges); err != nil {
+		t.Fatal(err)
+	}
+	var cachedTagEdges []Edge
+	for _, edge := range cachedEdges {
+		if edge.Source == "tag" {
+			cachedTagEdges = append(cachedTagEdges, edge)
+		}
+	}
+	if len(cachedTagEdges) != len(graphTagEdges) {
+		t.Fatalf("cache tag edge count = %d, graph has %d: cache=%+v graph=%+v",
+			len(cachedTagEdges), len(graphTagEdges), cachedTagEdges, graphTagEdges)
+	}
+}
+
+func TestPersistIndexCacheLogsEachWriteFailure(t *testing.T) {
+	cacheDir := t.TempDir()
+	indexPath := filepath.Join(cacheDir, "index.json")
+	graphPath := filepath.Join(cacheDir, "graph.json")
+	if err := os.Mkdir(indexPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(graphPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() {
+		log.SetOutput(previousOutput)
+	})
+
+	persistIndexCache(
+		cacheDir,
+		[]Component{{ID: "a"}},
+		[]Edge{{From: "a", To: "b", Kind: "references", Source: "yaml"}},
+	)
+
+	output := logs.String()
+	if want := "could not write index cache " + indexPath; !strings.Contains(output, want) {
+		t.Fatalf("missing index write failure %q in log:\n%s", want, output)
+	}
+	if want := "could not write graph cache " + graphPath; !strings.Contains(output, want) {
+		t.Fatalf("missing graph write failure %q in log:\n%s", want, output)
 	}
 }

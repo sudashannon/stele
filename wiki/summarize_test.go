@@ -42,3 +42,43 @@ func TestSummaryCachePath_IsStableAndFilenameSafe(t *testing.T) {
 		t.Fatalf("expected cache path under /cache, got %q", p1)
 	}
 }
+
+// CachedSummary is the read-only half of the cache: the viewer probes it on
+// open, so a miss must never fall through to generation (which would bill an
+// LLM call for merely looking at a document).
+func TestCachedSummary(t *testing.T) {
+	root := t.TempDir()
+	srcPath := filepath.Join(root, "doc.md")
+	if err := os.WriteFile(srcPath, []byte("# Doc\ncontent"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cacheDir := filepath.Join(root, ".wiki", "summaries")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	comp := Component{ID: srcPath, Path: srcPath, Title: "Doc", UpdatedAt: time.Now()}
+
+	if _, ok := CachedSummary(comp, cacheDir); ok {
+		t.Fatal("expected a miss before anything is cached")
+	}
+
+	cachePath := summaryCachePath(cacheDir, comp.ID)
+	if err := os.WriteFile(cachePath, []byte("cached summary text"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	os.Chtimes(cachePath, future, future)
+
+	got, ok := CachedSummary(comp, cacheDir)
+	if !ok || got != "cached summary text" {
+		t.Fatalf("CachedSummary = (%q, %v), want the cached text", got, ok)
+	}
+
+	// Editing the document must invalidate the cache rather than serve a stale
+	// summary, matching Summarize's mtime rule.
+	stale := time.Now().Add(2 * time.Hour)
+	os.Chtimes(srcPath, stale, stale)
+	if _, ok := CachedSummary(comp, cacheDir); ok {
+		t.Fatal("expected a miss once the source is newer than the cache")
+	}
+}

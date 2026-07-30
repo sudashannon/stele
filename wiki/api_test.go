@@ -570,9 +570,11 @@ func TestRankSemanticSearch_ExactFilenameRanksAheadWithoutEmbedding(t *testing.T
 
 	results := rankSemanticSearch(
 		"2026-07-14-rx101-orin-bsp-build-system-research",
+		nil,
 		[]float32{1, 0},
 		components,
 		embeddings,
+		LoadTaxonomy(),
 	)
 
 	if len(results) != 2 {
@@ -600,8 +602,220 @@ func TestRankSemanticSearch_FilenameSubstringBypassesSimilarityFloor(t *testing.
 		targetID: {-1, 0},
 	}
 
-	results := rankSemanticSearch("rx101-orin-bsp", []float32{1, 0}, components, embeddings)
+	results := rankSemanticSearch("rx101-orin-bsp", nil, []float32{1, 0}, components, embeddings, LoadTaxonomy())
 	if len(results) != 1 || results[0].id != targetID {
 		t.Fatalf("filename substring must survive semantic floor, got %+v", results)
+	}
+}
+
+func TestExplicitComponentTags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  any
+		want []string
+	}{
+		{"yaml list", []any{"LZ100", "KMC", " PKI "}, []string{"LZ100", "KMC", "PKI"}},
+		{"single string", "KMC", []string{"KMC"}},
+		{"typed slice", []string{"a", "b"}, []string{"a", "b"}},
+		{"case-insensitive dedupe keeps first casing", []any{"PKI", "pki"}, []string{"PKI"}},
+		{"drops blanks", []any{"", "   ", "KMC"}, []string{"KMC"}},
+		{"absent", nil, nil},
+		{"wrong shape", 42, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			frontmatter := map[string]any{}
+			if tc.raw != nil {
+				frontmatter["tags"] = tc.raw
+			}
+			got := ExplicitComponentTags(Component{Frontmatter: frontmatter})
+			if len(got) != len(tc.want) {
+				t.Fatalf("ExplicitComponentTags = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("ExplicitComponentTags = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseTagFilters(t *testing.T) {
+	for _, tc := range []struct {
+		query    string
+		wantTags []string
+		wantRest string
+	}{
+		{"pcie", nil, "pcie"},
+		{"tag:KMC", []string{"kmc"}, ""},
+		{"tag:KMC pcie 设计", []string{"kmc"}, "pcie 设计"},
+		{"tag:kmc tag:pki", []string{"kmc", "pki"}, ""},
+		{"标签:PKI 回归", []string{"pki"}, "回归"},
+		{"tag: pcie", nil, "pcie"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			tags, rest := parseTagFilters(tc.query)
+			if rest != tc.wantRest {
+				t.Fatalf("rest = %q, want %q", rest, tc.wantRest)
+			}
+			if len(tags) != len(tc.wantTags) {
+				t.Fatalf("tags = %v, want %v", tags, tc.wantTags)
+			}
+			for i := range tags {
+				if tags[i] != tc.wantTags[i] {
+					t.Fatalf("tags = %v, want %v", tags, tc.wantTags)
+				}
+			}
+		})
+	}
+}
+
+// 260 of the 1453 indexed components already carried frontmatter tags that no
+// ranking path ever read. A tag filter must select exactly those documents,
+// even when neither the title nor the filename mentions the tag.
+func TestRankSemanticSearch_TagFilterSelectsTaggedDocsOnly(t *testing.T) {
+	tagged := Component{
+		ID:          "/ws/knowledge/activation.md",
+		Path:        "/ws/knowledge/activation.md",
+		Title:       "闭环审查",
+		Type:        TypeKnowledge,
+		Frontmatter: map[string]any{"tags": []any{"KMC", "PKI"}},
+	}
+	untagged := Component{
+		ID:    "/ws/knowledge/other.md",
+		Path:  "/ws/knowledge/other.md",
+		Title: "别的文档",
+		Type:  TypeKnowledge,
+	}
+	components := map[string]Component{tagged.ID: tagged, untagged.ID: untagged}
+
+	results := rankSemanticSearch("", []string{"kmc"}, nil, components, nil, LoadTaxonomy())
+	if len(results) != 1 || results[0].id != tagged.ID {
+		t.Fatalf("tag:kmc must return only the tagged doc, got %+v", results)
+	}
+
+	if got := rankSemanticSearch("", []string{"kmc", "pki"}, nil, components, nil, LoadTaxonomy()); len(got) != 1 {
+		t.Fatalf("conjunctive tags must still match, got %+v", got)
+	}
+	if got := rankSemanticSearch("", []string{"kmc", "absent"}, nil, components, nil, LoadTaxonomy()); len(got) != 0 {
+		t.Fatalf("a missing tag must exclude the doc, got %+v", got)
+	}
+}
+
+func TestRankSemanticSearch_TagMatchScoresAndSurvivesFloor(t *testing.T) {
+	tagged := Component{
+		ID:          "/ws/knowledge/pcie-endpoint.md",
+		Path:        "/ws/knowledge/PcieEndpointMode.md",
+		Title:       "无关标题",
+		Type:        TypeKnowledge,
+		Frontmatter: map[string]any{"tags": []any{"RX101"}},
+	}
+	components := map[string]Component{tagged.ID: tagged}
+	// Opposed vector: cosine is negative, so only the tag can keep this result.
+	embeddings := map[string][]float32{tagged.ID: {-1, 0}}
+
+	exact := rankSemanticSearch("rx101", nil, []float32{1, 0}, components, embeddings, LoadTaxonomy())
+	if len(exact) != 1 {
+		t.Fatalf("a query equal to a tag must survive the semantic floor, got %+v", exact)
+	}
+	if exact[0].lexicalRank != semanticExactTagMatch {
+		t.Fatalf("lexicalRank = %d, want semanticExactTagMatch", exact[0].lexicalRank)
+	}
+
+	token := rankSemanticSearch("rx101 电源", nil, []float32{1, 0}, components, embeddings, LoadTaxonomy())
+	if len(token) != 1 {
+		t.Fatalf("a query token equal to a tag must survive the floor, got %+v", token)
+	}
+	// A token match only adds score; it must not claim a lexical tier.
+	if token[0].lexicalRank != semanticNoLexicalMatch {
+		t.Fatalf("lexicalRank = %d, want semanticNoLexicalMatch", token[0].lexicalRank)
+	}
+	if token[0].score < semanticTagTokenBoost {
+		t.Fatalf("score = %v, want at least the tag boost %v", token[0].score, semanticTagTokenBoost)
+	}
+}
+
+func TestSemanticSearch_UsesEffectiveTagsEverywhere(t *testing.T) {
+	taxonomy := LoadTaxonomy()
+	tagged := Component{
+		ID:        "/ws/openspec/changes/orin-security/design.md",
+		Path:      "/ws/openspec/changes/orin-security/design.md",
+		Title:     "Unrelated title",
+		Type:      TypeDesign,
+		Workspace: "ws",
+		Frontmatter: map[string]any{
+			"tags":           []any{"Team-Only"},
+			derivedTagsKey:   []string{"Jetson-Orin"},
+			inheritedTagsKey: []string{"KMC"},
+		},
+	}
+	api := NewAPI(BuildGraph([]Component{tagged}, nil))
+
+	for _, test := range []struct {
+		name  string
+		query string
+	}{
+		{name: "derived canonical tag", query: "tag:orin"},
+		{name: "unknown explicit tag", query: "tag:team-only"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("POST", "/api/wiki/search-semantic", strings.NewReader(`{"query":"`+test.query+`"}`))
+			response := httptest.NewRecorder()
+			api.HandleSemanticSearch(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+
+			var results []semanticSearchResult
+			if err := json.Unmarshal(response.Body.Bytes(), &results); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("results = %+v, want the effectively tagged component", results)
+			}
+			wantTags := []string{"Team-Only", "orin", "kmc"}
+			if strings.Join(results[0].Tags, ",") != strings.Join(wantTags, ",") {
+				t.Fatalf("response tags = %v, want %v", results[0].Tags, wantTags)
+			}
+		})
+	}
+
+	components := map[string]Component{tagged.ID: tagged}
+	embeddings := map[string][]float32{tagged.ID: {-1, 0}}
+	ranked := rankSemanticSearch("kmc unrelated", nil, []float32{1, 0}, components, embeddings, taxonomy)
+	if len(ranked) != 1 {
+		t.Fatalf("inherited tag token must keep the result above the semantic floor, got %+v", ranked)
+	}
+	if ranked[0].lexicalRank != semanticNoLexicalMatch || ranked[0].score < semanticTagTokenBoost {
+		t.Fatalf("inherited tag token must add only the tag boost, got %+v", ranked[0])
+	}
+}
+
+func TestHandleSemanticSearch_BareMissingTagReturnsEmptyArray(t *testing.T) {
+	api := NewAPI(BuildGraph(nil, nil))
+	request := httptest.NewRequest("POST", "/api/wiki/search-semantic", strings.NewReader(`{"query":"tag:missing"}`))
+	response := httptest.NewRecorder()
+
+	api.HandleSemanticSearch(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var results []semanticSearchResult
+	if err := json.Unmarshal(response.Body.Bytes(), &results); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("results = %+v, want an empty array", results)
+	}
+}
+
+func TestSemanticSearchResult_OmitsAbsentTags(t *testing.T) {
+	encoded, err := json.Marshal(semanticSearchResult{ID: "untagged"})
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if strings.Contains(string(encoded), `"tags"`) {
+		t.Fatalf("absent tags must remain omitted, got %s", encoded)
 	}
 }

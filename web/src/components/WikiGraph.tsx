@@ -299,7 +299,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   }, [workspaceFilteredComponents, communities, activeCommunity])
 
   const structuralEdges = useMemo(
-    () => edges.filter((edge) => edge.source !== 'vector' && edge.source !== 'bm25'),
+    () => edges.filter((edge) => edge.source !== 'vector' && edge.source !== 'bm25' && edge.source !== 'tag'),
     [edges],
   )
 

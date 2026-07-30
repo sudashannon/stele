@@ -107,8 +107,9 @@
 
 ### 社区检测
 
-- Louvain 算法自动聚类
-- 向量质心标签 (最中心成员的标题)
+- 多层加权 Louvain (γ=0.7)：结构边按来源加权 1.0/0.9/0.7，向量边只给 0.1-0.4，社区折叠后迭代重跑
+- TF-IDF 主题标签 (取标题中最具区分度的 3 个词，如 `kmc · kms · caller`)
+- 只有完全无边的文档标为未归类
 - 社区综述页 (LLM 生成, 带缓存)
 
 ### 增量更新
@@ -314,7 +315,7 @@ tags: [architecture, decision]
 | 前端 | React 18, Vite, Tailwind CSS, Cytoscape.js |
 | 设计 | IBM Carbon Design System tokens, IBM Plex Sans 字体 |
 | Embedding | Ternlight (@ternlight/base, Bun runtime) |
-| 图算法 | Louvain 社区检测, BM25 (标签), Cosine similarity |
+| 图算法 | 多层加权 Louvain 社区检测, TF-IDF 标签, Cosine similarity |
 | 文件监控 | fsnotify |
 | LLM | MiniMax / Anthropic / OpenAI (可配置) |
 | 协议 | MCP Streamable HTTP (JSON-RPC 2.0) |

@@ -7,12 +7,276 @@ import (
 	"unicode"
 )
 
-// DetectCommunities runs a simplified single-level Louvain community
-// detection over the undirected view of g (forward and backward edges
-// merged) and returns a map from Component ID to community index.
+// Edge weights by provenance. A hand-written yaml link and a statistical
+// top-3 cosine neighbour are not equally strong evidence that two documents
+// belong to the same theme, but the previous implementation counted both as
+// exactly 1. Vector edges outnumber structural ones 4231:1262 in the live
+// corpus, so unweighted detection was effectively clustering by kNN and
+// ignoring the authored graph.
+const (
+	edgeWeightYAML         = 1.0
+	edgeWeightConvention   = 0.9
+	edgeWeightMarkdownLink = 0.7
+	edgeWeightSlugMatch    = 0.4
+
+	// Vector edges are already built top-3 above cosine 0.5 (see
+	// ComputeVectorSimilarityEdges call sites), so their similarity spans
+	// [0.5, 1.0]; map that onto a deliberately weak band.
+	vectorEdgeFloorSim  = 0.5
+	vectorEdgeMinWeight = 0.1
+	vectorEdgeMaxWeight = 0.4
+)
+
+// CommunityResolution is the Louvain resolution γ. Below 1 it favours fewer,
+// larger communities; above 1 it splits more aggressively. 1453 components
+// over a sparse authored graph fragment badly at γ=1, and the point of the
+// view is to name a handful of themes rather than to enumerate every cluster.
+const CommunityResolution = 0.7
+
+// edgeWeight scores one edge by how much evidence it carries. Positive
+// explicit weights take precedence; legacy edges retain provenance defaults,
+// while vector edges are graded by cosine from the graph embeddings.
+func edgeWeight(e Edge, embeddings map[string][]float32) float64 {
+	if e.Weight > 0 {
+		return e.Weight
+	}
+	if e.Source == "vector" || e.Kind == "similar" {
+		sim := cosineSimilarity(embeddings[e.From], embeddings[e.To])
+		if math.IsInf(sim, -1) || sim <= vectorEdgeFloorSim {
+			return vectorEdgeMinWeight
+		}
+		span := (sim - vectorEdgeFloorSim) / (1 - vectorEdgeFloorSim)
+		if span > 1 {
+			span = 1
+		}
+		return vectorEdgeMinWeight + span*(vectorEdgeMaxWeight-vectorEdgeMinWeight)
+	}
+	switch e.Source {
+	case "yaml":
+		return edgeWeightYAML
+	case "convention-internal":
+		return edgeWeightConvention
+	case "markdown-link":
+		return edgeWeightMarkdownLink
+	case "slug-match":
+		return edgeWeightSlugMatch
+	default:
+		return edgeWeightMarkdownLink
+	}
+}
+
+// weightedAdjacency is an undirected weighted view keyed by node id.
+type weightedAdjacency struct {
+	adj      map[string]map[string]float64
+	selfLoop map[string]float64
+	strength map[string]float64
+	total2m  float64
+}
+
+func (w *weightedAdjacency) link(a, b string, weight float64) {
+	if weight <= 0 {
+		return
+	}
+	if a == b {
+		w.selfLoop[a] += weight
+		w.strength[a] += 2 * weight
+		w.total2m += 2 * weight
+		return
+	}
+	w.adj[a][b] += weight
+	w.adj[b][a] += weight
+	w.strength[a] += weight
+	w.strength[b] += weight
+	w.total2m += 2 * weight
+}
+
+func newWeightedAdjacency(nodes []string) *weightedAdjacency {
+	w := &weightedAdjacency{
+		adj:      make(map[string]map[string]float64, len(nodes)),
+		selfLoop: make(map[string]float64, len(nodes)),
+		strength: make(map[string]float64, len(nodes)),
+	}
+	for _, id := range nodes {
+		w.adj[id] = map[string]float64{}
+	}
+	return w
+}
+
+// graphAdjacency collapses the directed multigraph into one weighted
+// undirected edge per pair, taking the strongest provenance rather than
+// summing: two documents linked by both a yaml edge and a cosine edge are one
+// relationship with the confidence of the better source, not a double-strength
+// one. Duplicate parallel edges of the same kind used to inflate weight.
+func graphAdjacency(g *Graph) *weightedAdjacency {
+	components := g.Components()
+	ids := make([]string, 0, len(components))
+	for id := range components {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	embeddings := g.Embeddings()
+	best := make(map[[2]string]float64)
+	for _, id := range ids {
+		for _, e := range g.Forward(id) {
+			// Dangling links (an edge to a path no component was indexed for)
+			// are real in this corpus and lint reports them separately; they
+			// carry no membership information, so drop them here.
+			if e.From == e.To {
+				continue
+			}
+			if _, ok := components[e.From]; !ok {
+				continue
+			}
+			if _, ok := components[e.To]; !ok {
+				continue
+			}
+			key := [2]string{e.From, e.To}
+			if key[0] > key[1] {
+				key[0], key[1] = key[1], key[0]
+			}
+			if weight := edgeWeight(e, embeddings); weight > best[key] {
+				best[key] = weight
+			}
+		}
+	}
+
+	pairs := make([][2]string, 0, len(best))
+	for key := range best {
+		pairs = append(pairs, key)
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i][0] != pairs[j][0] {
+			return pairs[i][0] < pairs[j][0]
+		}
+		return pairs[i][1] < pairs[j][1]
+	})
+
+	w := newWeightedAdjacency(ids)
+	for _, key := range pairs {
+		w.link(key[0], key[1], best[key])
+	}
+	return w
+}
+
+// localMoving is one Louvain pass: repeatedly move nodes to the neighbouring
+// community that yields the best modularity gain at resolution γ, until no
+// node moves. Returns node -> community and whether anything changed.
+func localMoving(w *weightedAdjacency, order []string, resolution float64) (map[string]string, bool) {
+	community := make(map[string]string, len(order))
+	communityStrength := make(map[string]float64, len(order))
+	for _, id := range order {
+		community[id] = id
+		communityStrength[id] = w.strength[id]
+	}
+	if w.total2m == 0 {
+		return community, false
+	}
+
+	moved := false
+	for improved := true; improved; {
+		improved = false
+		for _, id := range order {
+			nodeStrength := w.strength[id]
+			if nodeStrength == 0 {
+				continue
+			}
+			current := community[id]
+
+			toCommunity := make(map[string]float64, len(w.adj[id]))
+			for neighbor, weight := range w.adj[id] {
+				toCommunity[community[neighbor]] += weight
+			}
+
+			// Detach first so every candidate — including staying put — is
+			// scored against the same baseline.
+			communityStrength[current] -= nodeStrength
+
+			bestComm := current
+			bestGain := gainOfJoining(toCommunity[current], communityStrength[current], nodeStrength, resolution, w.total2m)
+			candidates := make([]string, 0, len(toCommunity))
+			for comm := range toCommunity {
+				if comm != current {
+					candidates = append(candidates, comm)
+				}
+			}
+			sort.Strings(candidates) // deterministic ties
+			for _, comm := range candidates {
+				gain := gainOfJoining(toCommunity[comm], communityStrength[comm], nodeStrength, resolution, w.total2m)
+				if gain > bestGain {
+					bestGain = gain
+					bestComm = comm
+				}
+			}
+
+			communityStrength[bestComm] += nodeStrength
+			if bestComm != current {
+				community[id] = bestComm
+				improved = true
+				moved = true
+			}
+		}
+	}
+	return community, moved
+}
+
+// gainOfJoining is the resolution-scaled modularity contribution of putting a
+// node of the given strength into a community it currently sits outside of.
+func gainOfJoining(weightToComm, commStrength, nodeStrength, resolution, total2m float64) float64 {
+	return weightToComm/total2m - resolution*commStrength*nodeStrength/(total2m*total2m)
+}
+
+// aggregate collapses each community into a single super-node, summing edge
+// weights between communities and folding intra-community weight into self
+// loops. This is the step the previous single-level implementation lacked:
+// without it, detection stops at the first pass and 1453 components shatter
+// into 276 clusters averaging 4.6 documents each.
+func aggregate(w *weightedAdjacency, community map[string]string) (*weightedAdjacency, []string) {
+	names := make(map[string]bool, len(community))
+	for _, comm := range community {
+		names[comm] = true
+	}
+	order := make([]string, 0, len(names))
+	for comm := range names {
+		order = append(order, comm)
+	}
+	sort.Strings(order)
+
+	next := newWeightedAdjacency(order)
+	for _, id := range order {
+		next.selfLoop[id] = 0
+	}
+	// Fold existing self loops first, then every original edge exactly once.
+	for id, loop := range w.selfLoop {
+		if loop > 0 {
+			next.link(community[id], community[id], loop)
+		}
+	}
+	seen := make(map[[2]string]bool)
+	for a, neighbors := range w.adj {
+		for b, weight := range neighbors {
+			key := [2]string{a, b}
+			if key[0] > key[1] {
+				key[0], key[1] = key[1], key[0]
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			next.link(community[a], community[b], weight)
+		}
+	}
+	return next, order
+}
+
+// DetectCommunities runs weighted, multi-level Louvain over the undirected
+// view of g (forward and backward edges merged) and returns a map from
+// Component ID to community index.
 //
-// Communities with two or fewer members are considered too small to be
-// meaningful and are collapsed into a single "misc" bucket, reported as -1.
+// Components with no edge at all cannot be placed by modularity at all and are
+// reported as -1 ("未归类"). Unlike the previous implementation, small but
+// genuinely connected communities are kept: collapsing every cluster of ≤2
+// into -1 hid the fragmentation instead of fixing it.
 func DetectCommunities(g *Graph) map[string]int {
 	components := g.Components()
 	result := make(map[string]int, len(components))
@@ -20,127 +284,40 @@ func DetectCommunities(g *Graph) map[string]int {
 		return result
 	}
 
-	// Build an undirected adjacency list (as a neighbor -> edge-count map,
-	// since duplicate edges between the same pair should count as multi-edges).
-	adj := make(map[string]map[string]int, len(components))
-	for id := range components {
-		adj[id] = map[string]int{}
+	level := graphAdjacency(g)
+	order := make([]string, 0, len(level.adj))
+	for id := range level.adj {
+		order = append(order, id)
 	}
-	addEdge := func(a, b string) {
-		if a == b {
-			return
-		}
-		if _, ok := adj[a]; !ok {
-			adj[a] = map[string]int{}
-		}
-		if _, ok := adj[b]; !ok {
-			adj[b] = map[string]int{}
-		}
-		adj[a][b]++
-		adj[b][a]++
-	}
-	for id := range components {
-		for _, e := range g.Forward(id) {
-			addEdge(e.From, e.To)
-		}
-		for _, e := range g.Backlinks(id) {
-			addEdge(e.From, e.To)
-		}
+	sort.Strings(order)
+
+	// membership maps every original node id to its community at the current
+	// level; each pass rewrites it through the freshly aggregated graph.
+	membership := make(map[string]string, len(order))
+	for _, id := range order {
+		membership[id] = id
 	}
 
-	// degree[id] = number of incident edges (weighted by multiplicity).
-	degree := make(map[string]int, len(adj))
-	totalEdges := 0
-	for id, neighbors := range adj {
-		d := 0
-		for _, w := range neighbors {
-			d += w
+	for pass := 0; pass < maxLouvainPasses; pass++ {
+		community, moved := localMoving(level, order, CommunityResolution)
+		if !moved {
+			break
 		}
-		degree[id] = d
-		totalEdges += d
-	}
-	totalEdges /= 2 // each edge counted from both endpoints
-	if totalEdges == 0 {
-		// No edges at all: every node is its own (size-1) community, so all
-		// nodes collapse to misc.
-		for id := range components {
-			result[id] = -1
+		for id, comm := range membership {
+			membership[id] = community[comm]
 		}
-		return result
-	}
-	m2 := float64(2 * totalEdges) // 2m, used repeatedly in ΔQ
-
-	// Initialize: every node in its own community.
-	community := make(map[string]string, len(adj)) // node -> community id (represented by a node id)
-	for id := range adj {
-		community[id] = id
-	}
-	// communityDegree[c] = sum of degrees of members of community c.
-	communityDegree := make(map[string]int, len(adj))
-	for id, d := range degree {
-		communityDegree[id] = d
-	}
-
-	// weightToCommunity returns, for node, the total edge weight it has
-	// toward each neighboring community (excluding its own membership).
-	weightToCommunity := func(node string) map[string]int {
-		w := make(map[string]int)
-		for neighbor, weight := range adj[node] {
-			w[community[neighbor]] += weight
-		}
-		return w
-	}
-
-	improved := true
-	for improved {
-		improved = false
-		for id := range adj {
-			currentComm := community[id]
-			nodeDeg := degree[id]
-			neighborWeights := weightToCommunity(id)
-
-			// Weight this node currently contributes to its own community
-			// (excluding itself), used to compute the cost of removing it.
-			currentWeight := neighborWeights[currentComm]
-
-			// ΔQ of removing id from its current community.
-			// Removing a node from community c changes Q by:
-			//   -currentWeight/m + nodeDeg * (communityDegree[c]-nodeDeg) / (2m^2)
-			removeGain := -float64(currentWeight)/float64(totalEdges) +
-				float64(nodeDeg)*float64(communityDegree[currentComm]-nodeDeg)/(m2*m2/2)
-
-			bestComm := currentComm
-			bestDelta := 0.0
-
-			for comm, weight := range neighborWeights {
-				if comm == currentComm {
-					continue
-				}
-				// ΔQ of adding id to comm (comm's degree sum excludes id, since
-				// id isn't currently a member).
-				addGain := float64(weight)/float64(totalEdges) -
-					float64(nodeDeg)*float64(communityDegree[comm])/(m2*m2/2)
-
-				delta := addGain + removeGain
-				if delta > bestDelta {
-					bestDelta = delta
-					bestComm = comm
-				}
-			}
-
-			if bestComm != currentComm {
-				communityDegree[currentComm] -= nodeDeg
-				communityDegree[bestComm] += nodeDeg
-				community[id] = bestComm
-				improved = true
-			}
+		level, order = aggregate(level, community)
+		if len(order) <= 1 {
+			break
 		}
 	}
 
-	// Collect final communities, assign dense 0-based indices in a
-	// deterministic (sorted) order, and compute sizes.
 	members := make(map[string][]string)
-	for id, comm := range community {
+	for id, comm := range membership {
+		if level.strength[comm] == 0 && graphAdjacencyIsolated(g, id) {
+			result[id] = -1
+			continue
+		}
 		members[comm] = append(members[comm], id)
 	}
 
@@ -150,21 +327,63 @@ func DetectCommunities(g *Graph) map[string]int {
 	}
 	sort.Strings(commOrder)
 
-	idx := 0
+	index := 0
 	for _, comm := range commOrder {
 		ids := members[comm]
-		assigned := idx
-		if len(ids) <= 2 {
-			assigned = -1
-		} else {
-			idx++
-		}
+		sort.Strings(ids)
 		for _, id := range ids {
-			result[id] = assigned
+			result[id] = index
+		}
+		index++
+	}
+	return result
+}
+
+const maxLouvainPasses = 20
+
+// graphAdjacencyIsolated reports whether a component has no edges at all, the
+// only case modularity cannot express an opinion about.
+func graphAdjacencyIsolated(g *Graph, id string) bool {
+	return len(g.Forward(id)) == 0 && len(g.Backlinks(id)) == 0
+}
+
+// Modularity scores a partition of g at the given resolution, so a change to
+// detection can be compared against the previous partition on real data
+// instead of by eyeballing the graph view.
+func Modularity(g *Graph, communities map[string]int, resolution float64) float64 {
+	w := graphAdjacency(g)
+	if w.total2m == 0 {
+		return 0
+	}
+	internal := make(map[int]float64)
+	total := make(map[int]float64)
+	for id := range w.adj {
+		comm, ok := communities[id]
+		if !ok {
+			comm = -1
+		}
+		key := comm
+		if comm < 0 {
+			// Unclassified nodes are singletons, not one shared community.
+			key = -1000000 - len(internal)
+		}
+		total[key] += w.strength[id]
+		internal[key] += w.selfLoop[id] * 2
+		for neighbor, weight := range w.adj[id] {
+			other, ok := communities[neighbor]
+			if !ok {
+				other = -1
+			}
+			if comm >= 0 && other == comm {
+				internal[key] += weight
+			}
 		}
 	}
-
-	return result
+	q := 0.0
+	for key, in := range internal {
+		q += in/w.total2m - resolution*math.Pow(total[key]/w.total2m, 2)
+	}
+	return q
 }
 
 // communityLabelStopwords lists terms too generic to serve as a useful
@@ -182,89 +401,19 @@ var communityLabelStopwords = map[string]bool{
 	"docs": true, "test": true, "add": true, "update": true, "get": true,
 }
 
-// CommunityLabels computes a human-readable label for each community.
+// communityLabelTerms is how many distinctive terms a label combines.
+const communityLabelTerms = 3
+
+// CommunityLabels names each community by the most distinctive terms across
+// its members' titles.
 //
-// When embeddings are available, the label is chosen via a vector centroid
-// approach: for each community, the centroid is the element-wise mean of
-// its members' embedding vectors, and the label is the Title of the member
-// whose vector has the highest cosine similarity to that centroid (i.e.
-// the most "central" member of the community).
-//
-// When embeddings is nil or empty, this falls back to the TF-IDF approach
-// (see communityLabelsTFIDF): the most distinctive term (highest TF-IDF
-// score) across the titles of the community's members.
-func CommunityLabels(components []Component, communities map[string]int, embeddings map[string][]float32) map[int]string {
-	if len(embeddings) == 0 {
-		return communityLabelsTFIDF(components, communities)
-	}
-
-	// Group members by community, skipping misc (-1) and components with no
-	// embedding vector.
-	commMembers := make(map[int][]Component)
-	for _, c := range components {
-		commID, ok := communities[c.ID]
-		if !ok || commID == -1 {
-			continue
-		}
-		if _, ok := embeddings[c.ID]; !ok {
-			continue
-		}
-		commMembers[commID] = append(commMembers[commID], c)
-	}
-	if len(commMembers) == 0 {
-		return communityLabelsTFIDF(components, communities)
-	}
-
-	labels := make(map[int]string, len(commMembers))
-	for commID, members := range commMembers {
-		centroid := vectorCentroid(members, embeddings)
-		bestTitle := ""
-		bestSim := math.Inf(-1)
-		for _, m := range members {
-			sim := cosineSimilarity(embeddings[m.ID], centroid)
-			if sim > bestSim {
-				bestSim = sim
-				bestTitle = m.Title
-			}
-		}
-		if bestTitle != "" {
-			labels[commID] = bestTitle
-		}
-	}
-	return labels
-}
-
-// vectorCentroid computes the element-wise mean of the embedding vectors of
-// members. All vectors are assumed to share the same dimensionality; the
-// first member present in embeddings determines the centroid's length.
-func vectorCentroid(members []Component, embeddings map[string][]float32) []float32 {
-	var dim int
-	for _, m := range members {
-		if v, ok := embeddings[m.ID]; ok {
-			dim = len(v)
-			break
-		}
-	}
-	centroid := make([]float64, dim)
-	n := 0
-	for _, m := range members {
-		v, ok := embeddings[m.ID]
-		if !ok {
-			continue
-		}
-		for i := 0; i < dim && i < len(v); i++ {
-			centroid[i] += float64(v[i])
-		}
-		n++
-	}
-	result := make([]float32, dim)
-	if n == 0 {
-		return result
-	}
-	for i := range centroid {
-		result[i] = float32(centroid[i] / float64(n))
-	}
-	return result
+// It used to pick the title of the member closest to the community's embedding
+// centroid, which produced labels like "Welcome" or
+// "Task 05: _build_tos.sh Implementation Report" — the name of one document,
+// not the theme its neighbours share. A TF-IDF keyword combination reads as a
+// topic, and needs no embeddings at all.
+func CommunityLabels(components []Component, communities map[string]int) map[int]string {
+	return communityLabelsTFIDF(components, communities)
 }
 
 // cosineSimilarity returns the cosine similarity between a and b. Vectors of
@@ -288,14 +437,15 @@ func cosineSimilarity(a, b []float32) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// communityLabelsTFIDF computes a human-readable label for each community by
-// finding the most distinctive term (highest TF-IDF score) across the
-// titles of the community's members.
+// communityLabelsTFIDF labels each community with its most distinctive terms
+// (highest TF-IDF) across the titles of its members.
 //
 // TF is the term's frequency within a community's titles; IDF is
 // log(N / df) where N is the number of communities and df is the number of
-// communities whose titles contain the term at least once. Terms shorter
-// than 2 runes and common stopwords are excluded from consideration.
+// communities whose titles contain the term at least once. Terms shorter than
+// 2 runes, pure numbers and common stopwords are excluded. The top
+// communityLabelTerms terms are joined with " · ": one term alone is often
+// ambiguous ("orin"), while three read as a theme.
 func communityLabelsTFIDF(components []Component, communities map[string]int) map[int]string {
 	// Group titles (as token lists) by community, skipping misc (-1).
 	commTokens := make(map[int][]string)
@@ -330,24 +480,45 @@ func communityLabelsTFIDF(components []Component, communities map[string]int) ma
 	n := float64(len(commTokens))
 	labels := make(map[int]string, len(commTokens))
 	for commID, freq := range termFreq {
-		bestTerm := ""
-		bestScore := math.Inf(-1)
 		terms := make([]string, 0, len(freq))
 		for term := range freq {
 			terms = append(terms, term)
 		}
 		sort.Strings(terms) // deterministic tie-breaking
+		scored := make([]struct {
+			term  string
+			score float64
+		}, 0, len(terms))
 		for _, term := range terms {
 			tf := float64(freq[term])
 			idf := math.Log(n / float64(docFreq[term]))
-			score := tf * idf
-			if score > bestScore {
-				bestScore = score
-				bestTerm = term
+			scored = append(scored, struct {
+				term  string
+				score float64
+			}{term, tf * idf})
+		}
+		sort.SliceStable(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+
+		picked := make([]string, 0, communityLabelTerms)
+		for _, entry := range scored {
+			if len(picked) == communityLabelTerms {
+				break
+			}
+			// Skip a term already contained in (or containing) a picked one, so
+			// CJK bigram overlaps like "密钥"/"钥管" do not fill the label.
+			redundant := false
+			for _, chosen := range picked {
+				if strings.Contains(chosen, entry.term) || strings.Contains(entry.term, chosen) {
+					redundant = true
+					break
+				}
+			}
+			if !redundant {
+				picked = append(picked, entry.term)
 			}
 		}
-		if bestTerm != "" {
-			labels[commID] = bestTerm
+		if len(picked) > 0 {
+			labels[commID] = strings.Join(picked, " · ")
 		}
 	}
 	return labels

@@ -269,13 +269,17 @@ func (trellisIndexSource) Scan(workspace WorkspaceConfig) ([]Component, []Edge, 
 }
 
 func deduplicateEdges(edges []Edge) []Edge {
-	seen := make(map[Edge]struct{}, len(edges))
+	indexByIdentity := make(map[edgeIdentity]int, len(edges))
 	out := edges[:0]
 	for _, edge := range edges {
-		if _, exists := seen[edge]; exists {
+		identity := identityOfEdge(edge)
+		if index, exists := indexByIdentity[identity]; exists {
+			if edge.Weight > out[index].Weight {
+				out[index] = edge
+			}
 			continue
 		}
-		seen[edge] = struct{}{}
+		indexByIdentity[identity] = len(out)
 		out = append(out, edge)
 	}
 	return out

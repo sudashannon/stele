@@ -231,6 +231,7 @@ func main() {
 	mux.HandleFunc("/api/wiki/rebuild", wikiAPI.HandleRebuild)
 	mux.HandleFunc("/api/wiki/lint", wikiAPI.HandleLint)
 	mux.HandleFunc("/api/wiki/summarize", wikiAPI.HandleSummarize)
+	mux.HandleFunc("/api/wiki/summary", wikiAPI.HandleCachedSummary)
 	mux.HandleFunc("/api/wiki/overview", wikiAPI.HandleOverview)
 	mux.HandleFunc("/api/wiki/search-semantic", wikiAPI.HandleSemanticSearch)
 	mux.HandleFunc("/api/wiki/calendar/month", wikiAPI.HandleCalendarMonth)

@@ -10,104 +10,141 @@ import (
 	"comet-ui/internal/source"
 )
 
-func TestIncrementalUpdateRemovesDeletedComponentAndPersistsEmbeddings(t *testing.T) {
-	root := t.TempDir()
-	cacheDir := t.TempDir()
-	deletedPath := filepath.Join(root, "docs", "deleted.md")
-	otherPath := filepath.Join(root, "docs", "other.md")
-
-	g := BuildGraph(
-		[]Component{
-			{ID: deletedPath, Path: deletedPath, Workspace: "test"},
-			{ID: otherPath, Path: otherPath, Workspace: "test"},
+func TestPrepareIncrementalTagChangesClassifiesRebuildsAndPreservesSyntheticTags(t *testing.T) {
+	taxonomy := LoadTaxonomy()
+	basePath := filepath.Join(t.TempDir(), "openspec", "changes", "orin-rollout", "design.md")
+	base := Component{
+		ID:        basePath,
+		Path:      basePath,
+		Type:      TypeDesign,
+		Title:     "Before",
+		Workspace: "test",
+		Frontmatter: map[string]any{
+			"tags":           []any{"Jetson Orin", "Local Label"},
+			derivedTagsKey:   []string{"orin"},
+			inheritedTagsKey: []string{"kmc"},
 		},
-		[]Edge{
-			{From: deletedPath, To: otherPath, Kind: "references"},
-			{From: otherPath, To: deletedPath, Kind: "references"},
-		},
-	)
-	g.SetEmbeddingEntries(map[string]EmbeddingEntry{
-		deletedPath: {ID: deletedPath, InputVersion: EmbeddingInputVersion, Vector: make([]float32, 384)},
-		otherPath:   {ID: otherPath, InputVersion: EmbeddingInputVersion, Vector: make([]float32, 384)},
-	})
-	api := &API{
-		graph:         g,
-		ws:            []WorkspaceConfig{{Alias: "test", Path: root}},
-		indexCacheDir: cacheDir,
+	}
+	api := &API{graph: BuildGraph([]Component{base}, nil)}
+
+	safe := base
+	safe.Title = "After"
+	safe.UpdatedAt = time.Now()
+	safe.Frontmatter = map[string]any{"tags": []any{"ORIN", "local label"}}
+	safeChanges := []incrementalChange{{path: basePath, component: &safe}}
+	if api.prepareIncrementalTagChanges(safeChanges, taxonomy) {
+		t.Fatal("title/timestamp and canonical-equivalent explicit tags must stay incremental")
+	}
+	if got := safeChanges[0].component.Frontmatter[derivedTagsKey]; got == nil {
+		t.Fatal("safe replacement did not preserve derived tag provenance")
+	}
+	if got := safeChanges[0].component.Frontmatter[inheritedTagsKey]; got == nil {
+		t.Fatal("safe replacement did not preserve inherited tag provenance")
 	}
 
-	if err := api.IncrementalUpdate([]string{deletedPath}); err != nil {
-		t.Fatalf("IncrementalUpdate: %v", err)
-	}
-	if _, ok := g.Component(deletedPath); ok {
-		t.Fatal("deleted component remains in graph")
-	}
-	if len(g.Forward(deletedPath)) != 0 || len(g.Backlinks(deletedPath)) != 0 {
-		t.Fatalf("deleted component edges remain: forward=%v backlinks=%v", g.Forward(deletedPath), g.Backlinks(deletedPath))
-	}
-	if _, ok := g.Embeddings()[deletedPath]; ok {
-		t.Fatal("deleted component embedding remains")
-	}
-	if api.DirtyCount() < 1 {
-		t.Fatalf("DirtyCount = %d, want structural change", api.DirtyCount())
+	changedType := safe
+	changedType.Type = TypePlan
+	changedPath := safe
+	changedPath.Path = filepath.Join(filepath.Dir(basePath), "renamed.md")
+	changedExplicit := safe
+	changedExplicit.Frontmatter = map[string]any{"tags": []any{"kmc", "Local Label"}}
+	changedDerived := safe
+	changedDerived.Path = filepath.Join(filepath.Dir(filepath.Dir(basePath)), "kmc-rollout", "design.md")
+	createdPath := filepath.Join(filepath.Dir(basePath), "new.md")
+	created := safe
+	created.ID, created.Path = createdPath, createdPath
+
+	for _, tc := range []struct {
+		name   string
+		change incrementalChange
+		graph  *Graph
+	}{
+		{name: "create", change: incrementalChange{path: createdPath, component: &created}, graph: BuildGraph([]Component{base}, nil)},
+		{name: "delete", change: incrementalChange{path: basePath}, graph: BuildGraph([]Component{base}, nil)},
+		{name: "type", change: incrementalChange{path: basePath, component: &changedType}, graph: BuildGraph([]Component{base}, nil)},
+		{name: "path", change: incrementalChange{path: basePath, component: &changedPath}, graph: BuildGraph([]Component{base}, nil)},
+		{name: "canonical explicit inputs", change: incrementalChange{path: basePath, component: &changedExplicit}, graph: BuildGraph([]Component{base}, nil)},
+		{name: "derived tags", change: incrementalChange{path: basePath, component: &changedDerived}, graph: BuildGraph([]Component{base}, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testAPI := &API{graph: tc.graph}
+			if !testAPI.prepareIncrementalTagChanges([]incrementalChange{tc.change}, taxonomy) {
+				t.Fatalf("%s change must force a full rebuild", tc.name)
+			}
+		})
 	}
 
-	cached, err := LoadEmbeddingCache(filepath.Join(cacheDir, "embeddings.bin"))
-	if err != nil {
-		t.Fatalf("LoadEmbeddingCache: %v", err)
-	}
-	if _, ok := cached[deletedPath]; ok {
-		t.Fatal("persisted cache contains deleted component")
-	}
-	if _, ok := cached[otherPath]; !ok {
-		t.Fatal("persisted cache lost unchanged component")
+	if !containsChangeMetadata([]string{filepath.Join(filepath.Dir(basePath), ".comet.yaml")}) {
+		t.Fatal(".comet.yaml changes must force a full rebuild")
 	}
 }
 
-func TestIncrementalUpdateAddsOneChangedComponentWithoutFullScan(t *testing.T) {
+func TestIncrementalUpdatePreservesSyntheticTagsForContentOnlyChanges(t *testing.T) {
 	root := t.TempDir()
-	cacheDir := t.TempDir()
 	specDir := filepath.Join(root, "specs")
 	if err := os.MkdirAll(specDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	specPath := filepath.Join(specDir, "new.md")
+	specPath := filepath.Join(specDir, "existing.md")
 	targetPath := filepath.Join(specDir, "target.md")
-	if err := os.WriteFile(specPath, []byte("# New\n\n[target](target.md)\n"), 0o644); err != nil {
+	source := []byte("# Updated title\n\nChanged body.\n")
+	if err := os.WriteFile(specPath, source, 0o644); err != nil {
 		t.Fatal(err)
 	}
-
 	installFakeBun(t, specPath, make([]float64, 384))
 
+	before := Component{
+		ID:        specPath,
+		Path:      specPath,
+		Type:      TypeSpec,
+		Title:     "Old title",
+		Workspace: "test",
+		Frontmatter: map[string]any{
+			derivedTagsKey:   []string{"orin"},
+			inheritedTagsKey: []string{"kmc"},
+		},
+	}
+	beforeTags := EffectiveComponentTags(before, LoadTaxonomy())
+	target := Component{ID: targetPath, Path: targetPath, Type: TypeSpec, Workspace: "test"}
+	tagEdge := Edge{
+		From: specPath, To: targetPath,
+		Kind: "shares-tag:orin", Source: "tag", Weight: 0.37,
+	}
 	api := &API{
-		graph:         BuildGraph([]Component{{ID: targetPath, Path: targetPath}}, nil),
-		ws:            []WorkspaceConfig{{Alias: "test", Path: root}},
-		indexCacheDir: cacheDir,
+		graph: BuildGraph([]Component{before, target}, []Edge{tagEdge}),
+		ws:    []WorkspaceConfig{{Alias: "test", Path: root}},
 	}
 
-	start := time.Now()
-	if err := api.IncrementalUpdate([]string{specPath, specPath}); err != nil {
+	if err := api.IncrementalUpdate([]string{specPath}); err != nil {
 		t.Fatalf("IncrementalUpdate: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed >= 2*time.Second {
-		t.Fatalf("single-file incremental update took %v, want <2s", elapsed)
+	after, ok := api.graph.Component(specPath)
+	if !ok {
+		t.Fatal("content-only update removed component")
 	}
-	component, ok := api.graph.Component(specPath)
-	if !ok || component.Title != "New" || component.Workspace != "test" {
-		t.Fatalf("component not incrementally added: %+v, ok=%v", component, ok)
+	if after.Title != "Updated title" {
+		t.Fatalf("updated title = %q, want %q", after.Title, "Updated title")
 	}
-	if component.Frontmatter["_source"] != "openspec" {
-		t.Fatalf("incremental component lost source marker: %+v", component.Frontmatter)
+	if after.Frontmatter[derivedTagsKey] == nil || after.Frontmatter[inheritedTagsKey] == nil {
+		t.Fatalf("content-only update lost synthetic tags: %+v", after.Frontmatter)
 	}
-	edges := api.graph.Forward(specPath)
-	if len(edges) != 1 || edges[0].To != targetPath || edges[0].Source != "markdown-link" {
-		t.Fatalf("incremental links = %+v, want markdown link to target", edges)
+	if afterTags := EffectiveComponentTags(after, LoadTaxonomy()); !equalStrings(afterTags, beforeTags) {
+		t.Fatalf("effective tags after incremental update = %v, want full-build tags %v", afterTags, beforeTags)
 	}
-	if len(api.graph.Embeddings()[specPath]) != 384 {
-		t.Fatalf("embedding length = %d, want 384", len(api.graph.Embeddings()[specPath]))
+	forward := api.graph.Forward(specPath)
+	if len(forward) != 1 || forward[0] != tagEdge {
+		t.Fatalf("outgoing tag edge after content update = %#v; want %#v", forward, tagEdge)
 	}
-	if api.DirtyCount() != 2 {
-		t.Fatalf("DirtyCount = %d, want one component plus one edge", api.DirtyCount())
+	backlinks := api.graph.Backlinks(targetPath)
+	if len(backlinks) != 1 || backlinks[0] != tagEdge {
+		t.Fatalf("tag backlink after content update = %#v; want %#v", backlinks, tagEdge)
+	}
+	persisted, err := os.ReadFile(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(persisted) != string(source) {
+		t.Fatalf("incremental enrichment modified source: %q", persisted)
 	}
 }
 

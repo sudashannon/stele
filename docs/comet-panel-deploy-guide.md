@@ -286,7 +286,7 @@ Comet-Panel 的 AI 对话和报告生成需要配置 LLM。支持的方式：
 内容：
 - **节点类型**——10 种（change / proposal / design / tasks / spec / plan / artifact / diagram / report / knowledge），不同颜色区分
 - **边**——4 层链接提取：YAML 引用、Markdown 链接、产物约定、向量语义
-- **社区检测**——Louvain 算法自动聚类，每个社区自动命名
+- **社区检测**——多层加权 Louvain 自动聚类，每个社区按标题 TF-IDF 自动命名
 - **交互**——拖拽、缩放、点击节点打开文档
 - **筛选**——按 workspace 或社区过滤
 

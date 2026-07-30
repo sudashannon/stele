@@ -3,7 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSlug from 'rehype-slug'
 import GithubSlugger from 'github-slugger'
-import { fetchArtifactContent, summarizeDocument } from '../api/client'
+import { fetchArtifactContent, fetchCachedSummary, summarizeDocument } from '../api/client'
 import { DiagramBlock } from './DiagramBlock'
 import { ShareModal } from './ShareModal'
 import { Icon } from './icons'
@@ -148,7 +148,9 @@ interface Props {
 type SummaryState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; text: string }
+  // `auto` marks a summary restored from the cache on open rather than one the
+  // user just asked for: it must appear silently instead of yanking the scroll.
+  | { status: 'ready'; text: string; auto?: boolean }
   | { status: 'error'; message: string }
 
 export function MarkdownViewer({
@@ -202,6 +204,26 @@ export function MarkdownViewer({
     setSummary({ status: 'idle' })
   }, [path, body, refreshKey])
 
+  // Restore an already-generated summary when the document opens. This probes
+  // the read-only cache endpoint, never the generating one, so opening a
+  // document costs nothing; a miss simply leaves the 生成摘要 button waiting.
+  // No request id is minted here: the reset effect above owns the counter, so a
+  // response that lands after the reader moved on is discarded.
+  useEffect(() => {
+    if (!path) return
+    const requestId = summaryRequestRef.current
+    const controller = new AbortController()
+    fetchCachedSummary(path, controller.signal)
+      .then((text) => {
+        if (!text || summaryRequestRef.current !== requestId) return
+        setSummary({ status: 'ready', text, auto: true })
+      })
+      .catch(() => {
+        // A failed probe must stay silent — the manual button still works.
+      })
+    return () => controller.abort()
+  }, [path, body, refreshKey])
+
   useEffect(() => {
     if (!path) return
     const onKey = (event: KeyboardEvent) => {
@@ -249,8 +271,9 @@ export function MarkdownViewer({
   // exists. The optional call keeps jsdom (no scrollIntoView) happy.
   useEffect(() => {
     if (summary.status === 'idle') return
+    if (summary.status === 'ready' && summary.auto) return
     summaryRef.current?.scrollIntoView?.({ block: 'start' })
-  }, [summary.status])
+  }, [summary])
 
 
   if (!path && body === undefined) return null

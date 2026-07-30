@@ -202,6 +202,43 @@ describe('WikiGraph', () => {
     expect(screen.getByTestId('wiki-graph-visibility-summary').textContent).toContain('显示 3 / 3 节点')
   })
 
+  it('excludes vector, bm25, and tag edges from rendered connectivity and keeps tag-only nodes hidden in connected-only mode', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockGraphResponse(
+        [
+          { id: '/x/a.md', type: 'spec', title: 'A', path: '/x/a.md', workspace: 'miao' },
+          { id: '/x/b.md', type: 'plan', title: 'B', path: '/x/b.md', workspace: 'miao' },
+          { id: '/x/c.md', type: 'artifact', title: 'C', path: '/x/c.md', workspace: 'miao' },
+          { id: '/x/d.md', type: 'diagram', title: 'D', path: '/x/d.md', workspace: 'miao' },
+        ],
+        [
+          { from: '/x/a.md', to: '/x/b.md', kind: 'references', source: 'markdown-link' },
+          { from: '/x/b.md', to: '/x/c.md', kind: 'similar', source: 'vector' },
+          { from: '/x/a.md', to: '/x/c.md', kind: 'search-hit', source: 'bm25' },
+          { from: '/x/c.md', to: '/x/d.md', kind: 'shares-tag:alpha', source: 'tag', weight: 0.4 },
+        ],
+      ),
+    )
+    render(<WikiGraph onNodeClick={vi.fn()} />)
+
+    await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalledTimes(1))
+    const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
+      elements: Array<{ data: { id: string; source?: string; target?: string; kind?: string } }>
+      layout: { name: string }
+    }
+    expect(call.elements).toEqual([
+      { data: { id: '/x/a.md', label: 'A', color: 'rgb(234, 145, 31)', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/b.md', label: 'B', color: 'rgb(36, 161, 72)', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'rgb(36, 161, 72)' } },
+    ])
+    expect(call.elements.some((element) => element.data.source === '/x/b.md' && element.data.target === '/x/c.md')).toBe(false)
+    expect(call.elements.some((element) => element.data.source === '/x/a.md' && element.data.target === '/x/c.md')).toBe(false)
+    expect(call.elements.some((element) => element.data.source === '/x/c.md' && element.data.target === '/x/d.md')).toBe(false)
+    expect(call.elements.some((element) => element.data.kind?.startsWith('shares-tag:'))).toBe(false)
+    expect(call.layout.name).toBe('cose')
+    expect(screen.getByTestId('wiki-graph-visibility-summary').textContent).toContain('仅关联视图隐藏 2 个孤立节点')
+  })
+
   it('shows a hover tooltip with the node title and connected-edge highlight on mouseover', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockGraphResponse(

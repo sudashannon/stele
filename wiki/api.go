@@ -336,11 +336,12 @@ type semanticSearchRequest struct {
 // semanticSearchResult is one ranked hit: enough metadata for the frontend
 // to render a result row plus the cosine similarity score it was ranked by.
 type semanticSearchResult struct {
-	ID         string  `json:"id"`
-	Title      string  `json:"title"`
-	Workspace  string  `json:"workspace"`
-	Type       string  `json:"type"`
-	Similarity float64 `json:"similarity"`
+	ID         string   `json:"id"`
+	Title      string   `json:"title"`
+	Workspace  string   `json:"workspace"`
+	Type       string   `json:"type"`
+	Similarity float64  `json:"similarity"`
+	Tags       []string `json:"tags,omitempty"`
 }
 
 type semanticScoredResult struct {
@@ -348,6 +349,41 @@ type semanticScoredResult struct {
 	score       float64
 	lexicalRank int
 	typeOrder   int
+}
+
+// parseTagFilters splits `tag:foo bar` into the required tags and the
+// remaining free-text query. Required tags are matched case-insensitively and
+// conjunctively — `tag:kmc tag:pki` means both.
+func parseTagFilters(query string) (required []string, rest string) {
+	fields := strings.Fields(query)
+	kept := make([]string, 0, len(fields))
+	for _, field := range fields {
+		value := strings.TrimPrefix(strings.TrimPrefix(field, "tag:"), "标签:")
+		if value != field {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				required = append(required, strings.ToLower(trimmed))
+			}
+			continue
+		}
+		kept = append(kept, field)
+	}
+	return required, strings.Join(kept, " ")
+}
+
+func hasAllTags(tags []string, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	present := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		present[strings.ToLower(tag)] = true
+	}
+	for _, want := range required {
+		if !present[want] {
+			return false
+		}
+	}
+	return true
 }
 
 // HandleSemanticSearch combines filename/title matching with semantic
@@ -363,22 +399,29 @@ func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", 400)
 		return
 	}
-	query := strings.TrimSpace(req.Query)
-	if query == "" {
+	rawQuery := strings.TrimSpace(req.Query)
+	requiredTags, query := parseTagFilters(rawQuery)
+	query = strings.TrimSpace(query)
+	if query == "" && len(requiredTags) == 0 {
 		json.NewEncoder(w).Encode([]semanticSearchResult{})
 		return
 	}
 
 	// Embed the query using the same script the offline corpus build uses.
 	// If embedding fails, exact lexical matches can still be returned.
+	// A bare `tag:x` filter needs no query vector — skip the embed round-trip.
 	scriptPath := findEmbedScript()
-	queryComps := []Component{{ID: "__query__", Title: query, Path: ""}}
-	embedResult, err := ComputeEmbeddings(queryComps, scriptPath)
+	var embedResult map[string][]float32
+	var err error
+	if query != "" {
+		queryComps := []Component{{ID: "__query__", Title: query, Path: ""}}
+		embedResult, err = ComputeEmbeddings(queryComps, scriptPath)
+	}
 	var queryVec []float32
 	embedFailure := ""
 	if err != nil {
 		embedFailure = "embedding failed: " + err.Error()
-	} else {
+	} else if query != "" {
 		var ok bool
 		queryVec, ok = embedResult["__query__"]
 		if !ok || len(queryVec) == 0 {
@@ -391,7 +434,8 @@ func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 	components := a.graph.Components()
 	a.mu.RUnlock()
 
-	results := rankSemanticSearch(query, queryVec, components, embeddings)
+	taxonomy := LoadTaxonomy()
+	results := rankSemanticSearch(query, requiredTags, queryVec, components, embeddings, taxonomy)
 	if embedFailure != "" && len(results) == 0 {
 		http.Error(w, embedFailure, 500)
 		return
@@ -412,6 +456,7 @@ func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 			Workspace:  component.Workspace,
 			Type:       string(component.Type),
 			Similarity: result.score,
+			Tags:       EffectiveComponentTags(component, taxonomy),
 		})
 	}
 	json.NewEncoder(w).Encode(out)
@@ -420,6 +465,7 @@ func (a *API) HandleSemanticSearch(w http.ResponseWriter, r *http.Request) {
 const (
 	semanticExactFilenameMatch = iota
 	semanticExactTitleMatch
+	semanticExactTagMatch
 	semanticFilenamePrefixMatch
 	semanticTitlePrefixMatch
 	semanticFilenameSubstringMatch
@@ -427,24 +473,45 @@ const (
 	semanticNoLexicalMatch
 )
 
+// A query token that equals one of a document's tags is a real relevance
+// signal, but a weaker one than matching its name or title, so it only adds
+// score instead of promoting the result into a lexical tier.
+const semanticTagTokenBoost = 0.5
+
 const semanticSimilarityFloor = 0.12
 
-func rankSemanticSearch(query string, queryVec []float32, components map[string]Component, embeddings map[string][]float32) []semanticScoredResult {
+func rankSemanticSearch(query string, requiredTags []string, queryVec []float32, components map[string]Component, embeddings map[string][]float32, taxonomy *Taxonomy) []semanticScoredResult {
 	queryLower := strings.ToLower(strings.TrimSpace(query))
+	queryTokens := strings.Fields(queryLower)
 	queryNorm := vecNorm(queryVec)
 	results := make([]semanticScoredResult, 0, len(components))
 
 	for id, component := range components {
-		lexicalRank, lexicalBoost := semanticLexicalMatch(component, queryLower)
+		tags := EffectiveComponentTags(component, taxonomy)
+		if !hasAllTags(tags, requiredTags) {
+			continue
+		}
+		lexicalRank, lexicalBoost := semanticLexicalMatch(component, queryLower, tags)
+		tagBoost := 0.0
+		if lexicalRank != semanticExactTagMatch {
+			tagBoost = semanticTagTokenMatch(tags, queryTokens)
+		}
 		semanticScore := 0.0
 		if vector, ok := embeddings[id]; ok && len(queryVec) > 0 && len(vector) == len(queryVec) {
 			semanticScore = cosineSim(queryVec, vector, queryNorm, vecNorm(vector))
 		}
-		if lexicalRank == semanticNoLexicalMatch && semanticScore < semanticSimilarityFloor {
+		// A tag filter alone is a deliberate, exact request: keep every match
+		// even when nothing else scores. Otherwise a document still needs some
+		// lexical, tag or semantic signal to survive the noise floor.
+		keep := len(requiredTags) > 0 ||
+			lexicalRank != semanticNoLexicalMatch ||
+			tagBoost > 0 ||
+			semanticScore >= semanticSimilarityFloor
+		if !keep {
 			continue
 		}
 
-		score := math.Max(0, semanticScore) + lexicalBoost
+		score := math.Max(0, semanticScore) + lexicalBoost + tagBoost
 		score = math.Min(1, score)
 		results = append(results, semanticScoredResult{
 			id:          id,
@@ -469,10 +536,32 @@ func rankSemanticSearch(query string, queryVec []float32, components map[string]
 	return results
 }
 
-func semanticLexicalMatch(component Component, query string) (int, float64) {
+// semanticTagTokenMatch reports the boost earned when any whitespace-separated
+// query token equals one of the document's tags.
+func semanticTagTokenMatch(tags []string, queryTokens []string) float64 {
+	if len(tags) == 0 || len(queryTokens) == 0 {
+		return 0
+	}
+	for _, tag := range tags {
+		lowered := strings.ToLower(tag)
+		for _, token := range queryTokens {
+			if token == lowered {
+				return semanticTagTokenBoost
+			}
+		}
+	}
+	return 0
+}
+
+func semanticLexicalMatch(component Component, query string, tags []string) (int, float64) {
 	filename := strings.ToLower(filepath.Base(component.Path))
 	stem := strings.TrimSuffix(filename, filepath.Ext(filename))
 	title := strings.ToLower(strings.TrimSpace(component.Title))
+	for _, tag := range tags {
+		if query == strings.ToLower(strings.TrimSpace(tag)) {
+			return semanticExactTagMatch, 0.85
+		}
+	}
 
 	switch {
 	case query == filename || query == stem:
@@ -768,6 +857,29 @@ func (a *API) HandleSummarize(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"summary": summary})
+}
+
+// HandleCachedSummary answers "is there already a summary for this document?"
+// without ever calling the LLM: 200 with the text on a hit, 204 on a miss.
+// HandleSummarize cannot serve that question because a miss there generates
+// (and bills) a summary, so the viewer could not probe on open.
+func (a *API) HandleCachedSummary(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	a.mu.RLock()
+	c, ok := a.graph.Component(id)
+	a.mu.RUnlock()
+	if !ok {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	cacheDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "wiki", "summaries")
+	summary, hit := CachedSummary(c, cacheDir)
+	if !hit {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -107,12 +107,25 @@ edges, err := ExtractYAMLLinks(changeDir, projectRoot)
 
 新增 `wiki/community.go`:
 
-**算法**: 简化版 Louvain(无权图)
+**算法**: 多层加权 Louvain
 1. 初始每个节点自成社区
-2. 迭代:每个节点尝试移动到邻居社区,选 modularity gain 最大的
-3. 收敛后输出 `map[string]int` (Component ID → Community ID)
+2. local moving:每个节点尝试移动到邻居社区,选 modularity gain 最大的
+3. 收敛后把每个社区折叠成超节点(intra-community 权重变自环),在新图上重跑 —— 迭代至不再移动
+4. 输出 `map[string]int` (Component ID → Community ID)
 
-**输入**: Graph 的所有边(结构边 + 相似边都参与)
+**输入**: Graph 的所有边(结构边 + 相似边都参与),按来源加权:
+
+| 来源 | 权重 |
+|---|---|
+| `yaml` | 1.0 |
+| `convention-internal` | 0.9 |
+| `markdown-link` | 0.7 |
+| `slug-match` | 0.4 |
+| `vector` (cosine ∈ [0.5,1]) | 线性映射到 0.1-0.4 |
+
+同一对文档若同时存在多种来源的边,取**最强来源**(不累加);死链(端点不在索引内)不参与。
+
+**分辨率**: `CommunityResolution = 0.7`(γ<1 偏向更少更大的社区)
 
 **API 扩展**:
 ```json
@@ -124,9 +137,19 @@ GET /api/wiki/graph → {
 ```
 
 **约束**:
-- 社区 ≤2 节点的归入 community=-1 (杂项)
+- 只有**完全无边**的节点归入 community=-1 (未归类);连通的小社区照常保留
 - rebuild 时执行,结果缓存在 Graph struct
-- ~150 行 Go 代码
+- `Modularity(g, communities, γ)` 导出,供分区质量前后对比
+
+**线上实测(1453 篇 / 5493 边)**:
+
+| 指标 | 单层无权 | 多层加权 γ=0.7 |
+|---|---|---|
+| 社区数 | 276 | 26 |
+| 未归类 | 184 (12.7%) | 18 (1.2%) |
+| 最大社区占比 | 1.86% | 13.97% |
+| ≤3 篇的社区 | 118 | 6 |
+| 模块度 Q | 0.4520 | 0.8381 |
 
 ### 4.3 前端分组布局
 

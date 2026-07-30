@@ -1,0 +1,148 @@
+# 受控词表 (controlled vocabulary)
+#
+# tag 有两个用途，阈值不同：
+#   - 检索/筛选：词表内的 tag 全部可用，覆盖多少篇都无所谓（用户就是想按产品线筛）
+#   - 建边/聚类：只有 facet 允许 (edges: true) 且覆盖率落在 [edgeMinDocs, edgeMaxShare]
+#     区间内的 tag 才能建边。`rx101` 覆盖 178 篇，按产品筛很有用，连成一块毫无意义。
+#
+# 每个 canonical tag 后面跟别名列表；大小写及 `-`/`_`/`.`/空白分隔符在读取时折叠。
+# frontmatter 里不在词表内的 tag 仍然保留用于检索显示，只是不参与建边。
+
+edgeMinDocs: 3
+edgeMaxShare: 0.035
+
+facets:
+  # 产品线 / 项目。值少、覆盖广，用于筛选而非建边。
+  product:
+    edges: false
+    tags:
+      rx101: []
+      lz100: []
+      wan22: [wan2-2]
+      cosmos3: [cosmos]
+      comet: []
+      x5: []
+      oasis: []
+      argos: []
+  # 硬件 / 运行平台。具体型号有区分度，过宽的靠覆盖率挡住。
+  platform:
+    edges: true
+    tags:
+      orin: [agx-orin, jetson-orin, orin-nx, orin-nano]
+      jetson: []
+      cq8750s: []
+      aarch64: [arm64]
+      l4t: []
+      bsp: []
+      qcom: [qualcomm]
+      mcu: []
+      gmsl: []
+
+  # 子系统 / 模块。建边的主力：共享子系统基本等同于同主题。
+  subsystem:
+    edges: true
+    tags:
+      # 通信与传输
+      pcie: []
+      md-bus: [mdbus]
+      zenoh: []
+      iceoryx2: [iceoryx]
+      rpc: []
+      pubsub: [pub-sub]
+      idl: []
+      qos: []
+      zerocopy: [zero-copy]
+      xchip: [x-chip]
+      xproc: []
+      xmemory: [xmem]
+      muml: [md-muml]
+      nvstream: [md-nvstream]
+      wifi: [wi-fi]
+      bt: [bluetooth]
+      sipl: []
+      uddf: []
+      camera: []
+      # 安全与密钥
+      kmc: []
+      kms: []
+      ca: []
+      ta: []
+      keymanager: [key-manager]
+      pki: []
+      avb: []
+      bl2: []
+      uefi: []
+      efuse: [libefuse]
+      mtls: []
+      subca: [sub-ca]
+      pubkey: [pub-key]
+      selfsign: [self-sign]
+      activation: []
+      provisioning: []
+      ras: []
+      dtb: []
+      # 模型与推理
+      trt: [tensorrt]
+      snn: []
+      vae: []
+      mllm: []
+      dit: []
+      sdpa: []
+      quant: [quantization, int8, w4a16]
+      cutlass: []
+      marlin: []
+      ggml: []
+      taehv: []
+      residual: []
+      # 运行时与构建
+      cdr: []
+      cache: []
+      dma: []
+      iommu: []
+      memref: [mem-ref]
+      flash: []
+      fastboot: []
+      kleaf: []
+      yocto: []
+      monorepo: []
+      rust: []
+      pkgmgr: [pkg-mgr]
+      slt: []
+
+  # 活动。跨主题（`test` 遍布所有产品），只用于筛选。
+  activity:
+    edges: false
+    tags:
+      build: []
+      test: [tests, testing]
+      deploy: [deployment]
+      verification: [verify]
+      migration: []
+      hardening: []
+      bringup: [bring-up]
+      remediation: []
+      benchmark: [bench]
+      audit: []
+      debug: []
+      refactor: []
+      opt: [optimization]
+      training: []
+      calib: [calibration]
+      handoff: []
+      smoke: []
+      e2e: []
+      conformance: []
+      feasibility: []
+      diagnosis: []
+      mitigation: []
+      stress: []
+
+  # 状态。
+  state:
+    edges: false
+    tags:
+      production: [prod]
+      baseline: []
+      poc: []
+      abandoned: []
+      p0: []

@@ -28,8 +28,9 @@ type Component struct {
 }
 
 type Edge struct {
-	From   string `json:"from"`
-	To     string `json:"to"`     // Component.ID
-	Kind   string `json:"kind"`   // references | implements | generates | traces-back | supersedes
-	Source string `json:"source"` // "yaml" (highest confidence) | "markdown-link" | "slug-match" (lint-only)
+	From   string  `json:"from"`
+	To     string  `json:"to"`     // Component.ID
+	Kind   string  `json:"kind"`   // references | implements | generates | traces-back | supersedes
+	Source string  `json:"source"` // "yaml" (highest confidence) | "markdown-link" | "slug-match" (lint-only)
+	Weight float64 `json:"weight,omitempty"`
 }

@@ -86,7 +86,7 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
-        placeholder="按含义、标题或文件名搜索…"
+        placeholder="按含义、标题或文件名搜索…（tag:KMC 可按标签筛选）"
         aria-label="语义搜索"
         className="w-full border border-[var(--color-border)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
       />
@@ -148,6 +148,18 @@ export function SemanticSearch({ onNodeClick }: SemanticSearchProps) {
                   <span className="block truncate font-medium">{item.title}</span>
                   {filename !== item.title && (
                     <span className="block truncate text-xs text-[var(--color-text-secondary)]">{filename}</span>
+                  )}
+                  {item.tags && item.tags.length > 0 && (
+                    <span data-testid="search-result-tags" className="mt-1 flex flex-wrap gap-1">
+                      {item.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-1.5 py-0.5 text-xs leading-none text-[var(--color-text-secondary)]"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </span>
                   )}
                 </span>
                 <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>

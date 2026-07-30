@@ -129,12 +129,52 @@ describe('MarkdownViewer', () => {
     await waitFor(() => expect(section.textContent).toContain('摘要正文'))
   })
 
+  it('restores an already cached summary when the document opens, without generating one', async () => {
+    const calls: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/api/wiki/summary?')) {
+        return { ok: true, status: 200, json: async () => ({ summary: '缓存里的摘要' }) } as Response
+      }
+      return { ok: true, text: async () => '# Hello\n\nbody' } as Response
+    })
+
+    render(<MarkdownViewer path="/x/design.md" onClose={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByTestId('markdown-summary').textContent).toContain('缓存里的摘要'))
+    // The read-only endpoint answers the probe; the generating one is untouched.
+    expect(calls.some((url) => url.includes('/api/wiki/summary?'))).toBe(true)
+    expect(calls.some((url) => url.includes('/api/wiki/summarize'))).toBe(false)
+  })
+
+  it('keeps the summary hidden when nothing is cached yet', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.includes('/api/wiki/summary?')) {
+        return { ok: false, status: 204, json: async () => ({}) } as Response
+      }
+      return { ok: true, text: async () => '# Hello\n\nbody' } as Response
+    })
+
+    render(<MarkdownViewer path="/x/design.md" onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Hello' })).toBeTruthy())
+    expect(screen.queryByTestId('markdown-summary')).toBeNull()
+    expect(screen.getByTestId('summary-btn').textContent).toContain('生成摘要')
+  })
+
   it('clears the previous summary and ignores its stale response when refreshing document content', async () => {
     let contentRequest = 0
     const summaryResponse = Promise.withResolvers<Response>()
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
-      if (String(input).includes('/api/wiki/summarize')) {
+      const url = String(input)
+      if (url.includes('/api/wiki/summarize')) {
         return summaryResponse.promise
+      }
+      // The viewer also probes the read-only summary cache on open; it must not
+      // be counted as a content fetch.
+      if (url.includes('/api/wiki/summary?')) {
+        return Promise.resolve({ ok: false, status: 204, json: async () => ({}) } as Response)
       }
       contentRequest += 1
       return Promise.resolve({

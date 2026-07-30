@@ -19,12 +19,15 @@ type incrementalChange struct {
 // IncrementalUpdate processes a batch of changed file paths and updates the
 // graph in-place without a full workspace scan.
 func (a *API) IncrementalUpdate(changedFiles []string) error {
-	if a.sourceRequiresFullRebuild(changedFiles) {
+	if a.sourceRequiresFullRebuild(changedFiles) || containsChangeMetadata(changedFiles) {
 		return a.Rebuild()
 	}
 	changes, err := a.classifyChanges(changedFiles)
 	if err != nil {
 		return err
+	}
+	if a.prepareIncrementalTagChanges(changes, LoadTaxonomy()) {
+		return a.Rebuild()
 	}
 	if len(changes) == 0 {
 		return nil
@@ -114,7 +117,13 @@ func (a *API) IncrementalUpdate(changedFiles []string) error {
 
 	plannedEdges := make(map[string][]Edge, len(a.graph.Components()))
 	for source, edges := range changedEdges {
-		plannedEdges[source] = append([]Edge(nil), edges...)
+		retainedTagEdges := make([]Edge, 0)
+		for _, edge := range a.graph.Forward(source) {
+			if edge.Source == "tag" {
+				retainedTagEdges = append(retainedTagEdges, edge)
+			}
+		}
+		plannedEdges[source] = append(retainedTagEdges, edges...)
 	}
 	for source := range conventionSources {
 		if _, exists := a.graph.Component(source); !exists {
@@ -161,6 +170,43 @@ func (a *API) IncrementalUpdate(changedFiles []string) error {
 		}
 	}
 	return nil
+}
+
+func containsChangeMetadata(paths []string) bool {
+	for _, path := range paths {
+		if filepath.Base(filepath.Clean(path)) == ".comet.yaml" {
+			return true
+		}
+	}
+	return false
+}
+
+// prepareIncrementalTagChanges rejects updates that can change effective tags
+// or corpus membership. Safe replacements retain the graph's in-memory
+// provenance so a content-only update has the same effective tags as a full
+// build without writing synthetic frontmatter back to the source document.
+func (a *API) prepareIncrementalTagChanges(changes []incrementalChange, taxonomy *Taxonomy) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	for i := range changes {
+		change := &changes[i]
+		existing, exists := a.graph.Component(change.path)
+		if change.component == nil {
+			if exists {
+				return true
+			}
+			continue
+		}
+		if !exists ||
+			existing.Type != change.component.Type ||
+			existing.Path != change.component.Path ||
+			!sameTagInputs(existing, *change.component, taxonomy) {
+			return true
+		}
+		copySyntheticTags(change.component, existing)
+	}
+	return false
 }
 
 func (a *API) classifyChanges(changedFiles []string) ([]incrementalChange, error) {
@@ -424,10 +470,10 @@ func changedEdgeCount(before, after []Edge) int {
 	return changed
 }
 
-func edgeSet(edges []Edge) map[Edge]struct{} {
-	set := make(map[Edge]struct{}, len(edges))
+func edgeSet(edges []Edge) map[edgeIdentity]struct{} {
+	set := make(map[edgeIdentity]struct{}, len(edges))
 	for _, edge := range edges {
-		set[edge] = struct{}{}
+		set[identityOfEdge(edge)] = struct{}{}
 	}
 	return set
 }

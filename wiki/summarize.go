@@ -17,22 +17,38 @@ func summaryCachePath(cacheDir, componentID string) string {
 	return filepath.Join(cacheDir, hex.EncodeToString(h[:])[:16]+".md")
 }
 
+// CachedSummary returns a previously generated summary when one exists and is
+// still newer than the source file, without ever calling the LLM. The viewer
+// needs this: it wants to show an existing summary the moment a document
+// opens, and it cannot use Summarize for that because a cache miss there
+// silently bills a generation for every document you merely look at.
+func CachedSummary(c Component, cacheDir string) (string, bool) {
+	cachePath := summaryCachePath(cacheDir, c.ID)
+	cacheInfo, err := os.Stat(cachePath)
+	if err != nil {
+		return "", false
+	}
+	srcInfo, err := os.Stat(c.Path)
+	if err != nil {
+		return "", false
+	}
+	if !cacheInfo.ModTime().After(srcInfo.ModTime()) {
+		return "", false
+	}
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
 // Summarize returns a cached LLM summary if it exists and is newer than the
 // source file's mtime; otherwise it calls the currently-active chat
 // provider (same config the Chat feature uses — no separate LLM plumbing)
 // and persists the result.
 func Summarize(ctx context.Context, c Component, cacheDir string) (string, error) {
-	cachePath := summaryCachePath(cacheDir, c.ID)
-
-	if cacheInfo, err := os.Stat(cachePath); err == nil {
-		if srcInfo, err := os.Stat(c.Path); err == nil {
-			if cacheInfo.ModTime().After(srcInfo.ModTime()) {
-				data, err := os.ReadFile(cachePath)
-				if err == nil {
-					return string(data), nil
-				}
-			}
-		}
+	if cached, ok := CachedSummary(c, cacheDir); ok {
+		return cached, nil
 	}
 
 	summary, err := generateSummary(ctx, c)
@@ -43,7 +59,7 @@ func Summarize(ctx context.Context, c Component, cacheDir string) (string, error
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(cachePath, []byte(summary), 0644); err != nil {
+	if err := os.WriteFile(summaryCachePath(cacheDir, c.ID), []byte(summary), 0644); err != nil {
 		return "", err
 	}
 	return summary, nil

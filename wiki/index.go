@@ -109,10 +109,13 @@ func BuildIndex(workspaces []WorkspaceConfig, indexCacheDir string) (*Graph, err
 	}
 	allEdges = append(allEdges, simEdges...)
 
+	taxonomy := LoadTaxonomy()
+	EnrichComponentTags(allComponents, allEdges, taxonomy)
+	allEdges = append(allEdges, ComputeTagEdges(allComponents, taxonomy)...)
 	g := BuildGraph(allComponents, allEdges)
 	g.SetEmbeddingEntries(embeddingEntries)
 	g.SetCommunities(DetectCommunities(g))
-	g.SetCommunityLabels(CommunityLabels(allComponents, g.Communities(), embeddings))
+	g.SetCommunityLabels(CommunityLabels(allComponents, g.Communities()))
 	g.SetFailedWorkspaces(failedWorkspaces)
 	if indexCacheDir != "" {
 		persistIndexCache(indexCacheDir, allComponents, allEdges) // best-effort, errors logged not returned
@@ -184,11 +187,21 @@ func persistIndexCache(dir string, components []Component, edges []Edge) {
 		log.Printf("wiki: could not create index cache dir %s: %v", dir, err)
 		return
 	}
-	if data, err := json.MarshalIndent(components, "", "  "); err == nil {
-		os.WriteFile(filepath.Join(dir, "index.json"), data, 0644)
+	cacheComponents := make([]Component, len(components))
+	for i, component := range components {
+		cacheComponents[i] = stripSyntheticTags(component)
 	}
-	if data, err := json.MarshalIndent(edges, "", "  "); err == nil {
-		os.WriteFile(filepath.Join(dir, "graph.json"), data, 0644)
+	indexPath := filepath.Join(dir, "index.json")
+	if data, err := json.MarshalIndent(cacheComponents, "", "  "); err != nil {
+		log.Printf("wiki: could not marshal index cache %s: %v", indexPath, err)
+	} else if err := os.WriteFile(indexPath, data, 0644); err != nil {
+		log.Printf("wiki: could not write index cache %s: %v", indexPath, err)
+	}
+	graphPath := filepath.Join(dir, "graph.json")
+	if data, err := json.MarshalIndent(edges, "", "  "); err != nil {
+		log.Printf("wiki: could not marshal graph cache %s: %v", graphPath, err)
+	} else if err := os.WriteFile(graphPath, data, 0644); err != nil {
+		log.Printf("wiki: could not write graph cache %s: %v", graphPath, err)
 	}
 }
 

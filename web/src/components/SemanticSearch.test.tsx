@@ -42,6 +42,29 @@ describe('SemanticSearch', () => {
     expect(rows[0].textContent).toContain('Matching Doc')
   })
 
+  it('renders the frontmatter tags carried by a result', async () => {
+    vi.mocked(searchSemantic).mockResolvedValue([
+      { id: 'tagged', title: 'PCIe Endpoint Mode', workspace: 'rx101', type: 'knowledge', similarity: 0.9, tags: ['RX101', 'PCIe'] },
+      { id: 'untagged', title: 'No Tags Doc', workspace: 'rx101', type: 'knowledge', similarity: 0.5 },
+    ])
+
+    render(<SemanticSearch onNodeClick={() => {}} />)
+    fireEvent.change(screen.getByLabelText('语义搜索'), { target: { value: 'pcie' } })
+
+    await waitFor(() => expect(screen.getByText('PCIe Endpoint Mode')).toBeTruthy(), { timeout: 2000 })
+    const tagGroups = screen.getAllByTestId('search-result-tags')
+    // Only the tagged result renders a tag row.
+    expect(tagGroups).toHaveLength(1)
+    expect(tagGroups[0].textContent).toContain('RX101')
+    expect(tagGroups[0].textContent).toContain('PCIe')
+  })
+
+  it('advertises the tag: filter in the placeholder', () => {
+    vi.mocked(searchSemantic).mockResolvedValue([])
+    render(<SemanticSearch onNodeClick={() => {}} />)
+    expect((screen.getByLabelText('语义搜索') as HTMLInputElement).placeholder).toContain('tag:')
+  })
+
   it('calls onNodeClick with the component id when a result is clicked', async () => {
     vi.mocked(searchSemantic).mockResolvedValue(buildResults())
     const onNodeClick = vi.fn()

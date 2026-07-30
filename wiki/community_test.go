@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -75,9 +76,10 @@ func TestDetectCommunities_DisconnectedNodeIsMisc(t *testing.T) {
 	if got["lonely"] != -1 {
 		t.Fatalf("expected lonely node to be misc (-1), got %d", got["lonely"])
 	}
-	// a-b is a community of size 2, which is also <= 2, so it should be misc too.
-	if got["a"] != -1 {
-		t.Fatalf("expected 2-member community to be misc (-1), got %d", got["a"])
+	// A connected pair is a real community: collapsing every cluster of <= 2
+	// into misc hid fragmentation instead of reporting it.
+	if got["a"] < 0 || got["a"] != got["b"] {
+		t.Fatalf("expected connected pair a,b to form one real community, got %+v", got)
 	}
 }
 
@@ -115,7 +117,7 @@ func TestCommunityLabels_PicksDistinctiveTerm(t *testing.T) {
 		"c": 1, "d": 1,
 	}
 
-	labels := CommunityLabels(components, communities, nil)
+	labels := CommunityLabels(components, communities)
 
 	label, ok := labels[0]
 	if !ok {
@@ -137,7 +139,7 @@ func TestCommunityLabels_SkipsMiscCommunity(t *testing.T) {
 		"a": 0, "b": 0, "c": -1,
 	}
 
-	labels := CommunityLabels(components, communities, nil)
+	labels := CommunityLabels(components, communities)
 
 	if _, ok := labels[-1]; ok {
 		t.Fatalf("expected no label for misc community -1, got %+v", labels)
@@ -147,30 +149,187 @@ func TestCommunityLabels_SkipsMiscCommunity(t *testing.T) {
 	}
 }
 
-func TestCommunityLabels_VectorCentroid(t *testing.T) {
+func TestCommunityLabels_CombinesSeveralTermsNotOneTitle(t *testing.T) {
 	comps := []Component{
-		{ID: "a", Title: "安全设计"},
-		{ID: "b", Title: "安全实施"},
-		{ID: "c", Title: "OTA 升级"},
+		{ID: "a", Title: "PKI 密钥管理设计"},
+		{ID: "b", Title: "PKI 证书签发实施"},
+		{ID: "c", Title: "OTA 升级回滚"},
+		{ID: "d", Title: "OTA 升级校验"},
 	}
-	communities := map[string]int{"a": 0, "b": 0, "c": 0}
-	// a and b similar vectors, c different
+	communities := map[string]int{"a": 0, "b": 0, "c": 1, "d": 1}
+
+	labels := CommunityLabels(comps, communities)
+
+	for commID, label := range labels {
+		if !strings.Contains(label, " · ") {
+			t.Errorf("community %d: expected a multi-term label, got %q", commID, label)
+		}
+		for _, c := range comps {
+			if label == c.Title {
+				t.Errorf("community %d: label is a raw member title %q, not a theme", commID, label)
+			}
+		}
+	}
+	if labels[0] == labels[1] {
+		t.Errorf("distinct communities must not share a label, both got %q", labels[0])
+	}
+}
+
+// TestDetectCommunities_StrongEdgeBeatsSeveralWeakOnes pins the weighting: one
+// authored yaml link outranks two statistical cosine neighbours, which the
+// previous unweighted implementation could not express.
+func TestDetectCommunities_StrongEdgeBeatsSeveralWeakOnes(t *testing.T) {
+	components := []Component{
+		{ID: "hub", Title: "Hub"},
+		{ID: "a1", Title: "A1"}, {ID: "a2", Title: "A2"},
+		{ID: "b1", Title: "B1"}, {ID: "b2", Title: "B2"},
+		{ID: "x", Title: "X"},
+	}
+	edges := []Edge{
+		// Cluster A, authored.
+		{From: "hub", To: "a1", Kind: "implements", Source: "yaml"},
+		{From: "hub", To: "a2", Kind: "implements", Source: "yaml"},
+		{From: "a1", To: "a2", Kind: "references", Source: "yaml"},
+		// Cluster B, statistical only.
+		{From: "b1", To: "b2", Kind: "similar", Source: "vector"},
+		// x has one authored edge into A and two cosine edges into B.
+		{From: "x", To: "hub", Kind: "references", Source: "yaml"},
+		{From: "x", To: "b1", Kind: "similar", Source: "vector"},
+		{From: "x", To: "b2", Kind: "similar", Source: "vector"},
+	}
+	g := BuildGraph(components, edges)
+
+	got := DetectCommunities(g)
+
+	if got["x"] != got["hub"] {
+		t.Fatalf("expected x to follow its authored yaml edge into the hub community, got %+v", got)
+	}
+	if got["x"] == got["b1"] {
+		t.Fatalf("expected x not to be pulled into the vector-only cluster, got %+v", got)
+	}
+}
+
+func TestEdgeWeightExplicitAndLegacyBehavior(t *testing.T) {
 	embeddings := map[string][]float32{
-		"a": make([]float32, 384),
-		"b": make([]float32, 384),
-		"c": make([]float32, 384),
+		"a": {1, 0},
+		"b": {1, 0},
 	}
-	for i := range 100 {
-		embeddings["a"][i] = 1.0
-		embeddings["b"][i] = 0.95
+	tests := []struct {
+		name string
+		edge Edge
+		want float64
+	}{
+		{
+			name: "explicit tag weight",
+			edge: Edge{From: "a", To: "b", Kind: "shares-tag:orin", Source: "tag", Weight: 0.37},
+			want: 0.37,
+		},
+		{
+			name: "explicit weight precedes vector cosine",
+			edge: Edge{From: "a", To: "b", Kind: "similar", Source: "vector", Weight: 0.23},
+			want: 0.23,
+		},
+		{
+			name: "zero weight yaml retains provenance default",
+			edge: Edge{From: "a", To: "b", Kind: "references", Source: "yaml"},
+			want: edgeWeightYAML,
+		},
+		{
+			name: "zero weight vector retains cosine behavior",
+			edge: Edge{From: "a", To: "b", Kind: "similar", Source: "vector"},
+			want: vectorEdgeMaxWeight,
+		},
+		{
+			name: "zero weight markdown retains provenance default",
+			edge: Edge{From: "a", To: "b", Kind: "references", Source: "markdown-link"},
+			want: edgeWeightMarkdownLink,
+		},
 	}
-	for i := 200; i < 300; i++ {
-		embeddings["c"][i] = 1.0
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := edgeWeight(test.edge, embeddings); got != test.want {
+				t.Fatalf("edgeWeight(%+v) = %v, want %v", test.edge, got, test.want)
+			}
+		})
 	}
-	labels := CommunityLabels(comps, communities, embeddings)
-	// Label should be one of the security titles (closer to centroid)
-	label := labels[0]
-	if label != "安全设计" && label != "安全实施" {
-		t.Errorf("expected security-related label, got %q", label)
+}
+
+func TestGraphAdjacencyCollapsesParallelEvidenceToStrongestWeight(t *testing.T) {
+	components := []Component{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	graph := BuildGraph(components, []Edge{
+		{From: "a", To: "b", Kind: "shares-tag:orin", Source: "tag", Weight: 0.4},
+		{From: "b", To: "a", Kind: "references", Source: "yaml"},
+		{From: "a", To: "b", Kind: "similar", Source: "vector", Weight: 0.2},
+		{From: "b", To: "c", Kind: "similar", Source: "vector", Weight: 0.1},
+		{From: "c", To: "b", Kind: "shares-tag:pcie", Source: "tag", Weight: 0.3},
+	})
+
+	adjacency := graphAdjacency(graph)
+	if got := adjacency.adj["a"]["b"]; got != edgeWeightYAML {
+		t.Fatalf("authored YAML must beat weaker tag and vector evidence, got %v", got)
+	}
+	if got := adjacency.adj["b"]["c"]; got != 0.3 {
+		t.Fatalf("tag evidence must beat weaker vector evidence, got %v", got)
+	}
+	if got := adjacency.total2m; got != 2*(edgeWeightYAML+0.3) {
+		t.Fatalf("parallel evidence was summed instead of collapsed: total2m=%v", got)
+	}
+}
+
+// TestDetectCommunities_AggregatesAcrossLevels pins the multi-level pass: a
+// chain of triangles must not survive as one community per triangle, which is
+// exactly what the previous single-level implementation produced.
+func TestDetectCommunities_AggregatesAcrossLevels(t *testing.T) {
+	var components []Component
+	var edges []Edge
+	const triangles = 6
+	for i := range triangles {
+		ids := [3]string{
+			fmt.Sprintf("t%d-a", i), fmt.Sprintf("t%d-b", i), fmt.Sprintf("t%d-c", i),
+		}
+		for _, id := range ids {
+			components = append(components, Component{ID: id, Title: strings.ToUpper(id)})
+		}
+		edges = append(edges,
+			Edge{From: ids[0], To: ids[1], Kind: "references", Source: "yaml"},
+			Edge{From: ids[1], To: ids[2], Kind: "references", Source: "yaml"},
+			Edge{From: ids[2], To: ids[0], Kind: "references", Source: "yaml"},
+		)
+		if i > 0 {
+			edges = append(edges, Edge{
+				From: fmt.Sprintf("t%d-a", i-1), To: ids[0], Kind: "references", Source: "yaml",
+			})
+		}
+	}
+	g := BuildGraph(components, edges)
+
+	got := DetectCommunities(g)
+
+	distinct := map[int]bool{}
+	for _, comm := range got {
+		distinct[comm] = true
+	}
+	if len(distinct) >= triangles {
+		t.Fatalf("expected triangles to merge across levels, got %d communities for %d triangles: %+v",
+			len(distinct), triangles, got)
+	}
+	if len(distinct) < 2 {
+		t.Fatalf("expected more than one community for a %d-triangle chain, got %+v", triangles, got)
+	}
+}
+
+func TestModularity_ScoresCorrectPartitionHigher(t *testing.T) {
+	g := buildClusteredGraph()
+
+	correct := map[string]int{"a": 0, "b": 0, "c": 0, "d": 1, "e": 1, "f": 1}
+	scrambled := map[string]int{"a": 0, "b": 1, "c": 0, "d": 1, "e": 0, "f": 1}
+
+	good := Modularity(g, correct, CommunityResolution)
+	bad := Modularity(g, scrambled, CommunityResolution)
+	if good <= bad {
+		t.Fatalf("expected the correct partition to score higher, got %.4f vs %.4f", good, bad)
+	}
+	if detected := Modularity(g, DetectCommunities(g), CommunityResolution); detected < good {
+		t.Fatalf("detection scored %.4f below the hand-written partition %.4f", detected, good)
 	}
 }

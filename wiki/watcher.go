@@ -373,7 +373,7 @@ func (w *Watcher) redetectCommunities() {
 	for _, c := range components {
 		comps = append(comps, c)
 	}
-	g.SetCommunityLabels(CommunityLabels(comps, g.Communities(), g.Embeddings()))
+	g.SetCommunityLabels(CommunityLabels(comps, g.Communities()))
 	w.api.ResetDirty()
 	log.Printf("wiki watcher: communities re-detected")
 }

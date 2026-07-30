@@ -299,6 +299,8 @@ export interface SemanticSearchResult {
   workspace: string
   type: string
   similarity: number
+  /** Frontmatter tags, omitted by the backend when a document has none. */
+  tags?: string[]
 }
 
 // searchSemantic is the semantic-search data source: the backend embeds the
@@ -329,6 +331,18 @@ export async function searchSemantic(
     throw new Error(detail || `searchSemantic failed: ${res.status}`)
   }
   return res.json()
+}
+
+// fetchCachedSummary asks whether a summary already exists (204 = no) without
+// generating one. summarizeDocument cannot answer that: a cache miss there
+// calls the LLM, so the viewer could not probe on open without billing a
+// generation for every document merely opened.
+export async function fetchCachedSummary(path: string, signal?: AbortSignal): Promise<string | null> {
+  const res = await fetch('/api/wiki/summary?id=' + encodeURIComponent(path), { signal })
+  if (res.status === 204 || res.status === 404) return null
+  if (!res.ok) throw new Error(`fetchCachedSummary failed: ${res.status}`)
+  const body = (await res.json()) as { summary?: string }
+  return body.summary?.trim() ? body.summary : null
 }
 
 // summarizeDocument reaches GET /api/wiki/summarize, an LLM summary cached

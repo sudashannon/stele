@@ -64,6 +64,7 @@ export interface WikiEdge {
   to: string
   kind: string
   source: string
+  weight?: number
 }
 
 export interface WikiComponentResponse {
