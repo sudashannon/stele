@@ -65,7 +65,16 @@ func (m *Mirror) Init() error {
 // to that workspace's root; together they determine the mirrored file's
 // location under repoDir. Queuing resets the debounce timer so a burst of
 // changes collapses into a single commit once things settle.
+//
+// relPath must already be workspace-relative. An absolute or escaping
+// relPath is refused rather than mirrored: the mirror repo is pushed to a
+// remote, so a path outside the workspace would publish a file the user
+// never registered.
 func (m *Mirror) SyncFile(workspace, srcPath, relPath string) {
+	if !mirrorableRelPath(relPath) {
+		log.Printf("wiki mirror: refusing to mirror %s (path escapes workspace %q)", srcPath, workspace)
+		return
+	}
 	destRel := filepath.Join(workspace, relPath)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -77,21 +86,54 @@ func (m *Mirror) SyncFile(workspace, srcPath, relPath string) {
 // called after a full index rebuild so the mirror reflects the complete,
 // current set of documents rather than only ones the watcher happened to
 // see change (e.g. the initial sync after startup).
+//
+// Components that are not workspace documents are skipped: session
+// components point at raw agent transcripts (hundreds of MB, containing
+// tool output and credentials) that must never reach the mirror's remote.
 func (m *Mirror) SyncAll(components map[string]Component, workspaces []WorkspaceConfig) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	queued := 0
 	for _, c := range components {
-		destRel := filepath.Join(c.Workspace, relativeToWorkspace(c.Path, c.Workspace, workspaces))
-		m.pending[c.Path] = destRel
+		if !MirrorableComponent(c) {
+			continue
+		}
+		rel := relativeToWorkspace(c.Path, c.Workspace, workspaces)
+		if !mirrorableRelPath(rel) {
+			log.Printf("wiki mirror: refusing to mirror %s (path escapes workspace %q)", c.Path, c.Workspace)
+			continue
+		}
+		m.pending[c.Path] = filepath.Join(c.Workspace, rel)
+		queued++
 	}
-	if len(components) > 0 {
+	if queued > 0 {
 		m.resetTimerLocked()
 	}
 }
 
+// MirrorableComponent reports whether a component is a workspace document
+// that belongs in the knowledge mirror. Synthetic components derived from
+// agent state are excluded.
+func MirrorableComponent(c Component) bool {
+	return c.Type != TypeSession
+}
+
+// mirrorableRelPath fails closed on anything that is not a plain relative
+// path inside the workspace root.
+func mirrorableRelPath(rel string) bool {
+	if rel == "" || filepath.IsAbs(rel) {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
 // relativeToWorkspace computes a component path relative to the source's
 // stable project root. OpenSpec uses the parent of openspec/; Trellis uses
-// the registered repository root.
+// the registered repository root. It returns "" when the path lies outside
+// that root so callers fail closed instead of mirroring an absolute path.
 func relativeToWorkspace(path, alias string, workspaces []WorkspaceConfig) string {
 	for _, workspace := range workspaces {
 		if workspace.Alias != alias {
@@ -99,12 +141,12 @@ func relativeToWorkspace(path, alias string, workspaces []WorkspaceConfig) strin
 		}
 		root := source.MirrorRoot(workspace)
 		rel, err := filepath.Rel(root, path)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if err == nil && mirrorableRelPath(rel) {
 			return rel
 		}
 		break
 	}
-	return path
+	return ""
 }
 
 // resetTimerLocked (re)starts the debounce timer. Caller must hold m.mu.

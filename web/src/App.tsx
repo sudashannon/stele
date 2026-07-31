@@ -34,6 +34,7 @@ const LazyLintPanel = lazy(() => import('./components/LintPanel').then(({ LintPa
 const LazyMarkdownViewer = lazy(() => import('./components/MarkdownViewer').then(({ MarkdownViewer }) => ({ default: MarkdownViewer })))
 const LazyRecentPanel = lazy(() => import('./components/RecentPanel').then(({ RecentPanel }) => ({ default: RecentPanel })))
 const LazyReportView = lazy(() => import('./components/ReportView').then(({ ReportView }) => ({ default: ReportView })))
+const LazySessionDetail = lazy(() => import('./components/SessionDetail').then(({ SessionDetail }) => ({ default: SessionDetail })))
 const LazySemanticSearch = lazy(() => import('./components/SemanticSearch').then(({ SemanticSearch }) => ({ default: SemanticSearch })))
 const LazyShareList = lazy(() => import('./components/ShareList').then(({ ShareList }) => ({ default: ShareList })))
 const LazyTodoPanel = lazy(() => import('./components/TodoPanel').then(({ TodoPanel }) => ({ default: TodoPanel })))
@@ -402,14 +403,17 @@ export default function App() {
     return counts
   }, [todos])
 
+  const viewerComponent = useMemo(
+    () => (viewerPath ? wikiComponents.find((component) => component.path === viewerPath || component.id === viewerPath) ?? null : null),
+    [viewerPath, wikiComponents],
+  )
+
   const viewerTodoContext = useMemo((): TodoContext => {
     if (!viewerPath) {
       return { wikiComponent: null, changeName: null, changeWorkspace: null }
     }
 
-    const wikiComponent =
-      wikiComponents.find((component) => component.path === viewerPath || component.id === viewerPath) ??
-      null
+    const wikiComponent = viewerComponent
     let changeName: string | null = null
     let changeWorkspace: string | null = null
 
@@ -431,7 +435,7 @@ export default function App() {
     }
 
     return { wikiComponent, changeName, changeWorkspace }
-  }, [changes, viewerPath, wikiComponents])
+  }, [changes, viewerComponent, viewerPath])
 
   const createTodoFromViewer = useCallback(() => {
     const context = viewerTodoContext
@@ -450,11 +454,50 @@ export default function App() {
   }, [handleViewChange, viewerTodoContext])
 
   const viewerTodoHandler = viewerTodoContext.wikiComponent ? createTodoFromViewer : undefined
+  const viewerIsSession = viewerComponent?.type === 'session'
+
+  const openWikiComponent = useCallback((idOrPath: string) => {
+    const component = wikiComponents.find((item) => item.id === idOrPath || item.path === idOrPath)
+    setViewerPath(component?.path ?? idOrPath)
+  }, [wikiComponents])
+
+  const renderViewer = useCallback((props: {
+    artifacts?: { path: string; label: string }[]
+    workspace?: string
+    onNavigateToChange?: (changeName: string) => void
+    onCreateTodo?: () => void
+    onSelectArtifact?: (path: string) => void
+  } = {}) => {
+    if (!viewerPath) return null
+    if (viewerIsSession) {
+      return (
+        <LazySessionDetail
+          sessionId={viewerComponent?.path ?? viewerPath}
+          onOpenDocument={setViewerPath}
+          onClose={() => setViewerPath(null)}
+        />
+      )
+    }
+    return (
+      <LazyMarkdownViewer
+        path={viewerPath}
+        artifacts={props.artifacts}
+        workspace={props.workspace}
+        onSelectArtifact={props.onSelectArtifact}
+        onClose={() => setViewerPath(null)}
+        onToggleStar={handleToggleStar}
+        isStarred={isBookmarked(viewerPath)}
+        onNavigateToChange={props.onNavigateToChange}
+        onCreateTodo={props.onCreateTodo}
+        onOpenSession={openWikiComponent}
+      />
+    )
+  }, [handleToggleStar, isBookmarked, openWikiComponent, viewerComponent, viewerIsSession, viewerPath])
 
   const handleNavigateWikiFromTodo = useCallback((path: string) => {
-    setViewerPath(path)
+    openWikiComponent(path)
     setView('search')
-  }, [])
+  }, [openWikiComponent])
 
   const today = new Date()
   const classificationKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`
@@ -657,16 +700,12 @@ export default function App() {
             <main className="flex-1 overflow-y-auto p-4">
               {viewerPath ? (
                 <Suspense fallback={<ViewFallback label="文档" />}>
-                  <LazyMarkdownViewer
-                    path={viewerPath}
-                    artifacts={changeArtifacts}
-                    workspace={selectedChange?.workspace}
-                    onSelectArtifact={setViewerPath}
-                    onClose={() => setViewerPath(null)}
-                    onToggleStar={handleToggleStar}
-                    isStarred={isBookmarked(viewerPath)}
-                    onCreateTodo={viewerTodoHandler}
-                  />
+                  {renderViewer({
+                    artifacts: changeArtifacts,
+                    workspace: selectedChange?.workspace,
+                    onSelectArtifact: setViewerPath,
+                    onCreateTodo: viewerTodoHandler,
+                  })}
                 </Suspense>
               ) : (
                 <div className="space-y-4">
@@ -750,18 +789,11 @@ export default function App() {
           <Suspense fallback={<ViewFallback label="知识图谱" />}>
             <div className="flex-1 min-h-0 p-4">
               {viewerPath ? (
-                <LazyMarkdownViewer
-                  path={viewerPath}
-                  onClose={() => setViewerPath(null)}
-                  onToggleStar={handleToggleStar}
-                  isStarred={isBookmarked(viewerPath)}
-                  onCreateTodo={viewerTodoHandler}
-                />
+                renderViewer({ onCreateTodo: viewerTodoHandler })
               ) : (
                 <LazyWikiGraph
                   onNodeClick={(id) => {
-                    const component = wikiComponents.find((item) => item.id === id)
-                    setViewerPath(component?.path ?? id)
+                    openWikiComponent(id)
                   }}
                 />
               )}
@@ -773,16 +805,9 @@ export default function App() {
           <Suspense fallback={<ViewFallback label="时间线" />}>
             <div className="flex-1 min-h-0 p-4">
               {viewerPath ? (
-                <LazyMarkdownViewer
-                  path={viewerPath}
-                  onClose={() => setViewerPath(null)}
-                  onToggleStar={handleToggleStar}
-                  isStarred={isBookmarked(viewerPath)}
-                  onNavigateToChange={navigateToChange}
-                  onCreateTodo={viewerTodoHandler}
-                />
+                renderViewer({ onNavigateToChange: navigateToChange, onCreateTodo: viewerTodoHandler })
               ) : (
-                <LazyWikiTimeline onOpen={(path) => setViewerPath(path)} />
+                <LazyWikiTimeline onOpen={openWikiComponent} />
               )}
             </div>
           </Suspense>
@@ -794,21 +819,13 @@ export default function App() {
               <div className="absolute inset-0 overflow-y-auto p-4">
                 <LazySemanticSearch
                   onNodeClick={(id) => {
-                    const component = wikiComponents.find((item) => item.id === id)
-                    setViewerPath(component?.path ?? id)
+                    openWikiComponent(id)
                   }}
                 />
               </div>
               {viewerPath && (
                 <div className="absolute inset-0 z-10 overflow-y-auto bg-[var(--color-surface)]">
-                  <LazyMarkdownViewer
-                    path={viewerPath}
-                    onClose={() => setViewerPath(null)}
-                    onToggleStar={handleToggleStar}
-                    isStarred={isBookmarked(viewerPath)}
-                    onNavigateToChange={navigateToChange}
-                    onCreateTodo={viewerTodoHandler}
-                  />
+                  {renderViewer({ onNavigateToChange: navigateToChange, onCreateTodo: viewerTodoHandler })}
                 </div>
               )}
             </div>
@@ -831,16 +848,9 @@ export default function App() {
           <Suspense fallback={<ViewFallback label="文档健康" />}>
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {viewerPath ? (
-                <LazyMarkdownViewer
-                  path={viewerPath}
-                  onClose={() => setViewerPath(null)}
-                  onToggleStar={handleToggleStar}
-                  isStarred={isBookmarked(viewerPath)}
-                  onNavigateToChange={navigateToChange}
-                  onCreateTodo={viewerTodoHandler}
-                />
+                renderViewer({ onNavigateToChange: navigateToChange, onCreateTodo: viewerTodoHandler })
               ) : (
-                <LazyLintPanel onOpen={(path) => setViewerPath(path)} />
+                <LazyLintPanel onOpen={openWikiComponent} />
               )}
             </div>
           </Suspense>
@@ -850,16 +860,9 @@ export default function App() {
           <Suspense fallback={<ViewFallback label="最近更新" />}>
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
               {viewerPath ? (
-                <LazyMarkdownViewer
-                  path={viewerPath}
-                  onClose={() => setViewerPath(null)}
-                  onToggleStar={handleToggleStar}
-                  isStarred={isBookmarked(viewerPath)}
-                  onNavigateToChange={navigateToChange}
-                  onCreateTodo={viewerTodoHandler}
-                />
+                renderViewer({ onNavigateToChange: navigateToChange, onCreateTodo: viewerTodoHandler })
               ) : (
-                <LazyRecentPanel onOpen={(path) => setViewerPath(path)} />
+                <LazyRecentPanel onOpen={openWikiComponent} />
               )}
             </div>
           </Suspense>
@@ -877,16 +880,9 @@ export default function App() {
           <Suspense fallback={<ViewFallback label="日历" />}>
             <div className="flex-1 min-h-0 overflow-y-auto">
               {viewerPath ? (
-                <LazyMarkdownViewer
-                  path={viewerPath}
-                  onClose={() => setViewerPath(null)}
-                  onToggleStar={handleToggleStar}
-                  isStarred={isBookmarked(viewerPath)}
-                  onNavigateToChange={navigateToChange}
-                  onCreateTodo={viewerTodoHandler}
-                />
+                renderViewer({ onNavigateToChange: navigateToChange, onCreateTodo: viewerTodoHandler })
               ) : (
-                <LazyCalendarPanel onOpen={(path) => setViewerPath(path)} />
+                <LazyCalendarPanel onOpen={openWikiComponent} />
               )}
             </div>
           </Suspense>
@@ -967,7 +963,7 @@ export default function App() {
 
       <CommandPalette palette={palette} shortcuts={shortcutDefs} />
       <StaleBundleNotice />
-      {viewerPath && (
+      {viewerPath && !viewerIsSession && (
         <ChatBubble
           key={viewerPath}
           changeName={selectedChange?.name}

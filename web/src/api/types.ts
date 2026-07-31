@@ -59,11 +59,17 @@ export interface TransitionAction {
   blockedReason?: string
 }
 
+export type WikiComponentType = 'change' | 'proposal' | 'design' | 'tasks' | 'spec' | 'plan' | 'artifact' | 'diagram' | 'knowledge' | 'report' | 'session' | string
+
+export type WikiEdgeKind = 'reads' | 'edits' | string
+
+export type WikiEdgeSource = 'session' | string
+
 export interface WikiEdge {
   from: string
   to: string
-  kind: string
-  source: string
+  kind: WikiEdgeKind
+  source: WikiEdgeSource
   weight?: number
 }
 
@@ -81,7 +87,7 @@ export interface LintIssue {
 
 export interface WikiComponent {
   id: string
-  type: string
+  type: WikiComponentType
   title: string
   path: string
   workspace: string
@@ -92,7 +98,7 @@ export interface WikiComponent {
 export interface RecentItem {
   id: string
   title: string
-  type: string
+  type: WikiComponentType
   workspace: string
   updatedAt: string
   path: string
@@ -106,6 +112,26 @@ export interface WikiGraphData {
   edges: WikiEdge[]
   communities?: Record<string, number>
   communityLabels?: Record<string, string>
+}
+
+export interface WikiSession {
+  id: string
+  path: string
+  workspace: string
+  title: string
+  cwd: string
+  startedAt: string
+  updatedAt: string
+  userTurns: number
+  toolCalls: Record<string, number>
+  /** Documents the session created or overwrote (`write`). */
+  writes: string[]
+  /** Documents the session patched (`edit`). */
+  edits: string[]
+  reads: string[]
+  intents: string[]
+  intentsTruncated?: boolean
+  pathsTruncated?: boolean
 }
 
 export interface ArtifactInfo {

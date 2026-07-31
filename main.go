@@ -113,11 +113,41 @@ func (r *coalescedRebuilder) loop() {
 	}
 }
 
+// sessionPollInterval is how often transcripts are re-checked. Sessions are
+// appended to many times per second while an agent runs, and a digest only
+// matters once the work has settled, so this is deliberately slow.
+const sessionPollInterval = 60 * time.Second
+
+// pollSessions keeps the session layer current without adding transcript
+// churn to the document watcher: each pass tail-parses only the transcripts
+// whose size or mtime moved, re-grafts them onto the live graph, and notifies
+// clients when something changed.
+func pollSessions(index *wiki.SessionsIndex, api *wiki.API, hub *wiki.SSEHub, interval time.Duration) {
+	if index == nil {
+		return
+	}
+	for range time.Tick(interval) {
+		changed, err := index.Refresh()
+		if err != nil {
+			log.Printf("wiki sessions refresh failed (non-fatal): %v", err)
+			continue
+		}
+		if changed == 0 {
+			continue
+		}
+		api.ApplySessions()
+		if hub != nil {
+			hub.BroadcastNamed("sessions-updated", fmt.Sprintf(`{"changed":%d}`, changed))
+		}
+	}
+}
+
 func main() {
 	port := flag.Int("port", 8989, "port to listen on")
 	bind := flag.String("bind", "localhost", "address to bind to (use 0.0.0.0 for LAN access)")
 	shareURL := flag.String("share-url", "", "public base URL for share links (default: auto-detect or localhost)")
 	baseDir := flag.String("dir", "openspec", "path to an OpenSpec, Trellis, or Superpowers workspace")
+	sessionsDir := flag.String("sessions-dir", "", "agent session transcript directory (default: ~/.omp/agent/sessions; empty dir disables the session layer)")
 	flag.Parse()
 
 	mux := http.NewServeMux()
@@ -186,7 +216,24 @@ func main() {
 			watcher.SetMirror(mirror)
 		}
 	}
+	// --- Agent session layer ---
+	// Transcripts live outside every registered workspace and can reach
+	// hundreds of megabytes, so they are never scanned as a workspace source:
+	// a dedicated index parses them incrementally and grafts session nodes and
+	// session→document edges onto the graph after each rebuild.
+	agentDir := filepath.Join(os.Getenv("HOME"), ".omp", "agent")
+	sessionsRoot := *sessionsDir
+	if sessionsRoot == "" {
+		sessionsRoot = filepath.Join(agentDir, "sessions")
+	}
+	sessionsIndex := wiki.NewSessionsIndex(sessionsRoot, filepath.Join(wikiCacheDir, "sessions.json"))
+	wikiAPI.SetMemoryDir(filepath.Join(agentDir, "memories"))
 	rebuilder := newCoalescedRebuilder(func() error {
+		// Digests refresh before the rebuild so the replacement graph is
+		// grafted with current session activity in one pass.
+		if _, err := sessionsIndex.Refresh(); err != nil {
+			log.Printf("wiki sessions refresh failed (non-fatal): %v", err)
+		}
 		if err := wikiAPI.Rebuild(); err != nil {
 			return err
 		}
@@ -201,7 +248,13 @@ func main() {
 			sseHub.Broadcast(`{"changed":1}`)
 		}
 	})
+	wikiAPI.SetSessionsIndex(sessionsIndex)
 	rebuilder.Request(nil)
+	// Transcripts are appended to continuously by live agents. Polling on a
+	// long interval (instead of watching them with the document watcher) keeps
+	// the 5s document debounce and the 30s community re-detection from
+	// thrashing on every tool call, and tail-parsing keeps each pass cheap.
+	go pollSessions(sessionsIndex, wikiAPI, sseHub, sessionPollInterval)
 	var watchPaths []string
 	for _, workspace := range runtimeWorkspaces {
 		watchPaths = append(watchPaths, source.WatchRoots(workspace)...)
@@ -236,6 +289,10 @@ func main() {
 	mux.HandleFunc("/api/wiki/search-semantic", wikiAPI.HandleSemanticSearch)
 	mux.HandleFunc("/api/wiki/calendar/month", wikiAPI.HandleCalendarMonth)
 	mux.HandleFunc("/api/wiki/calendar/day", wikiAPI.HandleCalendarDay)
+	mux.HandleFunc("/api/wiki/sessions", wikiAPI.HandleSessions)
+	mux.HandleFunc("/api/wiki/sessions/refresh", wikiAPI.HandleSessionsRefresh)
+	mux.HandleFunc("/api/wiki/session", wikiAPI.HandleSession)
+	mux.HandleFunc("/api/wiki/context", wikiAPI.HandleContext)
 	mux.HandleFunc("/mcp", wikiAPI.HandleMCP)
 	mux.Handle("/api/wiki/events", sseHub)
 

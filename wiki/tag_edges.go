@@ -11,7 +11,12 @@ const maxTagEdgeDegree = 6
 // Each eligible tag contributes only cycle candidates over its sorted member
 // IDs; the global retained tag-degree cap may greedily prune individual
 // candidates when overlapping tags would otherwise create dense hubs.
-func ComputeTagEdges(components []Component, taxonomy *Taxonomy) []Edge {
+//
+// Only workspace documents count as corpus: session components would inflate
+// the corpus size that drives both the coverage ceiling and every tag's IDF
+// weight, so agent activity must not shift document tag edges.
+func ComputeTagEdges(all []Component, taxonomy *Taxonomy) []Edge {
+	components := documentComponents(all)
 	if taxonomy == nil || len(components) == 0 {
 		return nil
 	}

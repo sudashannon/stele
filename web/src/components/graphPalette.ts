@@ -12,6 +12,7 @@ export const TYPE_COLORS: Record<string, string> = {
   plan: 'var(--color-success)',
   artifact: 'var(--color-text-secondary)',
   diagram: 'var(--color-danger)',
+  session: 'var(--color-purple)',
 }
 
 export const COMMUNITY_COLORS = [
@@ -48,6 +49,10 @@ export const TYPE_BADGE_STYLES: Record<string, string> = {
   report: 'bg-[var(--color-layer)] text-[var(--color-accent)]',
   artifact: 'bg-[var(--color-layer)] text-[var(--color-text-secondary)]',
   diagram: 'bg-[var(--color-layer)] text-[var(--color-danger)]',
+  // Shares the purple identity of the graph node color, but pairs it with the
+  // plain layer background used by design/report/diagram so the badge never
+  // reads as `proposal` (which owns the purple-subtle background).
+  session: 'bg-[var(--color-layer)] text-[var(--color-purple)]',
 }
 
 const FALLBACK_TYPE_BADGE = 'bg-[var(--color-layer)] text-[var(--color-text-secondary)]'

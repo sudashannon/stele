@@ -326,7 +326,16 @@ func (a *API) resolveWorkspaceConfig(path string) (WorkspaceConfig, bool) {
 	if lister != nil {
 		workspaces = lister.List()
 	}
+	return WorkspaceForPath(workspaces, path)
+}
 
+// WorkspaceForPath returns the workspace whose scan scope most specifically
+// contains path, so a nested registration wins over its parent (rx101 lives
+// inside miao and must attribute to rx101). The returned Path is the
+// configured workspace path, not the expanded project scope. Exported because
+// the session layer attributes transcripts by their working directory and must
+// not reimplement these scope rules.
+func WorkspaceForPath(workspaces []WorkspaceConfig, path string) (WorkspaceConfig, bool) {
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
 		return WorkspaceConfig{}, false

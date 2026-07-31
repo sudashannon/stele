@@ -3,6 +3,7 @@ package wiki
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -28,8 +29,10 @@ type API struct {
 	ready           bool
 	dirtyStructural int32
 	SSE             *SSEHub
-	todoStore       *todo.Store // set via SetTodoStore; nil until wired
-	todoToken       []byte      // MCP write token; not logged
+	todoStore       *todo.Store    // set via SetTodoStore; nil until wired
+	todoToken       []byte         // MCP write token; not logged
+	sessions        *SessionsIndex // set via SetSessionsIndex; nil disables the layer
+	memoryDir       string         // agent-memory artifact root; read on demand, never indexed
 }
 
 // WorkspaceLister exposes the CURRENT workspace registry, decoupling
@@ -69,6 +72,62 @@ func (a *API) SetLister(lister WorkspaceLister) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lister = lister
+}
+
+// SetSessionsIndex wires the agent-session layer. Sessions are grafted onto
+// the graph after each rebuild rather than scanned as a workspace source, so
+// this may be called before or after the first build.
+func (a *API) SetSessionsIndex(index *SessionsIndex) {
+	a.mu.Lock()
+	a.sessions = index
+	a.mu.Unlock()
+	a.ApplySessions()
+}
+
+// SessionsIndexSnapshot returns the wired session layer, or nil.
+func (a *API) SessionsIndexSnapshot() *SessionsIndex {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sessions
+}
+
+// SetMemoryDir points the recall packet at the agent runtime's consolidated
+// memory artifacts. They are read on demand per query, so an empty or missing
+// directory simply yields no memory section.
+func (a *API) SetMemoryDir(dir string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.memoryDir = dir
+}
+
+// ApplySessions grafts the current session digests onto the live graph. It is
+// idempotent, so every rebuild and every digest refresh can simply re-apply.
+//
+// The workspace snapshot is taken before a.mu is held: the lister reaches into
+// the workspace registry's own lock, and Rebuild already establishes
+// registry-before-a.mu as the only safe order.
+func (a *API) ApplySessions() {
+	index, workspaces := a.sessionsSnapshot()
+	if index == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	index.Apply(a.graph, workspaces)
+}
+
+// sessionsSnapshot returns the session layer plus the live workspace list
+// without holding a.mu across the lister call.
+func (a *API) sessionsSnapshot() (*SessionsIndex, []WorkspaceConfig) {
+	a.mu.RLock()
+	index := a.sessions
+	workspaces := a.ws
+	lister := a.lister
+	a.mu.RUnlock()
+	if lister != nil {
+		workspaces = lister.List()
+	}
+	return index, workspaces
 }
 
 // SetTodoStore atomically sets the shared Todo store and MCP write token.
@@ -487,6 +546,12 @@ func rankSemanticSearch(query string, requiredTags []string, queryVec []float32,
 	results := make([]semanticScoredResult, 0, len(components))
 
 	for id, component := range components {
+		// Sessions are agent activity, not documents. They carry no embedding
+		// and must never surface in document search: recall goes through
+		// /api/wiki/sessions and wiki_context instead.
+		if component.Type == TypeSession {
+			continue
+		}
 		tags := EffectiveComponentTags(component, taxonomy)
 		if !hasAllTags(tags, requiredTags) {
 			continue
@@ -806,6 +871,7 @@ func (a *API) Rebuild() error {
 	a.mu.RLock()
 	lister := a.lister
 	ws := a.ws
+	sessionsIndex := a.sessions
 	a.mu.RUnlock()
 
 	if lister != nil {
@@ -815,6 +881,14 @@ func (a *API) Rebuild() error {
 	newGraph, err := BuildIndex(ws, a.indexCacheDir)
 	if err != nil {
 		return err
+	}
+	// Sessions are grafted onto the replacement before it is published, so no
+	// reader ever observes a graph with documents but no session edges.
+	if sessionsIndex != nil {
+		components, edges := sessionsIndex.Apply(newGraph, ws)
+		if components > 0 {
+			log.Printf("wiki sessions: grafted %d session(s) with %d document edge(s)", components, edges)
+		}
 	}
 	a.mu.Lock()
 	a.graph = newGraph

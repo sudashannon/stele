@@ -6,9 +6,10 @@ type WikiEventHandlers =
       onUpdate?: () => void
       onIndexingStarted?: (changed: number | null) => void
       onTodosUpdated?: (revision: number) => void
+      onSessionsUpdated?: (changed: number | null) => void
     }
 
-type WikiEventType = 'graph-updated' | 'indexing-started' | 'todos-updated'
+type WikiEventType = 'graph-updated' | 'indexing-started' | 'todos-updated' | 'sessions-updated'
 type WikiEventSubscriber = (type: WikiEventType, event?: MessageEvent) => void
 
 const subscribers = new Set<WikiEventSubscriber>()
@@ -35,6 +36,17 @@ function dispatch(type: WikiEventType, event?: MessageEvent) {
   }
 }
 
+// numberField reads one numeric field out of an SSE payload. A malformed or
+// missing payload yields null rather than throwing inside the dispatch loop.
+function numberField(event: MessageEvent | undefined, key: string): number | null {
+  try {
+    const payload = JSON.parse(event?.data ?? '{}')
+    return typeof payload[key] === 'number' ? payload[key] : null
+  } catch {
+    return null
+  }
+}
+
 function ensureEventSource() {
   if (sharedEventSource || typeof EventSource === 'undefined') return
   const source = new EventSource('/api/wiki/events')
@@ -45,6 +57,7 @@ function ensureEventSource() {
   source.addEventListener('graph-updated', () => forward('graph-updated'))
   source.addEventListener('indexing-started', (event) => forward('indexing-started', event as MessageEvent))
   source.addEventListener('todos-updated', (event) => forward('todos-updated', event as MessageEvent))
+  source.addEventListener('sessions-updated', (event) => forward('sessions-updated', event as MessageEvent))
 }
 
 // useWikiEvents subscribes to the backend's /api/wiki/events SSE stream.
@@ -68,19 +81,17 @@ export function useWikiEvents(handlers: WikiEventHandlers) {
       if (typeof current === 'function') return
       if (type === 'indexing-started') {
         if (!current.onIndexingStarted) return
-        let changed: number | null = null
-        try {
-          const payload = JSON.parse(event?.data ?? '{}')
-          if (typeof payload.changed === 'number') changed = payload.changed
-        } catch {}
-        current.onIndexingStarted(changed)
+        current.onIndexingStarted(numberField(event, 'changed'))
+        return
+      }
+      if (type === 'sessions-updated') {
+        if (!current.onSessionsUpdated) return
+        current.onSessionsUpdated(numberField(event, 'changed'))
         return
       }
       if (!current.onTodosUpdated) return
-      try {
-        const payload = JSON.parse(event?.data ?? '{}')
-        if (typeof payload.revision === 'number') current.onTodosUpdated(payload.revision)
-      } catch {}
+      const revision = numberField(event, 'revision')
+      if (revision !== null) current.onTodosUpdated(revision)
     }
 
     subscribers.add(subscriber)

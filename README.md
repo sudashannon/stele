@@ -23,7 +23,8 @@
 | 🖱️ **右键菜单** | 变更卡片 / 最近更新 / 日历产物右键复制路径、打开 |
 | 🔗 **分享** | 生成分享链接，可设置过期时间 |
 | ⚙️ **设置面板** | Provider / Model / API Base 配置 |
-| 🤖 **MCP Server** | Streamable HTTP 端点, 10 个 tools 供 AI agent 查询知识图谱与管理待办 |
+| 🧠 **会话记忆层** | agent 会话摘要入图、会话↔文档关系边、文档页「相关会话」、单入口召回 packet |
+| 🤖 **MCP Server** | Streamable HTTP 端点, 13 个 tools 供 AI agent 查询知识图谱、召回上下文与管理待办 |
 
 ---
 
@@ -155,6 +156,8 @@ Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI a
 | `wiki_overview` | 主题社区综述 |
 | `wiki_read` | 读取文档内容 |
 | `wiki_lint` | 文档健康检查 |
+| `wiki_context` | **动手前的单入口召回**：相关文档 + 动过它们的 agent 会话（含意图摘要）+ 命中的 agent 记忆产物，返回紧凑 Markdown |
+| `wiki_sessions` | 列出 agent 会话摘要（工具调用统计、读/改过的文档、意图）；不返回会话原始记录 |
 | `todo_list` | 按状态、workspace、Change 或关键词筛选待办 |
 | `todo_create` | 创建待办（loopback + Bearer） |
 | `todo_update` | 更新或清空待办字段（loopback + Bearer） |
@@ -196,6 +199,16 @@ go build -o comet-panel .
 ```
 
 浏览器打开 `http://localhost:8989`
+
+会话记忆层默认读取 `~/.omp/agent/sessions` 下的 agent 会话记录，只保留摘要——标题、工具调用统计、意图，以及
+**产出文档**（`write` 新建/覆盖）/ **改动文档**（`edit` 打补丁）/ **读取文档**三组路径——并把「会话 → 文档」关系挂进图谱。
+会话记录本身既不进 embedding、不进语义搜索、不进社区聚类，也**永不进知识镜像仓**。
+增量方式为 60s 轮询 + 按字节偏移 tail 续读，变更后经 SSE `sessions-updated` 推送，文档页「相关会话」与会话详情就地刷新。
+目录不存在时该层自动关闭；用 `--sessions-dir` 指定其它位置：
+
+```bash
+./comet-panel --dir /path/to/openspec --sessions-dir ~/.omp/agent/sessions
+```
 
 ### Systemd 服务
 
@@ -302,8 +315,12 @@ tags: [architecture, decision]
 | `/api/wiki/recent` | GET | 最近更新 (支持 ?offset=&limit=) |
 | `/api/wiki/calendar/month` | GET | 日历月视图 (?year=&month=) |
 | `/api/wiki/calendar/day` | GET | 日历日视图 (?date=) |
-| `/api/wiki/events` | GET (SSE) | 图谱与待办实时更新推送 |
-| `/mcp` | POST | MCP JSON-RPC 端点（6 个 Wiki 工具 + 4 个待办工具） |
+| `/api/wiki/events` | GET (SSE) | 图谱、待办与会话实时更新推送 |
+| `/api/wiki/sessions` | GET | agent 会话摘要列表 |
+| `/api/wiki/session` | GET | 单个会话摘要 (?id=会话记录路径) |
+| `/api/wiki/sessions/refresh` | POST | 立即重扫会话记录并重新挂图 |
+| `/api/wiki/context` | GET | 召回 packet (?q=&limit=) |
+| `/mcp` | POST | MCP JSON-RPC 端点（8 个 Wiki 工具 + 5 个待办工具） |
 
 ---
 

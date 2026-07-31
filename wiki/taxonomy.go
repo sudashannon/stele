@@ -489,6 +489,11 @@ func EnrichComponentTags(components []Component, edges []Edge, taxonomy *Taxonom
 	changeIndexes := make([]int, 0)
 
 	for index := range components {
+		// Sessions are not documents: they own no authored tags, and deriving
+		// tags from a transcript filename would invent vocabulary hits.
+		if components[index].Type == TypeSession {
+			continue
+		}
 		frontmatter := cloneFrontmatter(components[index].Frontmatter)
 		delete(frontmatter, derivedTagsKey)
 		delete(frontmatter, inheritedTagsKey)

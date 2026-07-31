@@ -37,6 +37,14 @@ const CommunityResolution = 0.7
 // explicit weights take precedence; legacy edges retain provenance defaults,
 // while vector edges are graded by cosine from the graph embeddings.
 func edgeWeight(e Edge, embeddings map[string][]float32) float64 {
+	// Session edges record which agent session touched a file. That is
+	// ambient tooling activity, not authored intent, and there are far more
+	// of them than authored links: giving them any weight would re-cluster
+	// the graph around access patterns. Checked before the explicit-weight
+	// branch so no caller can opt them back in.
+	if e.Source == SourceSession {
+		return 0
+	}
 	if e.Weight > 0 {
 		return e.Weight
 	}
@@ -110,7 +118,14 @@ func newWeightedAdjacency(nodes []string) *weightedAdjacency {
 func graphAdjacency(g *Graph) *weightedAdjacency {
 	components := g.Components()
 	ids := make([]string, 0, len(components))
-	for id := range components {
+	for id, component := range components {
+		// Session components carry only zero-weight session edges, so
+		// modularity has nothing to say about them. Leaving them out keeps
+		// them from becoming singleton communities that renumber every real
+		// community index.
+		if component.Type == TypeSession {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)

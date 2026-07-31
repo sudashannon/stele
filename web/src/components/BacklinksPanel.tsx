@@ -1,8 +1,9 @@
 
 import { useEffect, useState } from 'react'
-import { fetchWikiComponent } from '../api/client'
-import type { WikiEdge } from '../api/types'
+import { fetchSessions, fetchWikiComponent } from '../api/client'
+import type { WikiEdge, WikiSession } from '../api/types'
 import { Icon } from './icons'
+import { SessionBacklinkList } from './SessionBacklinks'
 
 const KIND_BADGE_STYLES: Record<string, string> = {
   implements: 'border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]',
@@ -18,6 +19,11 @@ function EdgeKindBadge({ kind }: { kind: string }) {
       {kind}
     </span>
   )
+}
+
+function formatLocalTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
 function EmptyState({ text }: { text: string }) {
@@ -66,8 +72,11 @@ function EdgeSection({
   )
 }
 
+// Session grouping and rendering live in SessionBacklinks so the document
+// viewer and the change detail panel show the same thing.
+
 export function BacklinksPanel({ componentId }: { componentId: string }) {
-  const [data, setData] = useState<{ forward: WikiEdge[]; backlinks: WikiEdge[] } | null>(null)
+  const [data, setData] = useState<{ forward: WikiEdge[]; backlinks: WikiEdge[]; sessions: WikiSession[] } | null>(null)
   const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
@@ -75,8 +84,12 @@ export function BacklinksPanel({ componentId }: { componentId: string }) {
     setData(null)
     setLoadError(false)
     fetchWikiComponent(componentId)
-      .then((response) => {
-        if (!cancelled) setData({ forward: response.forward, backlinks: response.backlinks })
+      .then(async (response) => {
+        const sessionBacklinks = (response.backlinks ?? []).filter((edge) => edge.source === 'session')
+        const sessions = sessionBacklinks.length > 0
+          ? await fetchSessions().catch(() => [] as WikiSession[])
+          : []
+        if (!cancelled) setData({ forward: response.forward ?? [], backlinks: response.backlinks ?? [], sessions })
       })
       .catch(() => {
         if (!cancelled) setLoadError(true)
@@ -104,6 +117,9 @@ export function BacklinksPanel({ componentId }: { componentId: string }) {
     )
   }
 
+  const structuralBacklinks = data.backlinks.filter((edge) => edge.source !== 'session')
+  const sessionBacklinks = data.backlinks.filter((edge) => edge.source === 'session')
+
   return (
     <div className="space-y-4 text-[var(--type-caption)]">
       <EdgeSection
@@ -114,10 +130,13 @@ export function BacklinksPanel({ componentId }: { componentId: string }) {
       />
       <EdgeSection
         heading="反向引用"
-        edges={data.backlinks}
+        edges={structuralBacklinks}
         pathKey="from"
         emptyText="暂无其他文档引用本文档"
       />
+      {sessionBacklinks.length > 0 && (
+        <SessionBacklinkList edges={sessionBacklinks} sessions={data.sessions} />
+      )}
     </div>
   )
 }

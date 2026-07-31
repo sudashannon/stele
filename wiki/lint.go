@@ -21,15 +21,18 @@ type LintIssue struct {
 // excluded from orphan detection — change nodes are expected to be hubs with
 // only outgoing edges in small workspaces, and archived artifacts are
 // expected to be disconnected from the active graph, so flagging either has
-// no actionable value for a working dashboard.
+// no actionable value for a working dashboard. Session components are
+// excluded for the same reason: an exploratory session that never touched an
+// indexed document is normal, not a documentation defect.
 func (g *Graph) Lint() []LintIssue {
 	var issues []LintIssue
 
 	for id, c := range g.components {
-		if c.Type == TypeChange || strings.Contains(c.Path, "/archive/") {
+		if c.Type == TypeChange || c.Type == TypeSession || strings.Contains(c.Path, "/archive/") {
 			continue
 		}
-		if len(g.forward[id]) == 0 && len(g.backward[id]) == 0 {
+		fwd, bwd := g.documentEdgeCounts(id)
+		if fwd == 0 && bwd == 0 {
 			issues = append(issues, LintIssue{Rule: "orphan", ComponentID: id, Detail: c.Title})
 		}
 	}
@@ -103,10 +106,14 @@ func frontmatterTime(v any) (time.Time, bool) {
 	}
 	return time.Time{}, false
 }
+
 // ── Content-quality rules ────────────────────────────────────────────
-//
 var placeholderRE = regexp.MustCompile(`(?i)\b(TODO|TBD|FIXME|HACK|WIP)\b|待定|待补充|待实现|暂未`)
-//
+
+// readBody reads a document's text for the content-quality rules. Only
+// workspace documents may reach it: a session component's path is an agent
+// transcript that can be hundreds of megabytes, so callers must gate on
+// lintableBody first.
 func readBody(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -120,7 +127,16 @@ func readBody(path string) string {
 	}
 	return text
 }
-//
+
+// lintableBody reports whether a component's file may be read for the
+// content-quality rules. Session components are excluded: their path is an
+// agent transcript, measured up to 157 MB, and reading one per lint request
+// would both stall the endpoint and report transcript noise as document
+// defects.
+func lintableBody(c Component) bool {
+	return c.Type != TypeSession && !strings.Contains(c.Path, "/archive/")
+}
+
 func stripMarkup(body string) string {
 	body = regexp.MustCompile("(?s)```[^`]*```").ReplaceAllString(body, "")
 	body = regexp.MustCompile("`[^`]+`").ReplaceAllString(body, "")
@@ -140,11 +156,11 @@ func stripMarkup(body string) string {
 		return r
 	}, body)
 }
-//
+
 func (g *Graph) lintLowContent() []LintIssue {
 	var issues []LintIssue
 	for id, c := range g.components {
-		if strings.Contains(c.Path, "/archive/") {
+		if !lintableBody(c) {
 			continue
 		}
 		body := readBody(c.Path)
@@ -162,11 +178,11 @@ func (g *Graph) lintLowContent() []LintIssue {
 	}
 	return issues
 }
-//
+
 func (g *Graph) lintPlaceholderHeavy() []LintIssue {
 	var issues []LintIssue
 	for id, c := range g.components {
-		if strings.Contains(c.Path, "/archive/") {
+		if !lintableBody(c) {
 			continue
 		}
 		body := readBody(c.Path)
@@ -197,7 +213,7 @@ func (g *Graph) lintPlaceholderHeavy() []LintIssue {
 	}
 	return issues
 }
-//
+
 var requiredSectionGroups = map[ComponentType][][]string{
 	TypeProposal: {
 		{"why", "背景", "动机"},
@@ -210,7 +226,7 @@ var requiredSectionGroups = map[ComponentType][][]string{
 		{"pass", "fail", "验证", "结论"},
 	},
 }
-//
+
 func (g *Graph) lintMissingSections() []LintIssue {
 	var issues []LintIssue
 	for id, c := range g.components {
@@ -218,7 +234,7 @@ func (g *Graph) lintMissingSections() []LintIssue {
 		if !ok {
 			continue
 		}
-		if strings.Contains(c.Path, "/archive/") {
+		if !lintableBody(c) {
 			continue
 		}
 		body := readBody(c.Path)
@@ -249,15 +265,33 @@ func (g *Graph) lintMissingSections() []LintIssue {
 	}
 	return issues
 }
-//
+
+// documentEdgeCounts counts only document-to-document edges. Session edges
+// record which agent session touched a file; letting them count would flip a
+// genuinely orphaned document into "low-link-density" merely because an agent
+// once opened it.
+func (g *Graph) documentEdgeCounts(id string) (int, int) {
+	fwd, bwd := 0, 0
+	for _, e := range g.forward[id] {
+		if e.Source != SourceSession {
+			fwd++
+		}
+	}
+	for _, e := range g.backward[id] {
+		if e.Source != SourceSession {
+			bwd++
+		}
+	}
+	return fwd, bwd
+}
+
 func (g *Graph) lintLowLinkDensity() []LintIssue {
 	var issues []LintIssue
 	for id, c := range g.components {
-		if c.Type == TypeChange || strings.Contains(c.Path, "/archive/") {
+		if c.Type == TypeChange || c.Type == TypeSession || strings.Contains(c.Path, "/archive/") {
 			continue
 		}
-		fwd := len(g.forward[id])
-		bwd := len(g.backward[id])
+		fwd, bwd := g.documentEdgeCounts(id)
 		if fwd == 0 && bwd == 0 {
 			continue // caught by orphan
 		}
@@ -281,7 +315,7 @@ func (g *Graph) lintLowLinkDensity() []LintIssue {
 	}
 	return issues
 }
-//
+
 // suggestArchivedTarget checks whether a dead-link target might have been
 // archived or moved. For /changes/ paths, it looks for a matching change
 // under "/archive/". As a fallback, it matches by filename against all
@@ -322,6 +356,7 @@ func suggestArchivedTarget(target string, g *Graph) string {
 	}
 	return ""
 }
+
 //
 
 // lintLifecycleGaps flags workflow-lifecycle gaps that the link-based checks

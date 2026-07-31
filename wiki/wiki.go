@@ -15,6 +15,24 @@ const (
 	TypeDiagram   ComponentType = "diagram"
 	TypeReport    ComponentType = "report"
 	TypeKnowledge ComponentType = "knowledge"
+	// TypeSession is a synthetic component derived from an agent session
+	// transcript. It is not a workspace document: it is never mirrored,
+	// never embedded, never tagged, and never returned by document search.
+	// Its Path points at a transcript that can be hundreds of megabytes, so
+	// no code path may read its bytes.
+	TypeSession ComponentType = "session"
+)
+
+// SourceSession marks edges derived from agent session activity
+// (session -> document). They are excluded from the visual graph and carry
+// no weight in community detection.
+const SourceSession = "session"
+
+const (
+	// EdgeKindReads links a session to a document it read.
+	EdgeKindReads = "reads"
+	// EdgeKindEdits links a session to a document it wrote or patched.
+	EdgeKindEdits = "edits"
 )
 
 type Component struct {

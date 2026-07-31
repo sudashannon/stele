@@ -32,9 +32,13 @@ function resetWikiGraphLoad() {
 }
 
 vi.mock('./components/WikiGraph', () => ({
-  WikiGraph: () => {
+  WikiGraph: ({ onNodeClick }: { onNodeClick?: (id: string) => void }) => {
     if (wikiGraphShouldSuspend && wikiGraphSuspendPromise) throw wikiGraphSuspendPromise
-    return <div data-testid="wiki-graph-canvas" />
+    return (
+      <button type="button" data-testid="wiki-graph-canvas" onClick={() => onNodeClick?.('/tmp/omp/session.jsonl')}>
+        图谱
+      </button>
+    )
   },
 }))
 vi.mock('./components/WikiTimeline', () => ({
@@ -68,6 +72,24 @@ vi.mock('./components/MarkdownViewer', () => ({
   ),
 }))
 
+vi.mock('./components/SessionDetail', () => ({
+  SessionDetail: ({
+    sessionId,
+    onOpenDocument,
+    onClose,
+  }: {
+    sessionId: string
+    onOpenDocument?: (path: string) => void
+    onClose: () => void
+  }) => (
+    <div data-testid="session-detail">
+      <div>{sessionId}</div>
+      <button type="button" onClick={() => onOpenDocument?.('/x/from-session.md')}>打开文档</button>
+      <button type="button" onClick={onClose}>关闭会话</button>
+    </div>
+  ),
+}))
+
 // Regression test for the Critical finding in Task 17 review: the Go backend
 // genuinely returns "changes": null (nil slice) in two real scenarios —
 // empty/misconfigured single-dir mode, and multi-workspace mode where ALL
@@ -84,6 +106,8 @@ vi.mock('./api/client', () => ({
   fetchWikiLint: vi.fn().mockResolvedValue([]),
   fetchLintIssues: vi.fn().mockResolvedValue([]),
   fetchRecent: vi.fn().mockResolvedValue([]),
+  fetchSessions: vi.fn().mockResolvedValue([]),
+  fetchSession: vi.fn().mockResolvedValue(null),
   fetchChangeDetail: vi.fn().mockResolvedValue({
     name: '', workflow: '', phase: '', archived: false, tasksCompleted: 0, tasksTotal: 0,
     verifyResult: '', createdAt: '', phases: [],
@@ -503,6 +527,27 @@ describe('App view switcher', () => {
     fireEvent.click(screen.getByRole('button', { name: '时间线' }))
     fireEvent.click(await screen.findByText('打开时间线文档'))
     await screen.findByText('✕ 关闭')
+  })
+
+  it('opens SessionDetail instead of MarkdownViewer for session graph nodes, and session-linked docs still open in the shared viewer', async () => {
+    const nonEmptyIndex = [
+      { id: '/tmp/omp/session.jsonl', type: 'session', title: 'Agent session', path: '/tmp/omp/session.jsonl', workspace: 'miao' },
+      { id: '/x/from-session.md', type: 'spec', title: 'Session doc', path: '/x/from-session.md', workspace: 'miao' },
+    ]
+    vi.mocked(fetchWikiIndex).mockResolvedValueOnce(nonEmptyIndex).mockResolvedValueOnce(nonEmptyIndex)
+
+    render(<App />)
+    await screen.findByTestId('workspace-warning-banner')
+
+    fireEvent.click(screen.getByRole('button', { name: '知识图谱' }))
+    fireEvent.click(await screen.findByTestId('wiki-graph-canvas'))
+
+    await screen.findByTestId('session-detail')
+    expect(screen.queryByTestId('markdown-viewer')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '打开文档' }))
+    await screen.findByTestId('markdown-viewer')
+    expect(screen.queryByTestId('session-detail')).toBeNull()
   })
 
   it('switches to the Lint view and mounts LintPanel', async () => {

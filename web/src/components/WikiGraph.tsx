@@ -217,9 +217,13 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   }, [searchQuery])
 
   const typeOrder = useMemo(() => Object.keys(TYPE_COLORS), [])
+  const typeRank = useCallback((type: string) => {
+    const index = typeOrder.indexOf(type)
+    return index === -1 ? typeOrder.length : index
+  }, [typeOrder])
   const sortedComponents = useMemo(
-    () => [...components].sort((a, b) => typeOrder.indexOf(a.type) - typeOrder.indexOf(b.type)),
-    [components, typeOrder],
+    () => [...components].sort((a, b) => typeRank(a.type) - typeRank(b.type)),
+    [components, typeRank],
   )
 
   const workspaces = useMemo(() => {
@@ -299,7 +303,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   }, [workspaceFilteredComponents, communities, activeCommunity])
 
   const structuralEdges = useMemo(
-    () => edges.filter((edge) => edge.source !== 'vector' && edge.source !== 'bm25' && edge.source !== 'tag'),
+    () => edges.filter((edge) => edge.source !== 'vector' && edge.source !== 'bm25' && edge.source !== 'tag' && edge.source !== 'session'),
     [edges],
   )
 

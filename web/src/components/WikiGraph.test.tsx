@@ -76,7 +76,7 @@ describe('WikiGraph', () => {
     await waitFor(() => expect(container.querySelector('[data-testid="wiki-graph-canvas"]')).toBeTruthy())
 
     await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalled())
-    const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
+    const call = vi.mocked(cytoscape).mock.calls.at(-1)![0] as unknown as {
       elements: Array<{ data: { id: string; source?: string; target?: string; kind?: string } }>
       style: Array<{ selector: string; style: Record<string, unknown> }>
       layout: { name: string }
@@ -137,6 +137,22 @@ describe('WikiGraph', () => {
     })
   })
 
+  it('assigns a distinct color to session nodes and keeps them in the legend', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockGraphResponse([
+        { id: '/x/session.jsonl', type: 'session', title: 'Session', path: '/x/session.jsonl', workspace: 'miao' },
+      ]),
+    )
+    render(<WikiGraph onNodeClick={vi.fn()} />)
+
+    await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalled())
+    const call = vi.mocked(cytoscape).mock.calls.at(-1)![0] as unknown as {
+      elements: Array<{ data: { id: string; color?: string } }>
+    }
+    expect(call.elements.find((element) => element.data.id === '/x/session.jsonl')?.data.color).toContain('rgb(')
+    expect(screen.getByText('session')).toBeTruthy()
+  })
+
   it('renders a type legend once components load', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockGraphResponse([
@@ -162,7 +178,7 @@ describe('WikiGraph', () => {
     render(<WikiGraph onNodeClick={vi.fn()} />)
 
     await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalled())
-    const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
+    const call = vi.mocked(cytoscape).mock.calls.at(-1)![0] as unknown as {
       elements: Array<{ data: { id: string } }>
       layout: { name: string }
     }
@@ -202,7 +218,7 @@ describe('WikiGraph', () => {
     expect(screen.getByTestId('wiki-graph-visibility-summary').textContent).toContain('显示 3 / 3 节点')
   })
 
-  it('excludes vector, bm25, and tag edges from rendered connectivity and keeps tag-only nodes hidden in connected-only mode', async () => {
+  it('excludes vector, bm25, tag, and session edges from rendered connectivity and keeps non-structural-only nodes hidden in connected-only mode', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockGraphResponse(
         [
@@ -216,6 +232,7 @@ describe('WikiGraph', () => {
           { from: '/x/b.md', to: '/x/c.md', kind: 'similar', source: 'vector' },
           { from: '/x/a.md', to: '/x/c.md', kind: 'search-hit', source: 'bm25' },
           { from: '/x/c.md', to: '/x/d.md', kind: 'shares-tag:alpha', source: 'tag', weight: 0.4 },
+          { from: '/x/session.jsonl', to: '/x/d.md', kind: 'reads', source: 'session' },
         ],
       ),
     )
@@ -234,6 +251,7 @@ describe('WikiGraph', () => {
     expect(call.elements.some((element) => element.data.source === '/x/b.md' && element.data.target === '/x/c.md')).toBe(false)
     expect(call.elements.some((element) => element.data.source === '/x/a.md' && element.data.target === '/x/c.md')).toBe(false)
     expect(call.elements.some((element) => element.data.source === '/x/c.md' && element.data.target === '/x/d.md')).toBe(false)
+    expect(call.elements.some((element) => element.data.source === '/x/session.jsonl' && element.data.target === '/x/d.md')).toBe(false)
     expect(call.elements.some((element) => element.data.kind?.startsWith('shares-tag:'))).toBe(false)
     expect(call.layout.name).toBe('cose')
     expect(screen.getByTestId('wiki-graph-visibility-summary').textContent).toContain('仅关联视图隐藏 2 个孤立节点')

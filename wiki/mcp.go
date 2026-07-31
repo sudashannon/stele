@@ -119,6 +119,31 @@ var mcpTools = []mcpTool{
 		},
 	},
 	{
+		Name: "wiki_context",
+		Description: "任务开始前的单入口召回:给一个自然语言问题,返回紧凑 Markdown 上下文包" +
+			"——最相关的工程文档、动过这些文档的 agent 会话(含会话意图摘要),以及命中的 agent 记忆产物。" +
+			"比 wiki_search 更适合\"动手前先了解\",因为它把文档与历史会话的关系一起给出。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "自然语言问题(中/英文均可)"},
+				"limit": map[string]any{"type": "number", "description": "文档与会话各自返回条数上限,默认 5,上限 20"},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
+		Name:        "wiki_sessions",
+		Description: "列出已索引的 agent 会话摘要(标题、工作区、时间、工具调用统计、读/改过的文档)。不返回会话原始记录。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"workspace": map[string]any{"type": "string", "description": "按工作区别名筛选"},
+				"limit":     map[string]any{"type": "number", "description": "返回条数上限,默认 10,上限 50"},
+			},
+		},
+	},
+	{
 		Name:        "todo_list",
 		Description: "列出所有待办事项,可按状态/工作区/Change/Wiki组件/关键词(搜索标题和备注)筛选。",
 		InputSchema: map[string]any{
@@ -300,6 +325,10 @@ func (a *API) mcpToolsCall(w http.ResponseWriter, r *http.Request, req jsonRPCRe
 		result = a.mcpWikiRead(params.Arguments)
 	case "wiki_lint":
 		result = a.mcpWikiLint(params.Arguments)
+	case "wiki_context":
+		result = a.mcpWikiContext(params.Arguments)
+	case "wiki_sessions":
+		result = a.mcpWikiSessions(params.Arguments)
 	case "todo_list":
 		result = a.mcpTodoList(params.Arguments)
 	case "todo_create":

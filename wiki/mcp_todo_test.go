@@ -79,7 +79,7 @@ func mcpContentText(t *testing.T, result map[string]any) string {
 	return item["text"].(string)
 }
 
-func TestMCP_ToolsList_ElevenTools(t *testing.T) {
+func TestMCP_ToolsList_AllTools(t *testing.T) {
 	api, _, cleanup := helperMCPTodoAPI(t)
 	defer cleanup()
 
@@ -99,8 +99,8 @@ func TestMCP_ToolsList_ElevenTools(t *testing.T) {
 	result := resp["result"].(map[string]any)
 	tools := result["tools"].([]any)
 
-	if len(tools) != 11 {
-		t.Fatalf("expected 11 tools (6 wiki + 5 todo), got %d", len(tools))
+	if len(tools) != 13 {
+		t.Fatalf("expected 13 tools (8 wiki + 5 todo), got %d", len(tools))
 	}
 
 	toolNames := map[string]bool{}
@@ -108,7 +108,10 @@ func TestMCP_ToolsList_ElevenTools(t *testing.T) {
 		tm := t.(map[string]any)
 		toolNames[tm["name"].(string)] = true
 	}
-	for _, name := range []string{"todo_list", "todo_create", "todo_update", "todo_delete", "todo_sync_omp"} {
+	for _, name := range []string{
+		"todo_list", "todo_create", "todo_update", "todo_delete", "todo_sync_omp",
+		"wiki_context", "wiki_sessions",
+	} {
 		if !toolNames[name] {
 			t.Fatalf("expected tool %s in list", name)
 		}

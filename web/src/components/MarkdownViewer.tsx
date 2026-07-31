@@ -7,6 +7,7 @@ import { fetchArtifactContent, fetchCachedSummary, summarizeDocument } from '../
 import { DiagramBlock } from './DiagramBlock'
 import { ShareModal } from './ShareModal'
 import { Icon } from './icons'
+import { SessionBacklinks } from './SessionBacklinks'
 
 function getDiagramLanguage(className?: string): 'mermaid' | 'plantuml' | null {
   if (className === 'language-mermaid') return 'mermaid'
@@ -143,6 +144,8 @@ interface Props {
   isStarred?: boolean
   onNavigateToChange?: (changeName: string) => void
   onCreateTodo?: () => void
+  /** Opens an agent session from the 相关会话 block. */
+  onOpenSession?: (sessionId: string) => void
 }
 
 type SummaryState =
@@ -164,6 +167,7 @@ export function MarkdownViewer({
   isStarred,
   onNavigateToChange,
   onCreateTodo,
+  onOpenSession,
 }: Props) {
   const [content, setContent] = useState<string | null>(body ?? null)
   const [error, setError] = useState<string | null>(null)
@@ -484,6 +488,11 @@ export function MarkdownViewer({
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSlug]} components={components}>
                 {content}
               </ReactMarkdown>
+            )}
+            {!error && content !== null && path && (
+              <div className="mt-10 border-t border-[var(--color-border-subtle)] pt-6">
+                <SessionBacklinks componentId={path} onOpenSession={onOpenSession} />
+              </div>
             )}
           </div>
         </div>

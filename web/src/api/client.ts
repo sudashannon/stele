@@ -1,5 +1,5 @@
 import { encodeTodoId, normalizeTodo } from './types'
-import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, TodoStatus, CreateTodoInput, UpdateTodoInput } from './types'
+import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, WikiSession, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, TodoStatus, CreateTodoInput, UpdateTodoInput } from './types'
 
 export async function fetchChanges(): Promise<ChangeSummary[]> {
   const res = await fetch('/api/changes')
@@ -109,6 +109,19 @@ export async function fetchWikiIndex(): Promise<WikiComponent[]> {
 export async function fetchWikiGraph(): Promise<WikiGraphData> {
   const res = await fetch('/api/wiki/graph')
   if (!res.ok) throw new Error(`fetchWikiGraph failed: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchSessions(): Promise<WikiSession[]> {
+  const res = await fetch('/api/wiki/sessions')
+  if (!res.ok) throw new Error(`fetchSessions failed: ${res.status}`)
+  const body: { sessions?: WikiSession[] | null } = await res.json()
+  return body.sessions ?? []
+}
+
+export async function fetchSession(id: string): Promise<WikiSession> {
+  const res = await fetch('/api/wiki/session?id=' + encodeURIComponent(id))
+  if (!res.ok) throw new Error(`fetchSession failed: ${res.status}`)
   return res.json()
 }
 

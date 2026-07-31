@@ -60,6 +60,52 @@ describe('BacklinksPanel', () => {
     await waitFor(() => expect(screen.getByText(/1 处引用/)).toBeTruthy())
   })
 
+  it('groups session backlinks into a dedicated block with relationship kind and update time', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          component: { id: '/x/design.md', title: 'Design' },
+          forward: [],
+          backlinks: [
+            { from: '/tmp/a.jsonl', to: '/x/design.md', kind: 'edits', source: 'session' },
+            { from: '/tmp/a.jsonl', to: '/x/design.md', kind: 'reads', source: 'session' },
+            { from: '/y/tasks.md', to: '/x/design.md', kind: 'implements', source: 'yaml' },
+          ],
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          sessions: [
+            {
+              id: '/tmp/a.jsonl',
+              path: '/tmp/a.jsonl',
+              workspace: 'ws1',
+              title: '梳理设计依赖',
+              startedAt: '2026-07-30T08:00:00Z',
+              updatedAt: '2026-07-30T09:15:00Z',
+              userTurns: 4,
+              toolCalls: { read: 3 },
+              reads: ['/x/design.md'],
+              edits: ['/x/design.md'],
+              intents: ['梳理依赖'],
+              intentsTruncated: false,
+            },
+          ],
+        }),
+      } as Response)
+
+    render(<BacklinksPanel componentId="/x/design.md" />)
+
+    await waitFor(() => expect(screen.getByText('相关会话（1 个）')).toBeTruthy())
+    expect(screen.getByText('梳理设计依赖')).toBeTruthy()
+    // Relationship kinds render localized, matching the rest of the panel copy.
+    expect(screen.getByText(/关联：改动 \/ 阅读/)).toBeTruthy()
+    expect(screen.getByText(/更新于/)).toBeTruthy()
+    expect(screen.getByText('/y/tasks.md')).toBeTruthy()
+  })
+
   it('shows framed empty states for both directions when there is no data', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

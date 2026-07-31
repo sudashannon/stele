@@ -102,13 +102,14 @@ func TestMCP_ToolsList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected tools array, got %T", result["tools"])
 	}
-	if len(tools) != 11 {
-		t.Fatalf("expected 11 tools, got %d: %v", len(tools), tools)
+	if len(tools) != 13 {
+		t.Fatalf("expected 13 tools, got %d: %v", len(tools), tools)
 	}
 
 	wantNames := map[string]bool{
 		"wiki_search": false, "wiki_component": false, "wiki_neighbors": false,
 		"wiki_overview": false, "wiki_read": false, "wiki_lint": false,
+		"wiki_context": false, "wiki_sessions": false,
 		"todo_list": false, "todo_create": false, "todo_update": false, "todo_delete": false, "todo_sync_omp": false,
 	}
 	for _, tl := range tools {
