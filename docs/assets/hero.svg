@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-label="Stele engineering wiki and agent memory hero banner">
+  <rect width="1600" height="820" fill="#f9fbff"/>
+
+  <!-- Upright stone stele -->
+  <path d="M246 676V316C246 209 333 122 440 122C547 122 634 209 634 316V676Z" fill="#0f62fe"/>
+  <path d="M280 676V321C280 232 352 160 440 160C528 160 600 232 600 321V676Z" fill="#f9fbff" opacity="0.08"/>
+  <g fill="#f9fbff" opacity="0.54">
+    <rect x="330" y="286" width="220" height="9" rx="4.5"/>
+    <rect x="304" y="331" width="272" height="9" rx="4.5"/>
+    <rect x="318" y="376" width="244" height="9" rx="4.5"/>
+    <rect x="290" y="421" width="300" height="9" rx="4.5"/>
+    <rect x="314" y="466" width="252" height="9" rx="4.5"/>
+    <rect x="292" y="511" width="296" height="9" rx="4.5"/>
+    <rect x="326" y="556" width="228" height="9" rx="4.5"/>
+  </g>
+  <rect x="206" y="676" width="468" height="18" rx="9" fill="#0f62fe"/>
+
+  <!-- Knowledge graph connections -->
+  <g fill="none" stroke="#8d9bad" stroke-width="2" opacity="0.62" stroke-linecap="square">
+    <path d="M820 262L950 188L1088 250L1228 168L1378 254"/>
+    <path d="M820 262L886 402L1032 362L1088 250"/>
+    <path d="M886 402L798 532L944 612L1042 520L1032 362"/>
+    <path d="M1032 362L1174 414L1264 326L1378 254"/>
+    <path d="M1174 414L1042 520L1188 604L1324 524L1264 326"/>
+    <path d="M1324 524L1430 422L1378 254"/>
+    <path d="M944 612L1082 704L1188 604L1318 706L1438 636L1324 524"/>
+    <path d="M798 532L748 664L870 740L944 612"/>
+    <path d="M1228 168L1264 326L1174 414"/>
+  </g>
+
+  <!-- Agent-session attachment links -->
+  <g fill="none" stroke="#8a3ffc" stroke-width="2.5" opacity="0.88">
+    <path d="M968 278L1032 362"/>
+    <path d="M1140 534L1188 604"/>
+    <path d="M1364 604L1438 636"/>
+    <path d="M1358 338L1264 326"/>
+  </g>
+
+  <!-- Document and concept nodes -->
+  <g>
+    <rect x="807" y="249" width="26" height="26" fill="#0f62fe"/>
+    <rect x="937" y="175" width="26" height="26" fill="#42be65"/>
+    <rect x="1074" y="236" width="28" height="28" fill="#0f62fe"/>
+    <rect x="1215" y="155" width="26" height="26" fill="#a8a8a8"/>
+    <rect x="1364" y="240" width="28" height="28" fill="#24a148"/>
+
+    <rect x="873" y="389" width="26" height="26" fill="#78a9ff"/>
+    <rect x="1018" y="348" width="28" height="28" fill="#0f62fe"/>
+    <rect x="1160" y="400" width="28" height="28" fill="#009d9a"/>
+    <rect x="1250" y="312" width="28" height="28" fill="#697077"/>
+    <rect x="1417" y="409" width="26" height="26" fill="#0f62fe"/>
+
+    <rect x="785" y="519" width="26" height="26" fill="#009d9a"/>
+    <rect x="930" y="598" width="28" height="28" fill="#697077"/>
+    <rect x="1028" y="506" width="28" height="28" fill="#0f62fe"/>
+    <rect x="1174" y="590" width="28" height="28" fill="#009d9a"/>
+    <rect x="1310" y="510" width="28" height="28" fill="#0f62fe"/>
+
+    <rect x="735" y="651" width="26" height="26" fill="#0f62fe"/>
+    <rect x="857" y="727" width="26" height="26" fill="#a8a8a8"/>
+    <rect x="1068" y="690" width="28" height="28" fill="#009d9a"/>
+    <rect x="1304" y="692" width="28" height="28" fill="#697077"/>
+    <rect x="1424" y="622" width="28" height="28" fill="#0f62fe"/>
+  </g>
+
+  <!-- Highlighted agent-session nodes -->
+  <g fill="#8a3ffc">
+    <rect x="958" y="268" width="20" height="20"/>
+    <rect x="1130" y="524" width="20" height="20"/>
+    <rect x="1354" y="594" width="20" height="20"/>
+    <rect x="1348" y="328" width="20" height="20"/>
+  </g>
+
+  <text x="212" y="748" fill="#161616" font-family="IBM Plex Sans, Helvetica Neue, Arial, sans-serif" font-size="52" font-weight="600" letter-spacing="0.5">Stele</text>
+  <text x="214" y="786" fill="#525252" font-family="IBM Plex Sans, Helvetica Neue, Arial, sans-serif" font-size="22" font-weight="400">engineering wiki + agent memory</text>
+</svg>
