@@ -164,11 +164,16 @@ Stele 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI agent �
 | `todo_delete` | 按 ID 删除单条待办（loopback + Bearer） |
 | `todo_sync_omp` | 原子同步 OMP 会话完整 Todo 快照，支持 upsert/reconcile 与单调序列防回滚（loopback + Bearer） |
 
-**Agent 配置示例** (OpenCode `mcp.json`):
+**Agent 配置示例**（`mcp.json`）。只读的 wiki 工具无需鉴权；待办写工具要求 Bearer token，
+缺少 `Authorization` 头时它们会返回 `write access denied`：
 ```json
 {
-  "comet-wiki": {
-    "url": "http://localhost:8989/mcp"
+  "stele": {
+    "type": "http",
+    "url": "http://localhost:8989/mcp",
+    "headers": {
+      "Authorization": "Bearer <~/.stele/mcp-write-token 的内容>"
+    }
   }
 }
 ```
@@ -242,7 +247,7 @@ workspaces:
 
 Trellis 任务状态映射为 `planning → in_progress → completed/rejected`。面板只读取持久文件；“开始执行”和“完成并归档”分别调用项目内 `.trellis/scripts/task.py start` 与 `archive --no-commit`，不会直接改写 `task.json`。
 
-独立 Superpowers 来源为只读：按精确 metadata、`design-doc` 引用或标准文件名归组，展示 `design → plan → build → verify → completed` 生命周期、计划 checkbox 进度和验证报告结果；Comet 不写回这些 Markdown，也不提供迁移按钮。
+独立 Superpowers 来源为只读：按精确 metadata、`design-doc` 引用或标准文件名归组，展示 `design → plan → build → verify → completed` 生命周期、计划 checkbox 进度和验证报告结果；Stele 不写回这些 Markdown，也不提供迁移按钮。
 
 ### 配置 LLM Provider
 

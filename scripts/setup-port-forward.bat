@@ -1,8 +1,8 @@
 @echo off
 setlocal
-REM === Comet Panel LAN Port Forwarding ===
+REM === Stele LAN Port Forwarding ===
 REM Run as Administrator whenever the WSL2 address changes.
-REM comet-panel must listen on 0.0.0.0:8989 inside WSL2.
+REM stele must listen on 0.0.0.0:8989 inside WSL2.
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -33,9 +33,9 @@ if errorlevel 1 (
 
 echo.
 echo Allowing TCP 8989 from the local subnet...
-netsh advfirewall firewall delete rule name="Comet Panel" >nul 2>&1
-netsh advfirewall firewall delete rule name="Comet Panel 8989" >nul 2>&1
-netsh advfirewall firewall add rule name="Comet Panel 8989" dir=in action=allow protocol=TCP localport=8989 remoteip=LocalSubnet profile=any
+netsh advfirewall firewall delete rule name="Stele" >nul 2>&1
+netsh advfirewall firewall delete rule name="Stele 8989" >nul 2>&1
+netsh advfirewall firewall add rule name="Stele 8989" dir=in action=allow protocol=TCP localport=8989 remoteip=LocalSubnet profile=any
 if errorlevel 1 (
     echo ERROR: Failed to configure Windows Firewall.
     pause

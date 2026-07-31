@@ -1,8 +1,8 @@
-# Comet-Panel：部署指南与功能使用手册
+# Stele：部署指南与功能使用手册
 
 ## 一、概述
 
-Comet-Panel 是一个面向个人 AI 协作开发（Vibe Coding）的本地控制面板。它把 Comet 工作流中产生的中间产物与最终产物统一管理，并进一步组织成可搜索、可链接、可被 AI Agent 直接调用的 Wiki / Graph / Search / MCP 知识层。
+Stele 是一个面向个人 AI 协作开发（Vibe Coding）的本地控制面板。它把 Comet 工作流中产生的中间产物与最终产物统一管理，并进一步组织成可搜索、可链接、可被 AI Agent 直接调用的 Wiki / Graph / Search / MCP 知识层。
 
 单 Go 二进制 + 嵌入式前端。下载即用，零外部依赖。
 
@@ -42,7 +42,7 @@ bun --version
 
 ## 三、安装 OpenSpec 与 Comet（必须）
 
-Comet-Panel 的数据源是 OpenSpec 目录。**必须先安装 OpenSpec 和 Comet。**
+Stele 的数据源是 OpenSpec 目录。**必须先安装 OpenSpec 和 Comet。**
 
 ### 3.1 安装 OpenSpec
 
@@ -127,7 +127,7 @@ find ~ -path '*/comet/scripts/comet-env.mjs' -type f 2>/dev/null
 
 ---
 
-## 四、从源码部署 Comet-Panel
+## 四、从源码部署 Stele
 
 ### 4.1 克隆仓库
 
@@ -221,7 +221,7 @@ workspaces:
 
 ### 4.8 配置 LLM Provider
 
-Comet-Panel 的 AI 对话和报告生成需要配置 LLM。支持的方式：
+Stele 的 AI 对话和报告生成需要配置 LLM。支持的方式：
 
 **方式一：UI 设置面板**
 
@@ -255,13 +255,13 @@ Comet-Panel 的 AI 对话和报告生成需要配置 LLM。支持的方式：
 
 ---
 
-## 五、Comet-Panel 功能介绍
+## 五、Stele 功能介绍
 
 ### 5.1 变更仪表盘
 
 **入口**：侧边栏首个按钮
 
-这是 Comet-Panel 的主视图。直观展示所有 OpenSpec Change 的状态。
+这是 Stele 的主视图。直观展示所有 OpenSpec Change 的状态。
 
 内容：
 - **KPI 卡片**——活跃变更数、已归档数、卡死预警数、Verify 失败数、未完成任务数
@@ -344,7 +344,7 @@ Comet-Panel 的 AI 对话和报告生成需要配置 LLM。支持的方式：
 
 ### 5.8 AI 对话
 
-当在 Comet-Panel 中打开任何文档时，右下角会出现 AI 对话气泡。
+当在 Stele 中打开任何文档时，右下角会出现 AI 对话气泡。
 
 对话上下文：
 
@@ -381,7 +381,7 @@ Comet-Panel 的 AI 对话和报告生成需要配置 LLM。支持的方式：
 
 ## 六、MCP Server（面向 AI Agent）
 
-Comet-Panel 内嵌 MCP（Model Context Protocol）Streamable HTTP 端点，让 AI Agent 可以直接查询知识图谱。
+Stele 内嵌 MCP（Model Context Protocol）Streamable HTTP 端点，让 AI Agent 可以直接查询知识图谱。
 
 ### 端点地址
 
@@ -418,13 +418,13 @@ POST http://localhost:8989/mcp
 - 阅读特定文档内容并进行讨论
 - 检查文档健康度
 
-这是 Comet-Panel 区别于纯查看面板的关键能力：**知识图谱不仅对开发者可见，对 AI Agent 也可编程访问**。
+这是 Stele 区别于纯查看面板的关键能力：**知识图谱不仅对开发者可见，对 AI Agent 也可编程访问**。
 
 ---
 
 ## 七、索引更新机制
 
-Comet-Panel 通过 fsnotify 监听文件系统变更，自动增量更新知识索引。
+Stele 通过 fsnotify 监听文件系统变更，自动增量更新知识索引。
 
 流程：
 
@@ -450,7 +450,7 @@ WebSocket 驱动的实时推送确保页面始终保持最新。
 
 ### 8.1 无法搜索到刚写入的文档？
 
-这是正常的。Comet-Panel 使用 5 秒防抖窗口 + 增量更新机制，保存后需要等待防抖窗口结束。页面顶部会出现"索引更新中"的蓝色提示条，提示消失后即可搜索到。
+这是正常的。Stele 使用 5 秒防抖窗口 + 增量更新机制，保存后需要等待防抖窗口结束。页面顶部会出现"索引更新中"的蓝色提示条，提示消失后即可搜索到。
 
 ### 8.2 为什么某些目录没有被扫描？
 
@@ -463,7 +463,7 @@ WebSocket 驱动的实时推送确保页面始终保持最新。
 
 ### 8.3 知识图谱中的节点和边是什么？
 
-Comet-Panel 从你的工程目录中自动提取：
+Stele 从你的工程目录中自动提取：
 
 - **节点**：10 种组件类型（change / proposal / design / tasks / spec / plan / artifact / diagram / report / knowledge）
 - **边**：4 层链接提取
