@@ -8,7 +8,7 @@ afterEach(() => {
 
 describe('useAppZoom', () => {
   it('loads the persisted zoom level on first render', () => {
-    localStorage.setItem('comet-panel-zoom', '1.3')
+    localStorage.setItem('stele-zoom', '1.3')
 
     const { result } = renderHook(() => useAppZoom())
 
@@ -17,7 +17,7 @@ describe('useAppZoom', () => {
   })
 
   it('falls back to 100% when storage is missing or invalid', () => {
-    localStorage.setItem('comet-panel-zoom', '9')
+    localStorage.setItem('stele-zoom', '9')
 
     const { result } = renderHook(() => useAppZoom())
 
@@ -30,15 +30,15 @@ describe('useAppZoom', () => {
 
     act(() => result.current.zoomIn())
     expect(result.current.zoom).toBe(1.1)
-    expect(localStorage.getItem('comet-panel-zoom')).toBe('1.1')
+    expect(localStorage.getItem('stele-zoom')).toBe('1.1')
 
     act(() => result.current.zoomOut())
     expect(result.current.zoom).toBe(1)
-    expect(localStorage.getItem('comet-panel-zoom')).toBe('1')
+    expect(localStorage.getItem('stele-zoom')).toBe('1')
   })
 
   it('clamps zoom between 50% and 200%', () => {
-    localStorage.setItem('comet-panel-zoom', '1.9')
+    localStorage.setItem('stele-zoom', '1.9')
     const { result } = renderHook(() => useAppZoom())
 
     act(() => {
@@ -57,13 +57,13 @@ describe('useAppZoom', () => {
   })
 
   it('resets back to the default zoom', () => {
-    localStorage.setItem('comet-panel-zoom', '1.4')
+    localStorage.setItem('stele-zoom', '1.4')
     const { result } = renderHook(() => useAppZoom())
 
     act(() => result.current.zoomReset())
 
     expect(result.current.zoom).toBe(1)
     expect(result.current.zoomPercent).toBe('100%')
-    expect(localStorage.getItem('comet-panel-zoom')).toBe('1')
+    expect(localStorage.getItem('stele-zoom')).toBe('1')
   })
 })

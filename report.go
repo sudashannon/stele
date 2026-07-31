@@ -14,18 +14,15 @@ import (
 	"strings"
 	"time"
 
-	"comet-ui/chat"
-	"comet-ui/chat/provider"
-	"comet-ui/wiki"
+	"stele/chat"
+	"stele/chat/provider"
+	"stele/internal/appdir"
+	"stele/wiki"
 )
 
-// reportsDirFn resolves ~/.comet-panel/reports/, overridable in tests.
+// reportsDirFn resolves <data dir>/reports/, overridable in tests.
 var reportsDirFn = func() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".comet-panel", "reports"), nil
+	return appdir.Path("reports"), nil
 }
 
 // chatStreamDrain is the LLM injection seam used by focused report tests.

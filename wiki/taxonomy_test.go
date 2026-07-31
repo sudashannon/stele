@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+
+	"stele/internal/appdir"
 	"strings"
 	"testing"
 )
@@ -200,19 +202,17 @@ func TestEdgeEligibleCoverageThresholds(t *testing.T) {
 	}
 }
 
-func TestTaxonomyOverridePathUsesUserHomeDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	want := filepath.Join(home, ".comet-panel", "taxonomy.yaml")
-	if got := TaxonomyOverridePath(); got != want {
+func TestTaxonomyOverridePathLivesInTheDataDirectory(t *testing.T) {
+	// The data directory is resolved once per process (it performs a one-time
+	// migration), so the override path is stable rather than re-derived from
+	// $HOME on every call.
+	want := appdir.Path("taxonomy.yaml")
+	got := TaxonomyOverridePath()
+	if got != want {
 		t.Fatalf("TaxonomyOverridePath() = %q; want %q", got, want)
 	}
-}
-
-func TestTaxonomyOverridePathReturnsEmptyWithoutHome(t *testing.T) {
-	t.Setenv("HOME", "")
-	if got := TaxonomyOverridePath(); got != "" {
-		t.Fatalf("TaxonomyOverridePath() = %q; want empty path", got)
+	if filepath.Base(got) != "taxonomy.yaml" || filepath.Dir(got) != appdir.Dir() {
+		t.Fatalf("override must sit directly in the data directory, got %q", got)
 	}
 }
 

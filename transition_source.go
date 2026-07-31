@@ -6,8 +6,8 @@ import (
 	"io"
 	"os/exec"
 
-	"comet-ui/internal/source"
-	"comet-ui/internal/trellis"
+	"stele/internal/source"
+	"stele/internal/trellis"
 )
 
 type transitionSource interface {

@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"comet-ui/chat"
-	"comet-ui/chat/provider"
-	"comet-ui/wiki"
+	"stele/chat"
+	"stele/chat/provider"
+	"stele/wiki"
 )
 
 var reportEmbedClusterDigests = func(components []wiki.Component) (map[string][]float32, error) {

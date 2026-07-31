@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"comet-ui/chat"
-	"comet-ui/chat/provider"
+	"stele/chat"
+	"stele/chat/provider"
 )
 
 func summaryCachePath(cacheDir, componentID string) string {

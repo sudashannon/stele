@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"comet-ui/chat/provider"
+	"stele/chat/provider"
 )
 
 const defaultSystemPrompt = "你是 Comet Change 产物分析助手。请基于提供的文档内容回答问题。\n若答案不在文档中，请诚实告知。如果用户要求画架构图、流程图，请使用 mermaid 语法。\n用中文回答。"

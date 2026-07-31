@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"stele/internal/appdir"
 )
 
 type syncResult struct {
@@ -31,7 +33,7 @@ func handleSync(reg *WorkspaceRegistry) http.HandlerFunc {
 			return
 		}
 
-		repoDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "knowledge-repo")
+		repoDir := appdir.Path("knowledge-repo")
 		if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
 			writeJSONResp(w, syncResult{Action: "error", Message: "knowledge-repo not initialized"})
 			return

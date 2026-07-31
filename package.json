@@ -1,5 +1,5 @@
 {
-  "name": "comet-panel-scripts",
+  "name": "stele-scripts",
   "private": true,
   "dependencies": {
     "@ternlight/base": "latest"

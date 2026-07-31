@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"comet-ui/internal/source"
-	"comet-ui/internal/trellis"
+	"stele/internal/source"
+	"stele/internal/trellis"
 )
 
 func trellisLifecycle(status string) []LifecycleStep {

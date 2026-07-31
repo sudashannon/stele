@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 // Mirror manages a single git repository that mirrors all wiki-indexed
@@ -20,7 +20,7 @@ import (
 // after a debounce period so a burst of edits collapses into one commit.
 // Original files are never modified — this is a one-way copy.
 type Mirror struct {
-	repoDir  string // e.g. ~/.comet-panel/knowledge-repo
+	repoDir  string // e.g. <data dir>/knowledge-repo
 	remote   string // optional push remote (empty disables push)
 	debounce time.Duration
 

@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"comet-ui/internal/todo"
-	"comet-ui/wiki"
+	"stele/internal/todo"
+	"stele/wiki"
 )
 
 // todoAPI bundles the shared Todo Store and a reference to the wiki API.

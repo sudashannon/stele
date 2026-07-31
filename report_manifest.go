@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"comet-ui/wiki"
+	"stele/wiki"
 )
 
 const (

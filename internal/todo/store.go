@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"stele/internal/appdir"
 )
 
 const supportedSchemaVersion = 2
@@ -382,7 +384,6 @@ func validateOMPSync(in OMPSyncInput) error {
 	return nil
 }
 
-
 func isOMPSessionTodo(item Todo, sessionID string) bool {
 	return item.Metadata.Source == SourceOMP &&
 		item.ExternalRef != nil &&
@@ -504,8 +505,7 @@ func snapshotItems(src []Todo) []Todo {
 // --- MCP token management ---
 
 func TokenPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".comet-panel", "mcp-write-token")
+	return appdir.Path("mcp-write-token")
 }
 
 func EnsureToken() ([]byte, error) {

@@ -1,5 +1,5 @@
 [Unit]
-Description=Comet Panel Dashboard
+Description=Stele — engineering wiki + agent memory
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 Environment=PATH=/home/shanl/.nvm/versions/node/v24.18.0/bin:/home/shanl/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/home/shanl/workspace/comet-panel
 Environment=PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/shanl/workspace/comet-panel/comet-panel --port 8989 --bind 0.0.0.0 --dir ../miao/openspec
+ExecStart=/home/shanl/workspace/comet-panel/stele --port 8989 --bind 0.0.0.0 --dir ../miao/openspec
 Restart=on-failure
 RestartSec=3
 

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"comet-ui/chat"
-	"comet-ui/chat/provider"
+	"stele/chat"
+	"stele/chat/provider"
 )
 
 const (

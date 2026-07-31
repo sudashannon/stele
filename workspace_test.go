@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 func TestLoadWorkspaces(t *testing.T) {

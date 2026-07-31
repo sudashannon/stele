@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-const ZOOM_KEY = 'comet-panel-zoom'
+const ZOOM_KEY = 'stele-zoom'
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 2.0
 const DEFAULT_ZOOM = 1.0

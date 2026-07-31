@@ -61,8 +61,8 @@ func TestMCP_Initialize(t *testing.T) {
 		t.Fatalf("expected capabilities.tools to be present")
 	}
 	serverInfo, ok := result["serverInfo"].(map[string]any)
-	if !ok || serverInfo["name"] != "comet-panel-wiki" {
-		t.Fatalf("expected serverInfo.name comet-panel-wiki, got %v", result["serverInfo"])
+	if !ok || serverInfo["name"] != "stele-wiki" {
+		t.Fatalf("expected serverInfo.name stele-wiki, got %v", result["serverInfo"])
 	}
 }
 

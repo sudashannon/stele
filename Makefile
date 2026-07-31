@@ -2,7 +2,7 @@
 
 build:
 	cd web && npm ci && npm run build
-	go build -o comet-panel .
+	go build -o stele .
 
 dev:
 	@echo "Run in two terminals:"
@@ -14,4 +14,4 @@ test:
 	go test ./...
 
 clean:
-	rm -rf web/dist web/node_modules comet-panel
+	rm -rf web/dist web/node_modules stele

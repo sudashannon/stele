@@ -132,8 +132,8 @@ find ~ -path '*/comet/scripts/comet-env.mjs' -type f 2>/dev/null
 ### 4.1 克隆仓库
 
 ```bash
-git clone https://github.com/sudashannon/comet-panel.git
-cd comet-panel
+git clone https://github.com/sudashannon/stele.git
+cd stele
 ```
 
 ### 4.2 安装前端依赖
@@ -152,17 +152,17 @@ bun install
 
 ```bash
 cd web && npx vite build && cd ..
-go build -o comet-panel .
+go build -o stele .
 ```
 
-构建完成后会生成一个单文件二进制 `comet-panel`。
+构建完成后会生成一个单文件二进制 `stele`。
 
 ### 4.5 首次运行
 
 ```bash
 # --dir 指向你的 openspec 目录
 # --port 服务端口（可选，默认 8989）
-./comet-panel --port 8989 --dir /path/to/your/project/openspec
+./stele --port 8989 --dir /path/to/your/project/openspec
 ```
 
 浏览器打开 `http://localhost:8989`。首次启动时后端会扫描 openspec 目录并构建知识索引，等待嵌入完成后即可完整使用。
@@ -171,23 +171,23 @@ go build -o comet-panel .
 
 ```bash
 # 编辑服务文件中的路径和工作目录
-cp comet-panel.service ~/.config/systemd/user/
+cp stele.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now comet-panel
+systemctl --user enable --now stele
 ```
 
 服务文件内容参考：
 
 ```ini
 [Unit]
-Description=Comet Panel Dashboard
+Description=Stele Dashboard
 After=network.target
 
 [Service]
 Type=simple
 User=your-username
-WorkingDirectory=/path/to/comet-panel
-ExecStart=/path/to/comet-panel/comet-panel --port 8989 --dir /path/to/openspec
+WorkingDirectory=/path/to/stele
+ExecStart=/path/to/stele/stele --port 8989 --dir /path/to/openspec
 Restart=on-failure
 RestartSec=3
 
@@ -205,7 +205,7 @@ WantedBy=default.target
 
 **方式二：直接编辑配置文件**
 
-编辑 `~/.comet-panel/workspaces.yaml`：
+编辑 `~/.stele/workspaces.yaml`：
 
 ```yaml
 workspaces:
@@ -229,7 +229,7 @@ Comet-Panel 的 AI 对话和报告生成需要配置 LLM。支持的方式：
 
 **方式二：编辑配置文件**
 
-编辑 `~/.comet-ui/config.json`：
+编辑 `~/.stele/config.json`：
 
 ```json
 {
@@ -476,11 +476,11 @@ Comet-Panel 从你的工程目录中自动提取：
 
 ```bash
 # Systemd 服务
-systemctl --user restart comet-panel
+systemctl --user restart stele
 
 # 直接运行
 kill <PID>
-./comet-panel --port 8989 --dir /path/to/openspec
+./stele --port 8989 --dir /path/to/openspec
 ```
 
 ### 8.5 如何删除已验证测试通过的分支？
@@ -544,7 +544,7 @@ Workspace 目录结构（数据源）：
 
 ## 十、社区与源码
 
-- 源码仓库：github.com/sudashannon/comet-panel
+- 源码仓库：github.com/sudashannon/stele
 - 技术栈：Go 1.26 + React 18 + Vite + Tailwind CSS
 - Embedding：Ternlight（384 维 MiniLM）
 - 协议：MIT

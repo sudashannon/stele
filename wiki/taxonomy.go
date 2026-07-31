@@ -12,6 +12,8 @@ import (
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"stele/internal/appdir"
 )
 
 //go:embed taxonomy.yaml
@@ -167,13 +169,11 @@ var (
 )
 
 // TaxonomyOverridePath is where a user-maintained vocabulary may shadow the
-// embedded default, so terms can be added without rebuilding the binary.
+// embedded default, so terms can be added without rebuilding the binary. It
+// always names a path inside the panel's data directory; a missing file simply
+// leaves the embedded vocabulary in place.
 func TaxonomyOverridePath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".comet-panel", "taxonomy.yaml")
+	return appdir.Path("taxonomy.yaml")
 }
 
 // LoadTaxonomy returns the process-wide vocabulary: the user override when it

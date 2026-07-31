@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"comet-ui/internal/pathresolve"
-	"comet-ui/internal/source"
+	"stele/internal/pathresolve"
+	"stele/internal/source"
 )
 
 type ChangeSummary struct {

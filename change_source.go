@@ -1,7 +1,7 @@
 package main
 
 import (
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 // changeSource isolates the dashboard change/list/detail contract from the

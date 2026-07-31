@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"comet-ui/internal/source"
-	"comet-ui/internal/trellis"
+	"stele/internal/source"
+	"stele/internal/trellis"
 )
 
 func writeMainTrellisTask(t *testing.T, dir, status string) {

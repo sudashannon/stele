@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"comet-ui/chat"
-	"comet-ui/chat/provider"
-	"comet-ui/wiki"
+	"stele/chat"
+	"stele/chat/provider"
+	"stele/wiki"
 )
 
 type reportTestProvider struct{ name string }

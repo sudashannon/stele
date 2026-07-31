@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"comet-ui/internal/source"
-	sp "comet-ui/internal/superpowers"
-	"comet-ui/internal/trellis"
+	"stele/internal/source"
+	sp "stele/internal/superpowers"
+	"stele/internal/trellis"
 
 	"gopkg.in/yaml.v3"
 )

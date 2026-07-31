@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"comet-ui/chat"
+	"stele/chat"
 )
 
 // buildLinearGraph constructs A -> B -> C -> D (forward edges only), where

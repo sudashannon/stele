@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 func TestHandleTransition_RejectsInvalidChangeName(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"comet-ui/wiki"
+	"stele/wiki"
 )
 
 const reportEvidenceRuneBudget = 4096

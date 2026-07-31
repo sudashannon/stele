@@ -1,8 +1,8 @@
 package main
 
 import (
-	"comet-ui/internal/source"
-	sp "comet-ui/internal/superpowers"
+	"stele/internal/source"
+	sp "stele/internal/superpowers"
 )
 
 func superpowersLifecycle() []LifecycleStep {

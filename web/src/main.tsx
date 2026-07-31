@@ -8,7 +8,7 @@ import './styles.css'
 // Reloading picks up the fresh index.html. The session guard keeps a genuinely
 // missing chunk from looping: after one attempt the error propagates to the
 // component that requested it, which renders its own fallback.
-const staleBundleReloadKey = 'comet-panel:stale-bundle-reloaded'
+const staleBundleReloadKey = 'stele:stale-bundle-reloaded'
 window.addEventListener('vite:preloadError', (event) => {
   if (sessionStorage.getItem(staleBundleReloadKey) !== null) return
   event.preventDefault()

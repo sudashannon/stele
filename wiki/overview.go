@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"comet-ui/chat"
-	"comet-ui/chat/provider"
+	"stele/chat"
+	"stele/chat/provider"
 )
 
 const overviewPrefix = "> ⚠️ 本页由 AI 自动生成，非人工产物，仅供参考导航。\n\n"

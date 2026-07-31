@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"comet-ui/chat"
+	"stele/chat"
 )
 
 func TestOverviewCacheKey(t *testing.T) {

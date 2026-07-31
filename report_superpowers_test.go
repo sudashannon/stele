@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"comet-ui/wiki"
+	"stele/wiki"
 )
 
 func TestExtractReportCorpusReadsStandaloneSuperpowersDesign(t *testing.T) {

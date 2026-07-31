@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"comet-ui/internal/todo"
+	"stele/internal/todo"
 )
 
 func helperMCPTodoAPI(t *testing.T) (*API, *todo.Store, func()) {

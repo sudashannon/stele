@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 func writeSuperpowersFile(t *testing.T, root, relative, content string) string {

@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"stele/internal/appdir"
 )
 
 // Status represents the lifecycle state of a Todo item.
@@ -498,8 +498,7 @@ func SameOrigin(origin, host string) bool {
 
 // StorePath returns the default Todo store path.
 func StorePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".comet-panel", "todos.json")
+	return appdir.Path("todos.json")
 }
 
 func schemeDefaultPort(scheme string) string {

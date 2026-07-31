@@ -15,8 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"comet-ui/chat"
-	"comet-ui/internal/todo"
+	"stele/chat"
+	"stele/internal/appdir"
+	"stele/internal/todo"
 )
 
 type API struct {
@@ -909,13 +910,13 @@ func (a *API) HandleRebuild(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleSummarize returns an opt-in LLM summary for a component, using a
-// single centralized cache directory (~/.comet-panel/wiki/summaries) rather
+// single centralized cache directory (<data dir>/wiki/summaries) rather
 // than one derived from the component's own path. Deriving the cache dir
 // from filepath.Dir(id) would scatter summaries across inconsistent
 // locations depending on how deeply nested the component is (e.g. a
 // change's design.md vs. a top-level spec vs. a nested artifact would each
 // land in a different directory) — this mirrors the centralized
-// ~/.comet-panel/wiki/ convention persistIndexCache already established for
+// <data dir>/wiki/ convention persistIndexCache already established for
 // the index cache.
 func (a *API) HandleSummarize(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
@@ -926,7 +927,7 @@ func (a *API) HandleSummarize(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	cacheDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "wiki", "summaries")
+	cacheDir := appdir.Path("wiki", "summaries")
 	summary, err := Summarize(r.Context(), c, cacheDir)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -950,7 +951,7 @@ func (a *API) HandleCachedSummary(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	cacheDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "wiki", "summaries")
+	cacheDir := appdir.Path("wiki", "summaries")
 	summary, hit := CachedSummary(c, cacheDir)
 	if !hit {
 		w.WriteHeader(http.StatusNoContent)
@@ -962,7 +963,7 @@ func (a *API) HandleCachedSummary(w http.ResponseWriter, r *http.Request) {
 
 // HandleOverview returns an opt-in LLM-generated overview for a community
 // of 3+ members, cached under a single centralized directory
-// (~/.comet-panel/wiki/overviews) keyed by membership hash — mirroring the
+// (<data dir>/wiki/overviews) keyed by membership hash — mirroring the
 // HandleSummarize/Summarize convention above, but at the community rather
 // than the single-component granularity.
 func (a *API) HandleOverview(w http.ResponseWriter, r *http.Request) {
@@ -991,7 +992,7 @@ func (a *API) HandleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cacheDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "wiki", "overviews")
+	cacheDir := appdir.Path("wiki", "overviews")
 	body, err := GenerateOverview(r.Context(), communityID, members, cacheDir)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

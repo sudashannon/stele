@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"stele/internal/appdir"
 )
 
 // ShareEntry represents a single shareable document link.
@@ -57,10 +59,9 @@ func NewShareManager(baseURL string) *ShareManager {
 	return m
 }
 
-// shareCachePath returns ~/.comet-panel/share-tokens.json.
+// shareCachePath returns <data dir>/share-tokens.json.
 func shareCachePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".comet-panel", "share-tokens.json")
+	return appdir.Path("share-tokens.json")
 }
 
 // load restores persisted tokens on startup.

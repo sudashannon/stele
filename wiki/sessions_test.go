@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"comet-ui/internal/sessions"
+	"stele/internal/sessions"
 )
 
 // sessionFixture builds a workspace with one indexed document plus a transcript

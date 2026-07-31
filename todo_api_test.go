@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"comet-ui/internal/todo"
-	"comet-ui/wiki"
+	"stele/internal/todo"
+	"stele/wiki"
 )
 
 func helperTodoAPI(t *testing.T) (*todoAPI, *todo.Store, *httptest.Server) {

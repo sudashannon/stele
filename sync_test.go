@@ -54,7 +54,7 @@ func TestHandleSync_UpToDateWhenLocalMatchesRemote(t *testing.T) {
 
 	home := t.TempDir()
 	remoteDir := filepath.Join(home, "remote.git")
-	repoDir := filepath.Join(home, ".comet-panel", "knowledge-repo")
+	repoDir := filepath.Join(home, ".stele", "knowledge-repo")
 
 	runGit(t, home, "init", "--bare", remoteDir)
 	runGit(t, home, "init", repoDir)

@@ -1,4 +1,4 @@
-module comet-ui
+module stele
 
 go 1.26
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,7 +23,7 @@ type workspacesFile struct {
 var ErrWorkspaceNotFound = errors.New("workspace not found")
 
 // SyncConfig configures the optional knowledge-mirror git repository: a
-// single git repo at ~/.comet-panel/knowledge-repo mirroring all indexed
+// single git repo at <data dir>/knowledge-repo mirroring all indexed
 // wiki documents from every workspace, auto-committed on file changes.
 // Enabled defaults to false (opt-in); Remote, if set, is pushed to after
 // each commit.

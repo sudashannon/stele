@@ -21,10 +21,11 @@ import (
 	"sync"
 	"time"
 
-	"comet-ui/chat"
-	"comet-ui/internal/source"
-	"comet-ui/internal/todo"
-	"comet-ui/wiki"
+	"stele/chat"
+	"stele/internal/appdir"
+	"stele/internal/source"
+	"stele/internal/todo"
+	"stele/wiki"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
@@ -152,7 +153,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	reg, err := NewWorkspaceRegistry(filepath.Join(os.Getenv("HOME"), ".comet-panel", "workspaces.yaml"))
+	reg, err := NewWorkspaceRegistry(appdir.Path("workspaces.yaml"))
 	if err != nil {
 		log.Fatalf("workspace registry: %v", err)
 	}
@@ -184,7 +185,7 @@ func main() {
 		log.Fatalf("mcp write token: %v", err)
 	}
 
-	wikiCacheDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "wiki")
+	wikiCacheDir := appdir.Path("wiki")
 	runtimeWorkspaces := workspacesForRuntime(reg.List(), *baseDir)
 	wikiAPI := wiki.NewAPIWithWorkspacesAsync(toWikiWorkspaces(runtimeWorkspaces), wikiCacheDir)
 	sseHub := wiki.NewSSEHub()
@@ -206,7 +207,7 @@ func main() {
 	// serve `[]` off the empty graph from NewAPIWithWorkspacesAsync until
 	// this swaps in the built one.
 	watcher := wiki.NewWatcher(wikiAPI, "scripts/embed.ts")
-	mirrorDir := filepath.Join(os.Getenv("HOME"), ".comet-panel", "knowledge-repo")
+	mirrorDir := appdir.Path("knowledge-repo")
 	syncCfg := reg.Sync()
 	if syncCfg.Enabled {
 		mirror := wiki.NewMirror(mirrorDir, syncCfg.Remote)

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 func TestPrepareIncrementalTagChangesClassifiesRebuildsAndPreservesSyntheticTags(t *testing.T) {

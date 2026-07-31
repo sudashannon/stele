@@ -1,6 +1,6 @@
-# Comet Panel
+# Stele
 
-> 工程变更知识图谱 + AI 面板 — 统一可视化 OpenSpec 变更、Trellis 任务与独立 Superpowers 项目产物，支持语义搜索、知识图谱和自动报告。
+> 工程知识图谱 + agent 记忆层 — 统一可视化 OpenSpec 变更、Trellis 任务与独立 Superpowers 项目产物，支持语义搜索、知识图谱和自动报告。
 
 **单 Go 二进制 + 嵌入式前端。下载即用。**
 
@@ -138,13 +138,13 @@
 - **月报**: 复用完整落在区间内的周报 `PeriodDigest`，仅为月初/月末和覆盖缺口生成裁剪摘要，再聚类渲染 Swiss-style HTML
 - **可追溯性**: 每份报告同时保存 `.manifest.json`，记录文档内容哈希、主题、结构化 claims、覆盖告警、模型与聚类版本
 - **降级策略**: embedding 缺失时使用确定性词法聚类；索引未就绪或模型输出无法通过证据校验时返回错误且不落盘
-- **历史管理**: 持久化到 `~/.comet-panel/reports/`，支持查看、下载和删除（删除时同步清理 manifest）
+- **历史管理**: 持久化到 `~/.stele/reports/`，支持查看、下载和删除（删除时同步清理 manifest）
 
 ---
 
 ## MCP Server
 
-Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI agent 查询知识图谱并管理待办。Wiki 工具保持只读；待办写工具仅接受 loopback 请求，并要求 `~/.comet-panel/mcp-write-token` 中的 Bearer token。
+Stele 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI agent 查询知识图谱并管理待办。Wiki 工具保持只读；待办写工具仅接受 loopback 请求，并要求 `~/.stele/mcp-write-token` 中的 Bearer token。
 
 **端点**: `POST http://localhost:8989/mcp`
 
@@ -181,21 +181,21 @@ Comet Panel 内嵌 MCP (Model Context Protocol) Streamable HTTP 端点, 让 AI a
 
 ```bash
 # 克隆
-git clone https://github.com/sudashannon/comet-panel.git
-cd comet-panel
+git clone https://github.com/sudashannon/stele.git
+cd stele
 
 # 安装 embedding 依赖
 bun install
 
 # 构建
 cd web && npm install && npx vite build && cd ..
-go build -o comet-panel .
+go build -o stele .
 ```
 
 ### 运行
 
 ```bash
-./comet-panel --port 8989 --dir /path/to/openspec-or-trellis-or-superpowers-project
+./stele --port 8989 --dir /path/to/openspec-or-trellis-or-superpowers-project
 ```
 
 浏览器打开 `http://localhost:8989`
@@ -207,20 +207,20 @@ go build -o comet-panel .
 目录不存在时该层自动关闭；用 `--sessions-dir` 指定其它位置：
 
 ```bash
-./comet-panel --dir /path/to/openspec --sessions-dir ~/.omp/agent/sessions
+./stele --dir /path/to/openspec --sessions-dir ~/.omp/agent/sessions
 ```
 
 ### Systemd 服务
 
 ```bash
-cp comet-panel.service ~/.config/systemd/user/
+cp stele.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now comet-panel
+systemctl --user enable --now stele
 ```
 
 ### 配置 Workspace
 
-通过 UI 添加, 或直接编辑 `~/.comet-panel/workspaces.yaml`:
+通过 UI 添加, 或直接编辑 `~/.stele/workspaces.yaml`:
 
 ```yaml
 workspaces:
@@ -246,7 +246,7 @@ Trellis 任务状态映射为 `planning → in_progress → completed/rejected`�
 
 ### 配置 LLM Provider
 
-UI 设置面板, 或编辑 `~/.comet-ui/config.json`:
+UI 设置面板, 或编辑 `~/.stele/config.json`:
 
 ```json
 {

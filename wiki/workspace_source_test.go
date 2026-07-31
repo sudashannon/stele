@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 func TestTrellisIndexSourceBuildsDurableComponentsAndEdges(t *testing.T) {

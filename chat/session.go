@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"comet-ui/chat/provider"
+	"stele/chat/provider"
 )
 
 type Session struct {

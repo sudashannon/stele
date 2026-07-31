@@ -30,7 +30,7 @@ export async function addWorkspace(cfg: WorkspaceConfig): Promise<void> {
 
 // removeWorkspace unregisters a workspace by alias. Without it, a workspace
 // whose path stopped resolving (the "以下 workspace 无法读取" banner) was a
-// dead end -- the only fix was hand-editing ~/.comet-panel/workspaces.yaml.
+// dead end -- the only fix was hand-editing the panel's workspaces.yaml.
 export async function removeWorkspace(alias: string): Promise<void> {
   const res = await fetch('/api/workspaces?alias=' + encodeURIComponent(alias), {
     method: 'DELETE',
@@ -359,7 +359,7 @@ export async function fetchCachedSummary(path: string, signal?: AbortSignal): Pr
 }
 
 // summarizeDocument reaches GET /api/wiki/summarize, an LLM summary cached
-// under ~/.comet-panel/wiki/summaries. The endpoint has been registered in
+// under the panel data directory. The endpoint has been registered in
 // main.go since the wiki API landed but had no caller, so the capability was
 // unreachable for a human user.
 export async function summarizeDocument(id: string): Promise<string> {

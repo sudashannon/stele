@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"comet-ui/internal/source"
 	"gopkg.in/yaml.v3"
+	"stele/internal/source"
 )
 
 type incrementalChange struct {

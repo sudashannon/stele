@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"comet-ui/internal/todo"
+	"stele/internal/todo"
 )
 
 // MCP JSON-RPC types
@@ -289,7 +289,7 @@ func (a *API) mcpInitialize(w http.ResponseWriter, req jsonRPCRequest) {
 			"tools": map[string]any{},
 		},
 		"serverInfo": map[string]any{
-			"name":    "comet-panel-wiki",
+			"name":    "stele-wiki",
 			"version": "1.0.0",
 		},
 	})

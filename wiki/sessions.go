@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"comet-ui/internal/sessions"
+	"stele/internal/sessions"
 )
 
 // SessionsIndex holds the agent-session layer: transcript digests plus the

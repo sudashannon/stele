@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"stele/internal/appdir"
 )
 
 // Bookmark is a starred document, persisted as a flat JSON array to
-// ~/.comet-panel/bookmarks.json.
+// the panel data directory (see internal/appdir).
 type Bookmark struct {
 	Path      string `json:"path"`
 	Title     string `json:"title"`
@@ -24,7 +26,7 @@ var (
 
 // bookmarksPath returns the on-disk location of the bookmarks file.
 func bookmarksPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".comet-panel", "bookmarks.json")
+	return appdir.Path("bookmarks.json")
 }
 
 // loadBookmarks reads the bookmarks file. A missing file is not an error —

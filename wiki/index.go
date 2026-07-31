@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 // WorkspaceConfig is shared with the HTTP workspace registry through the

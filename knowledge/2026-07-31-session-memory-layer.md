@@ -33,7 +33,7 @@ tags: [comet-panel, sessions, memory, wiki, design]
 ~/.omp/agent/sessions/<cwd-slug>/<ISO>_<uuid>.jsonl
         │ 流式逐行解析（tail 续读，按 size+mtime 失效）
         ▼
-internal/sessions.Digest ── 缓存 ~/.comet-panel/wiki/sessions.json
+internal/sessions.Digest ── 缓存 ~/.stele/wiki/sessions.json
         │ cwd 最长前缀匹配注册 workspace（rx101 胜过父级 miao）
         ▼
 wiki.SessionsIndex.Apply(graph)  ← 每次 rebuild 前挂到新图上，幂等

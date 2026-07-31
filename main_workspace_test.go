@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"comet-ui/internal/source"
+	"stele/internal/source"
 )
 
 func TestHandleListWorkspaces_Empty(t *testing.T) {

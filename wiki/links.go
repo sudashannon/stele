@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
-	"comet-ui/internal/pathresolve"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"stele/internal/pathresolve"
 )
 
 // ExtractYAMLLinks reads .comet.yaml in changeDir and builds Edges for its
