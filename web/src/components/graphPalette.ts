@@ -3,6 +3,11 @@
  * timeline, calendar and filter views do not pull the graph renderer into
  * their lazy chunks merely to color a legend.
  */
+// Node/badge fill per document type. Every indexed type needs an entry: the
+// calendar and the timeline fall back to --color-text-secondary for anything
+// missing, and `knowledge` (the largest population by far) plus `report` used to
+// land there together with `artifact`, so three types rendered as the same grey
+// and the colour carried no information.
 export const TYPE_COLORS: Record<string, string> = {
   change: 'var(--color-accent)',
   proposal: 'color-mix(in srgb, var(--color-accent) 45%, var(--color-danger))',
@@ -10,6 +15,8 @@ export const TYPE_COLORS: Record<string, string> = {
   tasks: 'var(--color-warn)',
   spec: 'color-mix(in srgb, var(--color-warn) 70%, var(--color-danger))',
   plan: 'var(--color-success)',
+  knowledge: 'var(--color-teal)',
+  report: 'color-mix(in srgb, var(--color-purple) 55%, var(--color-accent))',
   artifact: 'var(--color-text-secondary)',
   diagram: 'var(--color-danger)',
   session: 'var(--color-purple)',
