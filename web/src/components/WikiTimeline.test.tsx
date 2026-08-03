@@ -30,7 +30,7 @@ describe('WikiTimeline', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(mockGraphResponse([]))
     render(<WikiTimeline />)
     expect(screen.getByText('加载中…')).toBeTruthy()
-    await waitFor(() => expect(screen.getByText('暂无变更数据')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('当前口径（全部）没有数据')).toBeTruthy())
   })
 
   it('renders one bar per change component, grouped by workspace, and exposes community labels', async () => {
@@ -70,12 +70,166 @@ describe('WikiTimeline', () => {
     render(<WikiTimeline />)
 
     await waitFor(() => expect(screen.getByTestId('wiki-timeline')).toBeTruthy())
-    expect(screen.getAllByTestId('wiki-timeline-bar')).toHaveLength(2)
+    // The default scope draws documents alongside changes: drawing changes only
+    // is what left the chart blank once the work moved to knowledge documents.
+    expect(screen.getAllByTestId('wiki-timeline-bar')).toHaveLength(3)
+    expect(screen.getAllByTestId('wiki-timeline-bar').filter((bar) => bar.dataset.kind === 'document')).toHaveLength(1)
     expect(screen.getAllByText('comet-panel').length).toBeGreaterThan(0)
     expect(screen.getAllByText('other-repo').length).toBeGreaterThan(0)
     expect(screen.getAllByText('交付节奏').length).toBeGreaterThan(0)
     expect(screen.getAllByText('质量治理').length).toBeGreaterThan(0)
     expect(screen.queryByText('无关社区')).toBeNull()
+  })
+
+  // The blank chart after mid-July was a scope problem: 320 documents and every
+  // session were simply not drawn. Switching scope must isolate one layer, and an
+  // empty layer must say where the work actually is.
+  it('switches scope between changes, documents and sessions, and names what other scopes hold', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/wiki/sessions')) {
+        return Promise.resolve(mockJsonResponse({
+          sessions: [{
+            id: 'sess-1',
+            path: '/home/u/.omp/agent/sessions/-repo/a.jsonl',
+            workspace: 'comet-panel',
+            title: '排查图谱',
+            cwd: '/repo',
+            startedAt: '2026-02-01T00:00:00Z',
+            updatedAt: '2026-02-04T00:00:00Z',
+            userTurns: 3,
+            toolCalls: { read: 9 },
+            writes: [], edits: [], reads: [], intents: [],
+            activity: { '2026-02-01': 12, '2026-02-04': 30 },
+          }],
+        }))
+      }
+      return Promise.resolve(mockGraphResponse(
+        [
+          {
+            id: 'c1', type: 'change', title: 'Add timeline view', path: 'openspec/changes/c1',
+            workspace: 'comet-panel', frontmatter: { created_at: '2026-01-01T00:00:00Z', phase: 'build' },
+            updatedAt: '2026-01-05T00:00:00Z',
+          },
+          {
+            id: 'k1', type: 'knowledge', title: 'Bandwidth analysis', path: '/repo/knowledge/a.md',
+            workspace: 'comet-panel', updatedAt: '2026-02-03T00:00:00Z',
+          },
+        ],
+        { c1: 0 },
+      ))
+    })
+    render(<WikiTimeline />)
+
+    await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-bar').length).toBeGreaterThan(2))
+    const bars = () => screen.queryAllByTestId('wiki-timeline-bar')
+    const scopeButton = (label: string) =>
+      screen.getAllByRole('button').find((button) => button.textContent?.startsWith(label))!
+
+    // Session days are drawn from the per-day activity, one mark per active day.
+    await waitFor(() => expect(bars().filter((bar) => bar.dataset.kind === 'session')).toHaveLength(2))
+
+    fireEvent.click(scopeButton('变更'))
+    await waitFor(() => expect(bars()).toHaveLength(1))
+    expect(bars()[0].dataset.kind).toBe('change')
+
+    fireEvent.click(scopeButton('文档'))
+    await waitFor(() => expect(bars()).toHaveLength(1))
+    expect(bars()[0].dataset.kind).toBe('document')
+    expect(bars()[0].getAttribute('title')).toContain('文档：Bandwidth analysis')
+
+    fireEvent.click(scopeButton('会话'))
+    await waitFor(() => expect(bars()).toHaveLength(2))
+    expect(bars()[0].getAttribute('title')).toContain('次活动')
+  })
+
+  it('tells the reader where the work is when the chosen scope is empty', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/wiki/sessions')) return Promise.resolve(mockJsonResponse({ sessions: [] }))
+      return Promise.resolve(mockGraphResponse([
+        {
+          id: 'k1', type: 'knowledge', title: 'Only a document', path: '/repo/knowledge/a.md',
+          workspace: 'comet-panel', updatedAt: '2026-02-03T00:00:00Z',
+        },
+      ]))
+    })
+    render(<WikiTimeline />)
+
+    await waitFor(() => expect(screen.getByTestId('wiki-timeline')).toBeTruthy())
+    const scopeButton = screen.getAllByRole('button').find((button) => button.textContent?.startsWith('变更'))!
+    fireEvent.click(scopeButton)
+
+    await waitFor(() => expect(screen.getByText('当前口径（变更）没有数据')).toBeTruthy())
+    expect(screen.getByTestId('wiki-timeline-scope-hint').textContent).toContain('1 篇文档')
+  })
+
+  // A community filter cannot include sessions - they belong to no community -
+  // so dropping them silently would look like the session layer went missing.
+  it('says that a community filter excludes sessions', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/wiki/sessions')) {
+        return Promise.resolve(mockJsonResponse({
+          sessions: [{
+            id: 'sess-1', path: '/x/a.jsonl', workspace: 'comet-panel', title: '会话', cwd: '/repo',
+            startedAt: '2026-02-01T00:00:00Z', updatedAt: '2026-02-01T00:00:00Z', userTurns: 1,
+            toolCalls: {}, writes: [], edits: [], reads: [], intents: [], activity: { '2026-02-01': 4 },
+          }],
+        }))
+      }
+      return Promise.resolve(mockGraphResponse(
+        [{
+          id: 'c1', type: 'change', title: 'A change', path: 'openspec/changes/c1', workspace: 'comet-panel',
+          frontmatter: { created_at: '2026-01-01T00:00:00Z', phase: 'build' }, updatedAt: '2026-01-05T00:00:00Z',
+        }],
+        { c1: 0 },
+        { '0': '交付节奏' },
+      ))
+    })
+    render(<WikiTimeline />)
+
+    await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-bar').length).toBe(2))
+    fireEvent.click(screen.getByRole('button', { name: /交付节奏/ }))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('graph-filter-summary').textContent).toContain('社区筛选不含会话'),
+    )
+  })
+
+  // The chart spans months and scrolls horizontally: opening at the oldest edge
+  // is what made the recent weeks feel missing even after they were drawn.
+  it('opens scrolled to the recent end of the chart', async () => {
+    // jsdom reports zero for every layout box, so the scroll geometry has to be
+    // stubbed: the contract is that a chart wider than its viewport does not
+    // open pinned to its oldest edge.
+    const clientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    const scrollWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: 600 })
+    Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, value: 4000 })
+    try {
+      vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/api/wiki/sessions')) return Promise.resolve(mockJsonResponse({ sessions: [] }))
+        return Promise.resolve(mockGraphResponse([
+          {
+            id: 'old', type: 'knowledge', title: '很久以前', path: '/repo/knowledge/old.md',
+            workspace: 'comet-panel', updatedAt: '2026-01-05T00:00:00Z',
+          },
+          {
+            id: 'recent', type: 'knowledge', title: '最近', path: '/repo/knowledge/new.md',
+            workspace: 'comet-panel', updatedAt: new Date().toISOString(),
+          },
+        ]))
+      })
+      render(<WikiTimeline />)
+
+      const chart = await waitFor(() => screen.getByTestId('wiki-timeline'))
+      await waitFor(() => expect(chart.scrollLeft).toBeGreaterThan(0))
+    } finally {
+      if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth)
+      if (scrollWidth) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', scrollWidth)
+    }
   })
 
   it('caps the community legend so the timeline keeps its vertical workspace', async () => {
@@ -186,7 +340,7 @@ describe('WikiTimeline', () => {
     fireEvent.click(otherRepoChip)
 
     await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-bar')).toHaveLength(1))
-    expect(screen.getByTestId('graph-filter-summary').textContent).toContain('显示 1 / 2 条变更')
+    expect(screen.getByTestId('graph-filter-summary').textContent).toContain('显示 1 / 2 项（口径：全部）')
   })
 
   it('navigates on Enter and Space from a timeline bar button', async () => {
