@@ -180,6 +180,10 @@ interface TodoPanelProps {
   workspaces: WorkspaceConfig[]
   wikiComponents: WikiComponent[]
   onNavigateWiki: (path: string) => void
+  /** Opens the session a projected todo came from. */
+  onNavigateSession?: (path: string) => void
+  /** Session id -> transcript path for todos projected from a session. */
+  sessionPathById?: Record<string, string>
   onNavigateChange: (workspace: string, changeName: string) => void
   draftChange?: TodoChangeRef | null
   draftWikiRef?: TodoWikiRef | null
@@ -194,7 +198,7 @@ export function TodoPanel({
   todos, counts, writable, loading, error,
   onCreate, onUpdate, onDelete,
   workspaces, wikiComponents,
-  onNavigateWiki, onNavigateChange,
+  onNavigateWiki, onNavigateChange, onNavigateSession, sessionPathById,
   draftChange, draftWikiRef, onDraftConsumed,
   focusCaptureRef,
   defaultWorkspace,
@@ -632,6 +636,8 @@ export function TodoPanel({
                           onUpdate(todo.id, { status: newStatus }).catch(() => {})
                         }}
                         onNavigateWiki={onNavigateWiki}
+                        onNavigateSession={onNavigateSession}
+                        sessionPathById={sessionPathById}
                         onNavigateChange={onNavigateChange}
                         wikiComponents={wikiComponents}
                         writable={writable}
@@ -694,6 +700,8 @@ function TodoRow({
   onToggleDone,
   onNavigateWiki,
   onNavigateChange,
+  onNavigateSession,
+  sessionPathById,
   wikiComponents,
   writable,
 }: {
@@ -706,6 +714,10 @@ function TodoRow({
   onToggleDone: () => void
   onNavigateWiki: (path: string) => void
   onNavigateChange: (workspace: string, changeName: string) => void
+  /** Opens the session a projected todo came from. */
+  onNavigateSession?: (path: string) => void
+  /** Session id -> transcript path, for todos projected from a session. */
+  sessionPathById?: Record<string, string>
   wikiComponents: WikiComponent[]
   writable: boolean
 }) {
@@ -791,16 +803,39 @@ function TodoRow({
             </span>
           )}
 
-          {todo.metadata.source === 'omp' && todo.externalRef && (
-            <span
-              data-testid={`todo-omp-origin-${todo.id}`}
-              className="text-xs text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1"
-              title={todo.externalRef.blocker || `OMP ${todo.externalRef.sessionId}/${todo.externalRef.taskKey}`}
-            >
-              OMP · {todo.externalRef.phase}
-              {todo.externalRef.blocker ? ` · ${todo.externalRef.blocker}` : ''}
-            </span>
-          )}
+          {todo.metadata.source === 'omp' && todo.externalRef && (() => {
+            // The projection already knows which session produced this todo;
+            // resolving that id to an indexed transcript turns the origin chip
+            // into the way back to the work it came from.
+            const sessionPath = sessionPathById?.[todo.externalRef.sessionId]
+            const label = `OMP · ${todo.externalRef.phase}${todo.externalRef.blocker ? ` · ${todo.externalRef.blocker}` : ''}`
+            const title = todo.externalRef.blocker || `OMP ${todo.externalRef.sessionId}/${todo.externalRef.taskKey}`
+            if (!sessionPath || !onNavigateSession) {
+              return (
+                <span
+                  data-testid={`todo-omp-origin-${todo.id}`}
+                  className="text-xs text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1"
+                  title={title}
+                >
+                  {label}
+                </span>
+              )
+            }
+            return (
+              <button
+                type="button"
+                data-testid={`todo-omp-origin-${todo.id}`}
+                className="text-xs text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1 hover:underline"
+                title={`${title}｜打开来源会话`}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onNavigateSession(sessionPath)
+                }}
+              >
+                {label}
+              </button>
+            )
+          })()}
 
           {/* Status tag */}
           {!isDone && (

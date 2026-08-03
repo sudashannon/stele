@@ -112,11 +112,38 @@ export async function fetchWikiGraph(): Promise<WikiGraphData> {
   return res.json()
 }
 
-export async function fetchSessions(): Promise<WikiSession[]> {
+export interface SessionsResponse {
+  sessions: WikiSession[]
+  /**
+   * False when no transcript directory is configured. An empty `sessions` list
+   * alone cannot say whether the layer is off or merely idle.
+   */
+  enabled: boolean
+}
+
+export async function fetchSessionsWithMeta(): Promise<SessionsResponse> {
   const res = await fetch('/api/wiki/sessions')
   if (!res.ok) throw new Error(`fetchSessions failed: ${res.status}`)
-  const body: { sessions?: WikiSession[] | null } = await res.json()
-  return body.sessions ?? []
+  const body: { sessions?: WikiSession[] | null; enabled?: boolean } = await res.json()
+  return { sessions: body.sessions ?? [], enabled: body.enabled ?? false }
+}
+
+export async function fetchSessions(): Promise<WikiSession[]> {
+  return (await fetchSessionsWithMeta()).sessions
+}
+
+export interface SessionsRefreshResult {
+  /** Transcripts whose digest changed in this pass. */
+  changed: number
+  sessions: number
+}
+
+// Re-reads transcripts now instead of waiting for the layer's own poll.
+export async function refreshSessions(): Promise<SessionsRefreshResult> {
+  const res = await fetch('/api/wiki/sessions/refresh', { method: 'POST' })
+  const body: { changed?: number; sessions?: number; error?: string } = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error ?? `refreshSessions failed: ${res.status}`)
+  return { changed: body.changed ?? 0, sessions: body.sessions ?? 0 }
 }
 
 export async function fetchSession(id: string): Promise<WikiSession> {

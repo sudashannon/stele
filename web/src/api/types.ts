@@ -114,8 +114,20 @@ export interface WikiGraphData {
   communityLabels?: Record<string, string>
 }
 
+/** One entry of a session's own task tracker, replayed from its operations. */
+export interface SessionTodo {
+  phase?: string
+  content: string
+  /** pending | in_progress | completed | dropped | blocked */
+  status: string
+  /** Why the task is stuck, as the session recorded it. */
+  blocker?: string
+}
+
 export interface WikiSession {
   id: string
+  /** Agent runtime this session came from ("omp"). */
+  source?: string
   path: string
   workspace: string
   title: string
@@ -130,6 +142,21 @@ export interface WikiSession {
   edits: string[]
   reads: string[]
   intents: string[]
+  /** Subagent transcripts whose work is folded into these totals. */
+  subagents?: string[]
+  /** The session's task list as it stood when the transcript ended. */
+  todos?: SessionTodo[]
+  /** Tasks finished under earlier lists, absent from `todos`. */
+  todosCompleted?: string[]
+  /** Counts that survive on the list endpoint even when the lists are withheld. */
+  todoOpen?: number
+  todoTotal?: number
+  todoDone?: number
+  /** Turns + tool calls per local date (YYYY-MM-DD): a session spans days. */
+  activity?: Record<string, number>
+  /** How many times the session replaced its list with a new plan. */
+  todoReplans?: number
+  todosTruncated?: boolean
   intentsTruncated?: boolean
   pathsTruncated?: boolean
 }

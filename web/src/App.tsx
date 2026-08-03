@@ -5,11 +5,12 @@ import {
   fetchBookmarks,
   fetchChangesWithMeta,
   fetchWikiIndex,
+  fetchSessions,
   fetchWorkspaces,
   removeBookmark,
   removeWorkspace,
 } from './api/client'
-import type { Bookmark, ChangeSummary, WorkspaceConfig, WikiComponent } from './api/types'
+import type { Bookmark, ChangeSummary, SessionTodo, WorkspaceConfig, WikiComponent, WikiSession } from './api/types'
 import { ChangeDetail } from './components/ChangeDetail'
 import { ChangeExplorer } from './components/ChangeExplorer'
 import { ChatBubble } from './components/ChatBubble'
@@ -35,6 +36,7 @@ const LazyMarkdownViewer = lazy(() => import('./components/MarkdownViewer').then
 const LazyRecentPanel = lazy(() => import('./components/RecentPanel').then(({ RecentPanel }) => ({ default: RecentPanel })))
 const LazyReportView = lazy(() => import('./components/ReportView').then(({ ReportView }) => ({ default: ReportView })))
 const LazySessionDetail = lazy(() => import('./components/SessionDetail').then(({ SessionDetail }) => ({ default: SessionDetail })))
+const LazySessionsPanel = lazy(() => import('./components/SessionsPanel').then(({ SessionsPanel }) => ({ default: SessionsPanel })))
 const LazySemanticSearch = lazy(() => import('./components/SemanticSearch').then(({ SemanticSearch }) => ({ default: SemanticSearch })))
 const LazyShareList = lazy(() => import('./components/ShareList').then(({ ShareList }) => ({ default: ShareList })))
 const LazyTodoPanel = lazy(() => import('./components/TodoPanel').then(({ TodoPanel }) => ({ default: TodoPanel })))
@@ -115,7 +117,21 @@ export default function App() {
   const [activeKpiFilter, setActiveKpiFilter] = useState<string | null>(null)
   const [view, setView] = useState<SideRailView>('changes')
   const [wikiComponents, setWikiComponents] = useState<WikiComponent[]>([])
+  const [sessionPathById, setSessionPathById] = useState<Record<string, string>>({})
   const [viewerPath, setViewerPath] = useState<string | null>(null)
+  // What the caller knows it opened. The index is the fallback, not the
+  // authority: a session grafted after page load is absent from `wikiComponents`
+  // until the next refresh, and inferring from that stale copy sent transcripts
+  // to the Markdown viewer.
+  const [viewerKind, setViewerKind] = useState<'session' | 'document' | null>(null)
+
+  // The single entry point for the shared viewer. `kind` is what the caller
+  // already knows about the target; omit it to let the index classify. Path and
+  // kind always move together, so a stale kind cannot mis-route the next open.
+  const openViewer = useCallback((path: string | null, kind: 'session' | 'document' | null = null) => {
+    setViewerPath(path)
+    setViewerKind(path ? kind : null)
+  }, [])
   const [changeArtifacts, setChangeArtifacts] = useState<{ path: string; label: string }[]>([])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false)
@@ -150,8 +166,17 @@ export default function App() {
   const todoFocusCaptureRef = useRef<(() => void) | null>(null)
 
   const handleViewChange = useCallback((nextView: SideRailView) => {
-    setViewerPath(null)
+    openViewer(null)
     setView(nextView)
+  }, [openViewer])
+
+  // A todo projected from a session carries that session's id, not its path.
+  // Keeping the mapping here (one small request, refreshed with the session
+  // layer) is what makes the Todo panel's origin chip navigable.
+  const refreshSessionPaths = useCallback(() => {
+    fetchSessions()
+      .then((list) => setSessionPathById(Object.fromEntries(list.map((session) => [session.id, session.path]))))
+      .catch(() => setSessionPathById({}))
   }, [])
 
   const refreshWikiIndex = useCallback(() => {
@@ -276,7 +301,7 @@ export default function App() {
         label: '关闭面板',
         run: () => {
           palette.closePalette()
-          setViewerPath(null)
+          openViewer(null)
           setBookmarkPanelOpen(false)
           setSettingsOpen(false)
         },
@@ -286,7 +311,7 @@ export default function App() {
       { key: '-', ctrlOrCmd: true, label: '缩小', run: appZoom.zoomOut },
       { key: '0', ctrlOrCmd: true, label: '重置缩放', run: appZoom.zoomReset },
     ],
-    [appZoom.zoomIn, appZoom.zoomOut, appZoom.zoomReset, handleViewChange, palette],
+    [appZoom.zoomIn, appZoom.zoomOut, appZoom.zoomReset, handleViewChange, openViewer, palette],
   )
 
   useKeyboardShortcuts(registeredShortcuts)
@@ -305,9 +330,9 @@ export default function App() {
       setView('changes')
       setSelected({ name: changeName, workspace })
       setActiveWorkspace(workspace ?? null)
-      setViewerPath(null)
+      openViewer(null)
     },
-    [activeWorkspace, changes, viewerPath, wikiComponents],
+    [activeWorkspace, changes, openViewer, viewerPath, wikiComponents],
   )
 
   useEffect(() => {
@@ -325,7 +350,8 @@ export default function App() {
 
   useEffect(() => {
     refreshWikiIndex()
-  }, [refreshWikiIndex])
+    refreshSessionPaths()
+  }, [refreshSessionPaths, refreshWikiIndex])
 
   useEffect(() => {
     fetchBookmarks().then(setBookmarks).catch(() => setBookmarks([]))
@@ -346,10 +372,18 @@ export default function App() {
     refetchTodos()
   }, [refetchTodos])
 
+  // A session graft adds `session` components to the index, and the viewer
+  // resolves what to render from that index - so the panel's live refresh is
+  // not enough on its own: without this, a session indexed after page load
+  // would open in the Markdown viewer as a raw transcript path.
   useWikiEvents({
     onIndexingStarted: handleIndexingStarted,
     onUpdate: handleGraphUpdated,
     onTodosUpdated: handleTodosUpdated,
+    onSessionsUpdated: () => {
+      refreshWikiIndex()
+      refreshSessionPaths()
+    },
   })
 
   useEffect(() => {
@@ -454,12 +488,41 @@ export default function App() {
   }, [handleViewChange, viewerTodoContext])
 
   const viewerTodoHandler = viewerTodoContext.wikiComponent ? createTodoFromViewer : undefined
-  const viewerIsSession = viewerComponent?.type === 'session'
+  const viewerIsSession = viewerKind === 'session' || (viewerKind === null && viewerComponent?.type === 'session')
+
+  // Unfinished tasks are the actionable residue of a session. They become
+  // ordinary todos carrying a WikiRef back to the session component - the
+  // existing mechanism for "this todo is about that document" - rather than an
+  // OMP projection, whose per-session sync cursor is owned by the runtime
+  // extension and would fight an import for the same session id.
+  const importSessionTodos = useCallback(async (session: WikiSession, items: SessionTodo[]) => {
+    const wikiRef = {
+      componentId: session.path,
+      workspace: session.workspace,
+      titleSnapshot: session.title,
+    }
+    let imported = 0
+    for (const item of items) {
+      const notes = [item.phase && `阶段：${item.phase}`, item.blocker && `卡在：${item.blocker}`, `来自会话：${session.title}`]
+        .filter(Boolean)
+        .join('\n')
+      await createTodo({
+        workspace: session.workspace,
+        title: item.content,
+        notes,
+        status: item.status === 'blocked' ? 'blocked' : 'open',
+        wikiRefs: [wikiRef],
+      })
+      imported++
+    }
+    await refetchTodos()
+    return imported
+  }, [refetchTodos])
 
   const openWikiComponent = useCallback((idOrPath: string) => {
     const component = wikiComponents.find((item) => item.id === idOrPath || item.path === idOrPath)
-    setViewerPath(component?.path ?? idOrPath)
-  }, [wikiComponents])
+    openViewer(component?.path ?? idOrPath)
+  }, [openViewer, wikiComponents])
 
   const renderViewer = useCallback((props: {
     artifacts?: { path: string; label: string }[]
@@ -473,8 +536,9 @@ export default function App() {
       return (
         <LazySessionDetail
           sessionId={viewerComponent?.path ?? viewerPath}
-          onOpenDocument={setViewerPath}
-          onClose={() => setViewerPath(null)}
+          onOpenDocument={(path) => openViewer(path, 'document')}
+          onClose={() => openViewer(null)}
+          onImportTodos={importSessionTodos}
         />
       )
     }
@@ -484,7 +548,7 @@ export default function App() {
         artifacts={props.artifacts}
         workspace={props.workspace}
         onSelectArtifact={props.onSelectArtifact}
-        onClose={() => setViewerPath(null)}
+        onClose={() => openViewer(null)}
         onToggleStar={handleToggleStar}
         isStarred={isBookmarked(viewerPath)}
         onNavigateToChange={props.onNavigateToChange}
@@ -492,7 +556,7 @@ export default function App() {
         onOpenSession={openWikiComponent}
       />
     )
-  }, [handleToggleStar, isBookmarked, openWikiComponent, viewerComponent, viewerIsSession, viewerPath])
+  }, [handleToggleStar, isBookmarked, openViewer, openWikiComponent, viewerComponent, viewerIsSession, viewerPath])
 
   const handleNavigateWikiFromTodo = useCallback((path: string) => {
     openWikiComponent(path)
@@ -668,13 +732,13 @@ export default function App() {
                 onSelect={(alias) => {
                   setActiveWorkspace(alias)
                   setSelected(null)
-                  setViewerPath(null)
+                  openViewer(null)
                   setChangeArtifacts([])
                 }}
                 onAdd={async (config) => {
                   await addWorkspace(config)
                   setSelected(null)
-                  setViewerPath(null)
+                  openViewer(null)
                   setChangeArtifacts([])
                   await refreshWorkspaceData({
                     preferredActiveWorkspace: config.alias,
@@ -689,7 +753,7 @@ export default function App() {
                 selected={selected?.name ?? null}
                 selectedWorkspace={selected?.workspace}
                 onSelect={(name, workspace) => {
-                  setViewerPath(null)
+                  openViewer(null)
                   setChangeArtifacts([])
                   setSelected({ name, workspace })
                   setSidebarOpen(false)
@@ -703,7 +767,7 @@ export default function App() {
                   {renderViewer({
                     artifacts: changeArtifacts,
                     workspace: selectedChange?.workspace,
-                    onSelectArtifact: setViewerPath,
+                    onSelectArtifact: (path: string) => openViewer(path, 'document'),
                     onCreateTodo: viewerTodoHandler,
                   })}
                 </Suspense>
@@ -719,7 +783,7 @@ export default function App() {
                   {selectedChange ? (
                     <ChangeDetail
                       change={selectedChange}
-                      onOpenArtifact={setViewerPath}
+                      onOpenArtifact={(path) => openViewer(path, 'document')}
                       onArtifactsChanged={setChangeArtifacts}
                       onChangeUpdated={refreshWorkspaceData}
                       onNavigateToTodos={(workspace, changeName) => {
@@ -770,6 +834,8 @@ export default function App() {
                 wikiComponents={wikiComponents}
                 changes={changes}
                 onNavigateWiki={handleNavigateWikiFromTodo}
+                onNavigateSession={(path) => openViewer(path, 'session')}
+                sessionPathById={sessionPathById}
                 onNavigateChange={(workspace, changeName) => {
                   setView('changes')
                   setSelected({ name: changeName, workspace })
@@ -868,6 +934,18 @@ export default function App() {
           </Suspense>
         )}
 
+        {view === 'sessions' && (
+          <Suspense fallback={<ViewFallback label="Agent 会话" />}>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              {viewerPath ? (
+                renderViewer({ onNavigateToChange: navigateToChange, onCreateTodo: viewerTodoHandler })
+              ) : (
+                <LazySessionsPanel onOpen={(path) => openViewer(path, 'session')} />
+              )}
+            </div>
+          </Suspense>
+        )}
+
         {view === 'shares' && (
           <Suspense fallback={<ViewFallback label="分享" />}>
             <div className="flex-1 min-h-0 overflow-y-auto">
@@ -894,7 +972,7 @@ export default function App() {
           <BookmarkPanel
             bookmarks={bookmarks}
             onOpen={(path) => {
-              setViewerPath(path)
+              openViewer(path, 'document')
               setBookmarkPanelOpen(false)
             }}
             onRemove={handleRemoveBookmark}

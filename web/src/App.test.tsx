@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import App from './App'
-import { fetchWorkspaces, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchChatSession, fetchChangeDetail, fetchBookmarks, fetchTodos, addBookmark, removeWorkspace } from './api/client'
+import { fetchWorkspaces, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchSessionsWithMeta, fetchChatSession, fetchChangeDetail, fetchBookmarks, fetchTodos, addBookmark, removeWorkspace } from './api/client'
 import type { ChangeSummary, WorkspaceConfig } from './api/types'
 
 // WikiGraph mounts a real cytoscape instance with a cose layout and
@@ -107,6 +107,8 @@ vi.mock('./api/client', () => ({
   fetchLintIssues: vi.fn().mockResolvedValue([]),
   fetchRecent: vi.fn().mockResolvedValue([]),
   fetchSessions: vi.fn().mockResolvedValue([]),
+  fetchSessionsWithMeta: vi.fn().mockResolvedValue({ sessions: [], enabled: true }),
+  refreshSessions: vi.fn().mockResolvedValue({ changed: 0, sessions: 0 }),
   fetchSession: vi.fn().mockResolvedValue(null),
   fetchChangeDetail: vi.fn().mockResolvedValue({
     name: '', workflow: '', phase: '', archived: false, tasksCompleted: 0, tasksTotal: 0,
@@ -600,7 +602,7 @@ describe('App view switcher', () => {
   })
 
 
-  it('maps Ctrl+1…8 to the same view order as the side rail, including Todo and Report', async () => {
+  it('maps Ctrl+1…9 to the same view order as the side rail, including Todo, Report and Agent 会话', async () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
 
@@ -610,8 +612,32 @@ describe('App view switcher', () => {
     fireEvent.keyDown(document, { key: '8', ctrlKey: true })
     expect(screen.getByRole('button', { name: '报告' }).getAttribute('aria-current')).toBe('page')
 
+    fireEvent.keyDown(document, { key: '9', ctrlKey: true })
+    expect(screen.getByRole('button', { name: 'Agent 会话' }).getAttribute('aria-current')).toBe('page')
+
     fireEvent.keyDown(document, { key: '1', ctrlKey: true })
     expect(screen.getByRole('button', { name: '变更仪表盘' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('switches to the Agent 会话 view, mounts the panel, and opens a session in SessionDetail', async () => {
+    vi.mocked(fetchSessionsWithMeta).mockResolvedValue({
+      enabled: true,
+      sessions: [{
+        id: 'sess-live', path: '/tmp/omp/session.jsonl', workspace: 'ws', title: '会话面板条目',
+        cwd: '/repo', startedAt: '2026-08-03T01:00:00.000Z', updatedAt: '2026-08-03T02:00:00.000Z',
+        userTurns: 2, toolCalls: { read: 3 }, writes: [], edits: ['/x/a.md'], reads: ['/x/b.md'], intents: ['查一下'],
+      }],
+    })
+    render(<App />)
+    await screen.findByTestId('workspace-warning-banner')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agent 会话' }))
+
+    // The panel reads sessions itself; the shared viewer then resolves the
+    // clicked transcript to SessionDetail rather than the Markdown viewer.
+    fireEvent.click(await screen.findByText('会话面板条目'))
+    expect(await screen.findByTestId('session-detail')).toBeTruthy()
+    expect(screen.queryByTestId('markdown-viewer')).toBeNull()
   })
 
   it('switching back to 变更列表 restores KpiCards and ChangeExplorer', async () => {

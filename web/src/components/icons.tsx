@@ -1,4 +1,5 @@
 import {
+  Bot,
   Bookmark,
   CalendarDays,
   ChartNoAxesGantt,
@@ -43,6 +44,7 @@ export const ICONS = {
   calendar: CalendarDays,
   todos: SquareCheckBig,
   report: FileText,
+  sessions: Bot,
   bookmark: Bookmark,
   settings: Settings,
   open: ExternalLink,

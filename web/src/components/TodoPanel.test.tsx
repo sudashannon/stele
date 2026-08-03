@@ -142,6 +142,36 @@ describe('TodoPanel grouping', () => {
     expect(screen.getByTestId('todo-detail-omp-origin').textContent).toContain('session / 0:0')
     expect(screen.getByTestId('todo-status-dropped')).toBeTruthy()
   })
+
+  // The projection records which session produced a todo. Resolving that id to
+  // an indexed transcript is what turns the origin chip into the way back to the
+  // work it came from; an unindexed session must stay inert rather than dangle.
+  it('opens the source session from the origin chip when that session is indexed', () => {
+    const projected = makeTodo({
+      id: 'omp-2',
+      title: 'From a session',
+      metadata: { source: 'omp' },
+      externalRef: { system: 'omp', sessionId: 'sess-uuid', taskKey: '0:1', phase: 'build', blocker: '' },
+    })
+    const onNavigateSession = vi.fn()
+    const { unmount } = render(
+      <TodoPanel
+        {...baseProps}
+        todos={[projected]}
+        onNavigateSession={onNavigateSession}
+        sessionPathById={{ 'sess-uuid': '/home/u/.omp/agent/sessions/-repo/a.jsonl' }}
+      />,
+    )
+
+    const chip = screen.getByTestId('todo-omp-origin-omp-2')
+    fireEvent.click(chip)
+    expect(onNavigateSession).toHaveBeenCalledWith('/home/u/.omp/agent/sessions/-repo/a.jsonl')
+    unmount()
+
+    render(<TodoPanel {...baseProps} todos={[projected]} onNavigateSession={onNavigateSession} sessionPathById={{}} />)
+    fireEvent.click(screen.getByTestId('todo-omp-origin-omp-2'))
+    expect(onNavigateSession).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('TodoPanel context prefill', () => {

@@ -10,6 +10,7 @@ export type SideRailView =
   | 'recent'
   | 'lint'
   | 'report'
+  | 'sessions'
   | 'shares'
   | 'calendar'
 
@@ -49,6 +50,7 @@ export const SIDE_RAIL_ITEMS: SideRailItem[] = [
   { key: 'recent', label: '最近更新', icon: 'recent', shortcutKey: 6 },
   { key: 'lint', label: '文档健康', icon: 'lint', shortcutKey: 7 },
   { key: 'report', label: '报告', icon: 'report', shortcutKey: 8 },
+  { key: 'sessions', label: 'Agent 会话', icon: 'sessions', shortcutKey: 9 },
   { key: 'shares', label: '分享', icon: 'share' },
   { key: 'calendar', label: '日历', icon: 'calendar' },
 ]
