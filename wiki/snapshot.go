@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"stele/internal/sessions"
 )
 
 // ErrIndexNotReady distinguishes an asynchronously-building Wiki index from a
@@ -51,6 +53,145 @@ type DocumentWindowSnapshot struct {
 	Edges            []Edge
 	Embeddings       map[string][]float32
 	FailedWorkspaces []string
+}
+
+// SessionWorkItem is one session's contribution to a report window: how much
+// work happened inside it and which indexed documents it touched.
+//
+// Sessions are not report evidence - a digest is derived, not authored prose, and
+// SnapshotDocuments deliberately excludes transcripts. This is the effort axis
+// instead: document counts say how much was written, not how much was done, and
+// a week where one bulk import produced 189 files while six engineering sessions
+// produced a dozen each cannot be ordered by document count without lying.
+type SessionWorkItem struct {
+	ID         string
+	Path       string
+	Title      string
+	Workspace  string
+	StartedAt  time.Time
+	UpdatedAt  time.Time
+	ActiveDays int
+	// Events counts the turns and tool calls recorded inside the window only, so
+	// a long-running session contributes what it did that week.
+	Events    int
+	UserTurns int
+	Subagents int
+	// Produced and Edited are indexed document paths, already narrowed to the
+	// window's workspace filter. Read paths are omitted: reading a document is
+	// not authorship, and attributing a report section by reads would credit the
+	// session that merely consulted a document.
+	Produced []string
+	Edited   []string
+	// OpenTodos are the tasks the session left unfinished, with the reason it
+	// recorded for the blocked ones.
+	OpenTodos []SessionTodoSnapshot
+	// Activity holds only the in-window days, so a caller can narrow to a
+	// sub-window (a monthly report's missing weeks) without another index pass.
+	Activity map[string]int
+}
+
+// SessionTodoSnapshot is one unfinished task carried into a report.
+type SessionTodoSnapshot struct {
+	Phase   string
+	Content string
+	Status  string
+	Blocker string
+}
+
+// SnapshotSessionWork returns the sessions active inside [start, end) with their
+// in-window effort and the documents they touched. It never returns transcript
+// paths as documents.
+func (a *API) SnapshotSessionWork(start, end time.Time, workspace string) []SessionWorkItem {
+	if end.IsZero() || !end.After(start) {
+		return nil
+	}
+	index, workspaces := a.sessionsSnapshot()
+	if index == nil {
+		return nil
+	}
+	a.mu.RLock()
+	documents := a.graph.Components()
+	a.mu.RUnlock()
+
+	items := make([]SessionWorkItem, 0)
+	for _, digest := range index.Digests() {
+		component, ok := SessionComponent(digest, workspaces)
+		if !ok {
+			continue
+		}
+		if workspace != "" && component.Workspace != workspace {
+			continue
+		}
+		days, events := 0, 0
+		activity := make(map[string]int)
+		for day, count := range digest.Activity {
+			parsed, err := time.ParseInLocation(sessions.ActivityDateLayout, day, time.Local)
+			if err != nil || parsed.Before(start) || !parsed.Before(end) {
+				continue
+			}
+			days++
+			events += count
+			activity[day] = count
+		}
+		if days == 0 {
+			continue
+		}
+		item := SessionWorkItem{
+			ID:         digest.ID,
+			Path:       digest.Path,
+			Title:      digest.Title,
+			Workspace:  component.Workspace,
+			StartedAt:  digest.StartedAt,
+			UpdatedAt:  digest.UpdatedAt,
+			ActiveDays: days,
+			Events:     events,
+			UserTurns:  digest.UserTurns,
+			Subagents:  len(digest.Subagents),
+			Activity:   activity,
+			Produced:   indexedDocumentPaths(digest.Writes, documents, workspace),
+			Edited:     indexedDocumentPaths(digest.Edits, documents, workspace),
+		}
+		for _, todo := range digest.Todos {
+			if todo.Status == sessions.TodoCompleted || todo.Status == sessions.TodoDropped {
+				continue
+			}
+			item.OpenTodos = append(item.OpenTodos, SessionTodoSnapshot{
+				Phase: todo.Phase, Content: todo.Content, Status: todo.Status, Blocker: todo.Blocker,
+			})
+		}
+		items = append(items, item)
+	}
+	// Effort order, so the caller renders the week by what it cost rather than
+	// by what it happened to write down.
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Events != items[j].Events {
+			return items[i].Events > items[j].Events
+		}
+		return items[i].Path < items[j].Path
+	})
+	return items
+}
+
+// indexedDocumentPaths keeps only paths that resolve to an indexed Markdown
+// document in scope, so a session cannot pull an unindexed or foreign-workspace
+// file into a report.
+func indexedDocumentPaths(paths []string, documents map[string]Component, workspace string) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		component, ok := documents[path]
+		if !ok || component.Type == TypeSession {
+			continue
+		}
+		if workspace != "" && component.Workspace != workspace {
+			continue
+		}
+		if !strings.EqualFold(filepath.Ext(component.Path), ".md") {
+			continue
+		}
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
 }
 
 type contextCandidate struct {

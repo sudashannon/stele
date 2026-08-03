@@ -46,6 +46,10 @@ const maxLineBytes = 8 << 20
 // activityDateLayout keys the per-day activity histogram.
 const activityDateLayout = "2006-01-02"
 
+// ActivityDateLayout is the layout an Activity key parses with. Exported so a
+// consumer can bucket those days without restating the format.
+const ActivityDateLayout = activityDateLayout
+
 // Digest is everything the wiki layer needs about one session. Field values
 // are derived, never transcript bytes.
 //
