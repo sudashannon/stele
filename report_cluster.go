@@ -20,12 +20,33 @@ type reportTheme struct {
 	ContextEvidenceIDs []string `json:"contextEvidenceIds,omitempty"`
 	RepresentativeIDs  []string `json:"representativeIds"`
 	Independent        bool     `json:"independent,omitempty"`
-	DocumentIndexes    []int    `json:"-"`
+	// SessionID / SessionPath / Effort are set when the theme is a session's
+	// work rather than a document cluster. They are the effort axis: document
+	// count says how much was written, not how much was done.
+	SessionID   string            `json:"sessionId,omitempty"`
+	SessionPath string            `json:"sessionPath,omitempty"`
+	Effort      reportThemeEffort `json:"effort,omitempty"`
+	// OpenTasks are the session's unfinished items, used as prompt framing and
+	// rendered deterministically; they never become claims.
+	OpenTasks []string `json:"-"`
+	// Unattributed marks a cluster of documents no session authored.
+	Unattributed    bool  `json:"unattributed,omitempty"`
+	DocumentIndexes []int `json:"-"`
+}
+
+// reportThemeEffort is what a session cost inside the report window.
+type reportThemeEffort struct {
+	Workspace  string `json:"workspace,omitempty"`
+	ActiveDays int    `json:"activeDays,omitempty"`
+	Events     int    `json:"events,omitempty"`
+	UserTurns  int    `json:"userTurns,omitempty"`
+	Subagents  int    `json:"subagents,omitempty"`
 }
 
 type reportClusterNode struct {
 	ID          int
 	Key         string
+	Workspaces  map[string]struct{}
 	Documents   []int
 	Vector      []float64
 	VectorDocs  int
@@ -129,6 +150,9 @@ func clusterReportCorpus(corpus *reportCorpus) []reportTheme {
 			set.union(edge.From, edge.To)
 		}
 	}
+	for _, pair := range reportSiblingDocumentPairs(corpus) {
+		set.union(pair[0], pair[1])
+	}
 
 	groupDocuments := make(map[string][]int)
 	for index, document := range corpus.Documents {
@@ -152,10 +176,14 @@ func clusterReportCorpus(corpus *reportCorpus) []reportTheme {
 		node := &reportClusterNode{
 			ID:          id,
 			Key:         corpus.Documents[documents[0]].SourceID,
+			Workspaces:  make(map[string]struct{}),
 			Documents:   documents,
 			Lexical:     lexicalVectors[root],
 			LexicalDocs: len(documents),
 			Active:      true,
+		}
+		for _, index := range documents {
+			node.Workspaces[corpus.Documents[index].Workspace] = struct{}{}
 		}
 		node.Vector, node.VectorDocs = reportDocumentCentroid(corpus, documents)
 		for _, index := range documents {
@@ -205,7 +233,11 @@ func clusterReportCorpus(corpus *reportCorpus) []reportTheme {
 			if !candidate.Active || candidate.PrimaryDocs == 0 || id == contextID {
 				continue
 			}
-			score := reportClusterScore(contextNode, candidate, reportGetAffinity(affinity, contextID, id))
+			candidateAffinity := reportGetAffinity(affinity, contextID, id)
+			if !reportMergeAllowed(contextNode, candidate, candidateAffinity) {
+				continue
+			}
+			score := reportClusterScore(contextNode, candidate, candidateAffinity)
 			if score > bestScore || (score == bestScore && (targetID < 0 || candidate.Key < nodes[targetID].Key)) {
 				bestScore, targetID = score, id
 			}
@@ -327,6 +359,9 @@ func reportPushClusterPair(queue *reportClusterQueue, a, b *reportClusterNode, a
 	if b.Key < a.Key {
 		a, b = b, a
 	}
+	if !reportMergeAllowed(a, b, reportGetAffinity(affinity, a.ID, b.ID)) {
+		return
+	}
 	heap.Push(queue, reportClusterPair{
 		A: a.ID, B: b.ID,
 		VersionA: a.Version, VersionB: b.Version,
@@ -336,6 +371,12 @@ func reportPushClusterPair(queue *reportClusterQueue, a, b *reportClusterNode, a
 }
 
 func reportMergeClusterNodes(keep, remove *reportClusterNode) {
+	if keep.Workspaces == nil {
+		keep.Workspaces = make(map[string]struct{}, len(remove.Workspaces))
+	}
+	for workspace := range remove.Workspaces {
+		keep.Workspaces[workspace] = struct{}{}
+	}
 	keep.Documents = append(keep.Documents, remove.Documents...)
 	sort.Ints(keep.Documents)
 	keep.Vector = reportWeightedDenseMerge(keep.Vector, keep.VectorDocs, remove.Vector, remove.VectorDocs)

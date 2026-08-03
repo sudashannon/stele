@@ -60,6 +60,12 @@ type documentReportCounts struct {
 	Workspaces int            `json:"workspaces"`
 	Reports    int            `json:"reports"`
 	Types      map[string]int `json:"types"`
+	// Sessions counts the work items behind the window; the two document counts
+	// below say how much of the corpus nobody's session authored, so a reader can
+	// see at a glance when a week's document total is inflated by an import.
+	Sessions              int `json:"sessions,omitempty"`
+	BulkImportDocuments   int `json:"bulkImportDocuments,omitempty"`
+	UnattributedDocuments int `json:"unattributedDocuments,omitempty"`
 }
 
 type reportCorpus struct {

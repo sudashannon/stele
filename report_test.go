@@ -119,8 +119,17 @@ func TestHandleReportUsesWikiDocumentsAndPersistsManifest(t *testing.T) {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != reportManifestSchemaVersion || len(manifest.Documents) != 2 || manifest.Counts.WorkItems != 1 {
+	// No session touched these fixtures, so the documents cluster as before and
+	// land as unattributed themes - the fallback path must keep working, since a
+	// document written outside a tracked session is still real work.
+	if manifest.SchemaVersion != reportManifestSchemaVersion || len(manifest.Documents) != 2 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
+	}
+	if len(manifest.Sessions) != 0 || manifest.Counts.UnattributedDocuments != 2 {
+		t.Fatalf("expected an unattributed corpus: %+v", manifest.Counts)
+	}
+	if len(manifest.Themes) != 1 || !manifest.Themes[0].Unattributed {
+		t.Fatalf("theme should be marked unattributed: %+v", manifest.Themes)
 	}
 }
 
@@ -394,7 +403,8 @@ func TestRenderWeeklyDocumentReportUsesSkillStyleHierarchy(t *testing.T) {
 	for _, expected := range []string{
 		"# 本周工作周报（2026-07-20 ~ 2026-07-27）",
 		"## 概述",
-		"本周纳入 4 份活动文档，归并为 2 个逻辑工作项和 1 个主题，覆盖 2 个 Workspace",
+		"本周纳入 4 份活动文档，覆盖 2 个 Workspace",
+		"报告按工作项组织：",
 		"## 一、缓存交付",
 		"### 本周里程碑",
 		"### 完成与推进项（4 项）",
@@ -566,12 +576,20 @@ func TestGenerateMonthlyReportUsesStructuredSlices(t *testing.T) {
 		Counts:    documentReportCounts{Documents: 1, Workspaces: 1, Types: map[string]int{"design": 1}},
 		Coverage:  reportCoverage{SourceDocuments: 1, ReadableDocuments: 1},
 	}
-	body, digest, err := generateMonthlyDocumentReport(context.Background(), &corpus, dir, "2026-06-01", "2026-06-30", chat.ProviderConfig{Model: "test-model"}, fake)
+	body, digest, err := generateMonthlyDocumentReport(context.Background(), &corpus, nil, dir, "2026-06-01", "2026-06-30", chat.ProviderConfig{Model: "test-model"}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest.Type != "monthly" || len(digest.GeneratedSlices) != 1 || digest.GeneratedSlices[0] != (reportPeriod{Start: "2026-06-01", End: "2026-06-30"}) {
-		t.Fatalf("unexpected monthly lineage: %+v", digest)
+	// A month with nothing to reuse is generated as weeks, not as one 30-day
+	// window: the window length changes what gets narrated versus counted.
+	if digest.Type != "monthly" || len(digest.GeneratedSlices) != 5 {
+		t.Fatalf("unexpected monthly lineage: %+v", digest.GeneratedSlices)
+	}
+	if digest.GeneratedSlices[0] != (reportPeriod{Start: "2026-06-01", End: "2026-06-07"}) {
+		t.Fatalf("first slice = %+v", digest.GeneratedSlices[0])
+	}
+	if last := digest.GeneratedSlices[4]; last != (reportPeriod{Start: "2026-06-29", End: "2026-06-30"}) {
+		t.Fatalf("last slice = %+v", last)
 	}
 	if !strings.Contains(string(body), "缓存演进") || !strings.Contains(string(body), "[D1]") {
 		t.Fatalf("unexpected monthly HTML: %s", body)
@@ -634,8 +652,10 @@ func TestHandleReportMonthlyEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Type != "monthly" || len(manifest.GeneratedSlices) != 1 {
-		t.Fatalf("unexpected monthly manifest: %+v", manifest)
+	// June has five week-sized slices; a month is assembled from weeks so its
+	// sections match the weeks it is made of.
+	if manifest.Type != "monthly" || len(manifest.GeneratedSlices) != 5 {
+		t.Fatalf("unexpected monthly manifest slices: %+v", manifest.GeneratedSlices)
 	}
 }
 
@@ -684,7 +704,7 @@ func TestGenerateMonthlyReportReusesContainedWeeklyDigest(t *testing.T) {
 	}
 
 	fullCorpus := weeklyCorpus
-	body, monthly, err := generateMonthlyDocumentReport(context.Background(), &fullCorpus, dir, "2026-06-01", "2026-06-07", chat.ProviderConfig{Model: "test-model"}, fake)
+	body, monthly, err := generateMonthlyDocumentReport(context.Background(), &fullCorpus, nil, dir, "2026-06-01", "2026-06-07", chat.ProviderConfig{Model: "test-model"}, fake)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,5 +716,75 @@ func TestGenerateMonthlyReportReusesContainedWeeklyDigest(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "复用主题") {
 		t.Fatalf("unexpected monthly body: %s", body)
+	}
+}
+
+// A live weekly run lost eight finished themes because one theme came back with
+// summary as a bare string: the retry prompt described truncation and evidence
+// rules but never the response shape, so the model repeated the same mistake.
+func TestSummarizeReportThemeRetryPromptNamesTheShapeAndTheFailure(t *testing.T) {
+	previousDrain := chatStreamDrain
+	calls := 0
+	prompts := make([]string, 0, 3)
+	chatStreamDrain = func(_ context.Context, _ provider.Provider, _ chat.ProviderConfig, systemPrompt, _ string) (string, error) {
+		calls++
+		prompts = append(prompts, systemPrompt)
+		if calls == 1 {
+			// The exact shape error observed in production.
+			return `{"label":"缓存","summary":"输出成了裸字符串","claims":[]}`, nil
+		}
+		return `{"label":"缓存","summary":{"text":"重试后结构正确。","evidenceIds":["D1"]},"claims":[]}`, nil
+	}
+	t.Cleanup(func() { chatStreamDrain = previousDrain })
+
+	start := time.Date(2026, 7, 20, 0, 0, 0, 0, time.Local)
+	corpus := reportCorpus{
+		Start: start, End: start.AddDate(0, 0, 7),
+		Documents: []reportDocument{{
+			EvidenceID: "D1", SourceID: "a", Title: "Cache", Type: wiki.TypeDesign,
+			Workspace: "miao", ActivityAt: start, SemanticText: "Cache result.",
+		}},
+	}
+	theme := reportTheme{ID: "T1", Label: "Cache", EvidenceIDs: []string{"D1"}, RepresentativeIDs: []string{"D1"}, DocumentIndexes: []int{0}}
+
+	digest, err := summarizeReportTheme(context.Background(), &corpus, theme, chat.ProviderConfig{Model: "test-model", MaxTokens: 1024}, reportTestProvider{name: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || digest.Summary.Text != "重试后结构正确。" {
+		t.Fatalf("calls=%d digest=%+v", calls, digest)
+	}
+	retry := prompts[1]
+	if !strings.Contains(retry, "不能是裸字符串") {
+		t.Fatalf("retry prompt must state the required shape: %q", retry)
+	}
+	if !strings.Contains(retry, "上一次失败原因：") || !strings.Contains(retry, "summary") {
+		t.Fatalf("retry prompt must carry the concrete failure: %q", retry)
+	}
+}
+
+// The error text must not hardcode a retry count that a constant controls.
+func TestStructuredReportErrorReportsTheRealRetryCount(t *testing.T) {
+	previousDrain := chatStreamDrain
+	calls := 0
+	chatStreamDrain = func(_ context.Context, _ provider.Provider, _ chat.ProviderConfig, _, _ string) (string, error) {
+		calls++
+		return `{`, nil
+	}
+	t.Cleanup(func() { chatStreamDrain = previousDrain })
+
+	err := requestStructuredReportJSON(context.Background(), reportTestProvider{name: "test"},
+		chat.ProviderConfig{Model: "test-model"}, "sys", "user", func(raw string) error {
+			return decodeStrictReportJSON(raw, &reportThemeResponse{})
+		})
+
+	if err == nil {
+		t.Fatal("expected failure after every attempt")
+	}
+	if calls != reportStructuredAttempts {
+		t.Fatalf("calls = %d, want every attempt used", calls)
+	}
+	if !strings.Contains(err.Error(), "已重试 "+strconvItoa(reportStructuredAttempts-1)+" 次") {
+		t.Fatalf("error must report the real count: %v", err)
 	}
 }

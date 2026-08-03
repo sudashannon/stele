@@ -133,6 +133,10 @@ func handleReport(w http.ResponseWriter, r *http.Request, wikiAPI *wiki.API) {
 		return
 	}
 	corpus := extractReportCorpus(snapshot, start, inclusiveEnd.AddDate(0, 0, 1), request.Workspace)
+	// The effort axis: which sessions worked in this window and what they wrote.
+	// Sessions never enter the corpus as evidence - they decide how the corpus is
+	// grouped and ordered, because document count is not work.
+	sessionWork := wikiAPI.SnapshotSessionWork(start, inclusiveEnd.AddDate(0, 0, 1), request.Workspace)
 	reportsDir, err := reportsDirFn()
 	if err != nil {
 		writeJSONError(w, "报告目录不可用: "+err.Error(), http.StatusInternalServerError)
@@ -144,10 +148,12 @@ func handleReport(w http.ResponseWriter, r *http.Request, wikiAPI *wiki.API) {
 	var body []byte
 	var digest reportPeriodDigest
 	if request.Type == "weekly" {
-		themes := clusterReportCorpus(&corpus)
-		body, digest, err = generateWeeklyDocumentReport(ctx, &corpus, themes, request.Start, request.End, providerConfig, llmProvider)
+		attribution := attributeReportCorpus(&corpus, sessionWork)
+		themes := buildSessionThemes(&corpus, &attribution)
+		corpus.Counts.Themes = len(themes)
+		body, digest, err = generateWeeklyDocumentReport(ctx, &corpus, themes, attribution, request.Start, request.End, providerConfig, llmProvider)
 	} else {
-		body, digest, err = generateMonthlyDocumentReport(ctx, &corpus, reportsDir, request.Start, request.End, providerConfig, llmProvider)
+		body, digest, err = generateMonthlyDocumentReport(ctx, &corpus, sessionWork, reportsDir, request.Start, request.End, providerConfig, llmProvider)
 	}
 	if err != nil {
 		status := http.StatusBadGateway
@@ -179,14 +185,13 @@ func handleReport(w http.ResponseWriter, r *http.Request, wikiAPI *wiki.API) {
 var monthlyTemplate string
 
 type monthlyJSON struct {
-	Title      string   `json:"title"`
-	Overview   string   `json:"overview"`
-	Total      int      `json:"total"`
-	Active     int      `json:"active"`
-	Themes     int      `json:"themes"`
-	Reports    int      `json:"reports"`
-	Mainline   string   `json:"mainline"`
-	Highlights []string `json:"highlights"`
+	Title      string `json:"title"`
+	Overview   string `json:"overview"`
+	Total      int    `json:"total"`
+	Active     int    `json:"active"`
+	Themes     int    `json:"themes"`
+	Reports    int    `json:"reports"`
+	Mainline   string `json:"mainline"`
 	Milestones []struct {
 		Date string `json:"date"`
 		Text string `json:"text"`
@@ -200,6 +205,10 @@ type monthlyJSON struct {
 		Name   string   `json:"name"`
 		Points []string `json:"points"`
 	} `json:"focusProjects"`
+	// Deterministic sections, no model text.
+	SessionsHTML string `json:"sessionsHtml"`
+	OpenWorkHTML string `json:"openWorkHtml"`
+	ActiveLabel  string `json:"activeLabel"`
 }
 
 func renderMonthlyFromJSON(raw []byte) ([]byte, error) {
@@ -218,9 +227,15 @@ func renderMonthlyFromJSON(raw []byte) ([]byte, error) {
 		}
 		themesHTML.WriteString(`</ul></div>`)
 	}
-	var highlightsHTML strings.Builder
-	for _, highlight := range report.Highlights {
-		fmt.Fprintf(&highlightsHTML, "<li>%s</li>", html.EscapeString(highlight))
+	// A heading with nothing under it is a rendering bug, and the reader sees it as
+	// a broken report: 重点主题 and 关键成果 both rendered as bare headings once the
+	// sections that fed them were starved. Every section is emitted with its own
+	// heading only when it has content.
+	section := func(heading, inner, body string) string {
+		if strings.TrimSpace(body) == "" {
+			return ""
+		}
+		return fmt.Sprintf("<section>\n  <h2>%s</h2>\n  %s\n</section>", heading, fmt.Sprintf(inner, body))
 	}
 	var milestonesHTML strings.Builder
 	for _, milestone := range report.Milestones {
@@ -234,23 +249,22 @@ func renderMonthlyFromJSON(raw []byte) ([]byte, error) {
 		}
 		focusHTML.WriteString(`</ul></div>`)
 	}
-	mainline := report.Mainline
-	if mainline == "" {
-		mainline = report.Overview
-	}
 	output := monthlyTemplate
 	replacements := map[string]string{
-		"{{TITLE}}":           html.EscapeString(report.Title),
-		"{{OVERVIEW}}":        html.EscapeString(report.Overview),
-		"{{MAINLINE}}":        html.EscapeString(mainline),
-		"{{TOTAL}}":           fmt.Sprintf("%d", report.Total),
-		"{{ACTIVE}}":          fmt.Sprintf("%d", report.Active),
-		"{{THEMES}}":          fmt.Sprintf("%d", report.Themes),
-		"{{REPORTS}}":         fmt.Sprintf("%d", report.Reports),
-		"{{THEMES_HTML}}":     themesHTML.String(),
-		"{{HIGHLIGHTS_HTML}}": highlightsHTML.String(),
-		"{{MILESTONES_HTML}}": milestonesHTML.String(),
-		"{{FOCUS_HTML}}":      focusHTML.String(),
+		"{{TITLE}}":              html.EscapeString(report.Title),
+		"{{OVERVIEW}}":           html.EscapeString(report.Overview),
+		"{{MAINLINE}}":           html.EscapeString(report.Mainline),
+		"{{TOTAL}}":              fmt.Sprintf("%d", report.Total),
+		"{{ACTIVE}}":             fmt.Sprintf("%d", report.Active),
+		"{{THEMES}}":             fmt.Sprintf("%d", report.Themes),
+		"{{REPORTS}}":            fmt.Sprintf("%d", report.Reports),
+		"{{THEMES_SECTION}}":     section("主题", `<div class="themes">%s</div>`, themesHTML.String()),
+		"{{MILESTONES_SECTION}}": section("里程碑", `<ul class="milestones">%s</ul>`, milestonesHTML.String()),
+		"{{FOCUS_SECTION}}":      section("重点主题", `<div class="focus">%s</div>`, focusHTML.String()),
+		"{{ACTIVE_LABEL}}":       html.EscapeString(report.ActiveLabel),
+		// These two already carry their own heading.
+		"{{SESSIONS_SECTION}}":  wrapSection(report.SessionsHTML),
+		"{{OPEN_WORK_SECTION}}": wrapSection(report.OpenWorkHTML),
 	}
 	for key, value := range replacements {
 		output = strings.ReplaceAll(output, key, value)
@@ -358,4 +372,14 @@ func parseReportName(name string) (struct{ Type, Start, End string }, bool) {
 		return zero, false
 	}
 	return struct{ Type, Start, End string }{type_, start, end}, true
+}
+
+// wrapSection emits a <section> only when its pre-rendered body has content. The
+// effort and open-work builders already include their own heading, so an empty
+// return means the data was absent and the section must disappear entirely.
+func wrapSection(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	return "<section>\n  " + body + "\n</section>"
 }

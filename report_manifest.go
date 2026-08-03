@@ -15,7 +15,20 @@ import (
 )
 
 const (
-	reportManifestSchemaVersion = 1
+	// Schema history, because each bump changed what a digest *guarantees* rather
+	// than just what it stores:
+	//   v2 added the effort axis - sessions, per-theme session attribution, and the
+	//      counted bulk-import bucket.
+	//   v3 added the size guarantee - a narrated theme holds at most
+	//      reportNarratableDocuments documents; anything larger is counted instead.
+	//
+	// Monthly rollups reuse only the current schema. Both looser rules were tried
+	// and measured: a v1 week (grouped by document count) put 296 documents into one
+	// monthly section, and a pre-v3 week carried a 78-document theme whose claims
+	// cited a handful. Nothing is dropped by refusing an old digest - the month
+	// regenerates that week through the current pipeline, which is what
+	// missingReportPeriods exists for.
+	reportManifestSchemaVersion = 3
 	reportPromptVersion         = "document-report-v1"
 	reportClusteringVersion     = "relation-centroid-v1"
 )
@@ -36,6 +49,48 @@ type reportThemeDigest struct {
 	ContextEvidenceIDs []string              `json:"contextEvidenceIds,omitempty"`
 	RepresentativeIDs  []string              `json:"representativeIds"`
 	Independent        bool                  `json:"independent,omitempty"`
+	// A session-driven theme carries the effort that produced it; an
+	// unattributed one says so, because "nobody's tracked session wrote this"
+	// is information a reader needs before trusting the grouping.
+	SessionID    string            `json:"sessionId,omitempty"`
+	SessionPath  string            `json:"sessionPath,omitempty"`
+	Effort       reportThemeEffort `json:"effort,omitempty"`
+	Unattributed bool              `json:"unattributed,omitempty"`
+}
+
+// reportDigestSession records a session's effort even when it produced no
+// document: "six active days, nothing written" is a fact the old report lost.
+type reportDigestSession struct {
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Title     string `json:"title"`
+	Workspace string `json:"workspace"`
+	// Days are the dates this session recorded work on, inside the window. The
+	// count alone cannot be aggregated: summing ActiveDays over 14 parallel
+	// sessions produced "40 个活跃工作日" in a 7-day week, which reads like a
+	// month. Callers union these instead.
+	Days       []string               `json:"days,omitempty"`
+	ActiveDays int                    `json:"activeDays"`
+	Events     int                    `json:"events"`
+	UserTurns  int                    `json:"userTurns"`
+	Documents  int                    `json:"documents"`
+	OpenTodos  []reportDigestOpenTodo `json:"openTodos,omitempty"`
+}
+
+// reportDigestOpenTodo is an unfinished task the session left behind.
+type reportDigestOpenTodo struct {
+	Phase   string `json:"phase,omitempty"`
+	Content string `json:"content"`
+	Status  string `json:"status"`
+	Blocker string `json:"blocker,omitempty"`
+}
+
+// reportDigestBulkImport is a same-day document tree no session authored.
+type reportDigestBulkImport struct {
+	Directory string `json:"directory"`
+	Date      string `json:"date"`
+	Count     int    `json:"count"`
+	Kind      string `json:"kind,omitempty"`
 }
 
 type reportDigestDocument struct {
@@ -73,23 +128,27 @@ type reportPeriod struct {
 }
 
 type reportPeriodDigest struct {
-	SchemaVersion     int                     `json:"schemaVersion"`
-	DigestID          string                  `json:"digestId"`
-	Type              string                  `json:"type"`
-	Start             string                  `json:"start"`
-	End               string                  `json:"end"`
-	Workspace         string                  `json:"workspace"`
-	InputSnapshotHash string                  `json:"inputSnapshotHash"`
-	Documents         []reportDigestDocument  `json:"documents"`
-	Relations         []reportDigestRelation  `json:"relations,omitempty"`
-	Themes            []reportThemeDigest     `json:"themes"`
-	Counts            documentReportCounts    `json:"counts"`
-	Coverage          reportCoverage          `json:"coverage"`
-	SourceReportIDs   []string                `json:"sourceReportIds,omitempty"`
-	GeneratedSlices   []reportPeriod          `json:"generatedSlices,omitempty"`
-	Generator         reportGeneratorMetadata `json:"generator"`
-	GeneratedAt       string                  `json:"generatedAt"`
-	ReportFile        string                  `json:"reportFile"`
+	SchemaVersion     int                    `json:"schemaVersion"`
+	DigestID          string                 `json:"digestId"`
+	Type              string                 `json:"type"`
+	Start             string                 `json:"start"`
+	End               string                 `json:"end"`
+	Workspace         string                 `json:"workspace"`
+	InputSnapshotHash string                 `json:"inputSnapshotHash"`
+	Documents         []reportDigestDocument `json:"documents"`
+	Relations         []reportDigestRelation `json:"relations,omitempty"`
+	Themes            []reportThemeDigest    `json:"themes"`
+	// Sessions is every session with in-window effort, including ones that
+	// produced no document - that fact is what the document-count report lost.
+	Sessions        []reportDigestSession    `json:"sessions,omitempty"`
+	BulkImports     []reportDigestBulkImport `json:"bulkImports,omitempty"`
+	Counts          documentReportCounts     `json:"counts"`
+	Coverage        reportCoverage           `json:"coverage"`
+	SourceReportIDs []string                 `json:"sourceReportIds,omitempty"`
+	GeneratedSlices []reportPeriod           `json:"generatedSlices,omitempty"`
+	Generator       reportGeneratorMetadata  `json:"generator"`
+	GeneratedAt     string                   `json:"generatedAt"`
+	ReportFile      string                   `json:"reportFile"`
 }
 
 func newReportPeriodDigest(type_, start, end, workspace string, corpus *reportCorpus, themes []reportThemeDigest, providerName, model string) reportPeriodDigest {
@@ -148,6 +207,65 @@ func newReportPeriodDigest(type_, start, end, workspace string, corpus *reportCo
 	digest.InputSnapshotHash = reportInputSnapshotHash(type_, start, end, workspace, documents, relations)
 	digest.DigestID = reportDigestID(digest)
 	return digest
+}
+
+// attachReportEffort records the effort axis on a digest: every session with
+// in-window work (including ones that wrote nothing) and every bulk import that
+// was folded out of the themes. Called before the digest is saved so the manifest
+// can be audited against the rendered report.
+//
+// The input hash absorbs the session facts too - the same documents grouped under
+// different sessions is a different report, and a hash that ignored that would
+// call them identical.
+func attachReportEffort(digest *reportPeriodDigest, corpus *reportCorpus, attribution reportAttribution) {
+	for _, session := range attribution.Sessions {
+		entry := reportDigestSession{
+			ID:         session.Item.ID,
+			Path:       session.Item.Path,
+			Title:      session.Item.Title,
+			Workspace:  session.Item.Workspace,
+			Days:       sortedActivityDays(session.Item.Activity),
+			ActiveDays: session.Item.ActiveDays,
+			Events:     session.Item.Events,
+			UserTurns:  session.Item.UserTurns,
+			Documents:  len(session.Documents),
+		}
+		for _, todo := range session.Item.OpenTodos {
+			entry.OpenTodos = append(entry.OpenTodos, reportDigestOpenTodo{
+				Phase: todo.Phase, Content: todo.Content, Status: todo.Status, Blocker: todo.Blocker,
+			})
+		}
+		digest.Sessions = append(digest.Sessions, entry)
+	}
+	for _, group := range attribution.BulkImports {
+		digest.BulkImports = append(digest.BulkImports, reportDigestBulkImport{
+			Directory: group.Directory, Date: group.Date, Count: group.Count, Kind: group.Kind,
+		})
+	}
+	digest.Counts.Sessions = len(digest.Sessions)
+	digest.Counts.BulkImportDocuments = 0
+	for _, group := range attribution.BulkImports {
+		digest.Counts.BulkImportDocuments += group.Count
+	}
+	digest.Counts.UnattributedDocuments = len(attribution.Unattributed)
+	digest.InputSnapshotHash = reportEffortSnapshotHash(digest.InputSnapshotHash, digest.Sessions)
+	digest.DigestID = reportDigestID(*digest)
+}
+
+// reportEffortSnapshotHash folds the session facts into an existing document
+// snapshot hash.
+func reportEffortSnapshotHash(documentHash string, sessions []reportDigestSession) string {
+	if len(sessions) == 0 {
+		return documentHash
+	}
+	hash := sha256.New()
+	fmt.Fprintf(hash, "%s\x00", documentHash)
+	ordered := append([]reportDigestSession(nil), sessions...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Path < ordered[j].Path })
+	for _, session := range ordered {
+		fmt.Fprintf(hash, "%s\x00%d\x00%d\x00%d\x00", session.Path, session.ActiveDays, session.Events, session.Documents)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func reportInputSnapshotHash(type_, start, end, workspace string, documents []reportDigestDocument, relations []reportDigestRelation) string {
@@ -279,7 +397,8 @@ func loadContainedWeeklyDigests(dir, start, end, workspace string) ([]reportPeri
 			continue
 		}
 		var digest reportPeriodDigest
-		if json.Unmarshal(data, &digest) != nil || digest.SchemaVersion != reportManifestSchemaVersion || digest.Type != "weekly" || digest.Workspace != workspace {
+		if json.Unmarshal(data, &digest) != nil || digest.SchemaVersion != reportManifestSchemaVersion ||
+			digest.Type != "weekly" || digest.Workspace != workspace {
 			continue
 		}
 		digestStart, digestEnd, parseErr := parseInclusiveReportDates(digest.Start, digest.End)
@@ -318,4 +437,38 @@ func parseInclusiveReportDates(start, end string) (time.Time, time.Time, error) 
 		return time.Time{}, time.Time{}, fmt.Errorf("end before start")
 	}
 	return startDate, endDate, nil
+}
+
+// sortedActivityDays lists the dates a session recorded work on.
+func sortedActivityDays(activity map[string]int) []string {
+	days := make([]string, 0, len(activity))
+	for day := range activity {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	return days
+}
+
+// reportActiveDayCount counts the distinct calendar days any session worked on.
+// Sessions run in parallel, so this is never the sum of their day counts - a week
+// has seven days no matter how many sessions were active.
+func reportActiveDayCount(sessions []reportDigestSession) int {
+	days := make(map[string]struct{})
+	for _, session := range sessions {
+		for _, day := range session.Days {
+			days[day] = struct{}{}
+		}
+	}
+	if len(days) == 0 {
+		// Older digests carry no day list; fall back to the largest single
+		// session, which is a lower bound rather than an impossible total.
+		longest := 0
+		for _, session := range sessions {
+			if session.ActiveDays > longest {
+				longest = session.ActiveDays
+			}
+		}
+		return longest
+	}
+	return len(days)
 }

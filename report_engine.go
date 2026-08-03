@@ -19,7 +19,7 @@ const (
 	reportClusterPromptRuneBudget = 32000
 	reportClusterConcurrency      = 3
 	reportStructuredMaxTokens     = 4096
-	reportStructuredAttempts      = 2
+	reportStructuredAttempts      = 3
 )
 
 type reportPromptDocument struct {
@@ -53,21 +53,37 @@ type reportThemeResponse struct {
 }
 
 type reportThemePrompt struct {
-	Start          string                 `json:"start"`
-	End            string                 `json:"end"`
-	Workspace      string                 `json:"workspace"`
-	ThemeID        string                 `json:"themeId"`
-	SuggestedLabel string                 `json:"suggestedLabel"`
-	Independent    bool                   `json:"independent"`
-	Documents      []reportPromptDocument `json:"documents"`
+	Start          string `json:"start"`
+	End            string `json:"end"`
+	Workspace      string `json:"workspace"`
+	ThemeID        string `json:"themeId"`
+	SuggestedLabel string `json:"suggestedLabel"`
+	Independent    bool   `json:"independent"`
+	// Session is the effort behind this theme, when a session produced it. It is
+	// framing only: it tells the model this is one work item with a known shape
+	// rather than a bag of documents that happen to look alike. Claims still cite
+	// documents, never the session - a transcript is derived, not authored prose.
+	Session      *reportPromptSession   `json:"session,omitempty"`
+	Unattributed bool                   `json:"unattributed,omitempty"`
+	Documents    []reportPromptDocument `json:"documents"`
 }
 
-func generateWeeklyDocumentReport(ctx context.Context, corpus *reportCorpus, themes []reportTheme, start, end string, pcfg chat.ProviderConfig, p provider.Provider) ([]byte, reportPeriodDigest, error) {
+// reportPromptSession is the session framing handed to the model.
+type reportPromptSession struct {
+	Title      string   `json:"title"`
+	ActiveDays int      `json:"activeDays"`
+	Events     int      `json:"events"`
+	UserTurns  int      `json:"userTurns"`
+	OpenTasks  []string `json:"openTasks,omitempty"`
+}
+
+func generateWeeklyDocumentReport(ctx context.Context, corpus *reportCorpus, themes []reportTheme, attribution reportAttribution, start, end string, pcfg chat.ProviderConfig, p provider.Provider) ([]byte, reportPeriodDigest, error) {
 	themeDigests, err := summarizeReportThemes(ctx, corpus, themes, pcfg, p)
 	if err != nil {
 		return nil, reportPeriodDigest{}, err
 	}
 	digest := newReportPeriodDigest("weekly", start, end, corpus.Workspace, corpus, themeDigests, p.Name(), pcfg.Model)
+	attachReportEffort(&digest, corpus, attribution)
 	return renderWeeklyDocumentReport(digest), digest, nil
 }
 
@@ -159,7 +175,15 @@ func requestStructuredReportJSON(ctx context.Context, p provider.Provider, pcfg 
 	for attempt := range reportStructuredAttempts {
 		prompt := systemPrompt
 		if attempt > 0 {
-			prompt += "\n\n重试要求：上一次响应被截断、不是合法 JSON，或未通过 evidence/next 校验。重新核对每个 evidenceId；没有明确未完成清单或 Next/Follow-up/TODO 原文时不得输出 kind=next。仅返回一个完整、紧凑的 JSON 对象；summary 不超过 160 字；claims 最多 8 条，每条不超过 160 字；必须补齐所有括号和引号。"
+			prompt += "\n\n重试要求：上一次响应被截断、不是合法 JSON、结构不符，或未通过 evidence/next 校验。" +
+				"summary 必须是对象 {\"text\":\"...\",\"evidenceIds\":[\"D1\"]}，不能是裸字符串；claims 每条同为对象 {\"kind\",\"text\",\"evidenceIds\"}。" +
+				"重新核对每个 evidenceId；没有明确未完成清单或 Next/Follow-up/TODO 原文时不得输出 kind=next。" +
+				"仅返回一个完整、紧凑的 JSON 对象；summary 不超过 160 字；claims 最多 8 条，每条不超过 160 字；必须补齐所有括号和引号。"
+			if lastErr != nil {
+				// The concrete failure beats a generic scolding: the model can only
+				// fix the field it actually got wrong if it is told which one.
+				prompt += "\n上一次失败原因：" + truncateReportRunes(lastErr.Error(), 200)
+			}
 		}
 		raw, err := chatStreamDrain(ctx, p, effective, prompt, userText)
 		if err == nil {
@@ -173,7 +197,7 @@ func requestStructuredReportJSON(ctx context.Context, p provider.Provider, pcfg 
 			return ctx.Err()
 		}
 	}
-	return fmt.Errorf("模型结构化响应失败（已自动重试 1 次）: %w", lastErr)
+	return fmt.Errorf("模型结构化响应失败（已重试 %d 次）: %w", reportStructuredAttempts-1, lastErr)
 }
 
 func reportThemeSystemPrompt() string {
@@ -196,7 +220,8 @@ func reportThemeSystemPrompt() string {
 5. independent=true 时，主题名必须是“独立事项”，summary 不得虚构共同主线；逐项写 claims。
 6. 合并重复表述，但保留 negative、abandoned、失败或风险结论。
 7. summary 不超过 160 字；claims 最多 8 条，每条 text 不超过 160 字。
-8. evidenceIds 只保留支撑当前事实所需的文档；确保 JSON 完整闭合。`
+8. 正文（summary.text 和 claim.text）中不得出现 evidenceId 如 D12；证据归属仅写在 evidenceIds 数组中。
+9. evidenceIds 只保留支撑当前事实所需的文档；确保 JSON 完整闭合。`
 }
 
 func buildReportThemePrompt(corpus *reportCorpus, theme reportTheme) reportThemePrompt {
@@ -225,15 +250,26 @@ func buildReportThemePrompt(corpus *reportCorpus, theme reportTheme) reportTheme
 			Text:          truncateReportRunes(document.SemanticText, perDocumentBudget),
 		})
 	}
-	return reportThemePrompt{
+	prompt := reportThemePrompt{
 		Start:          corpus.Start.Format("2006-01-02"),
 		End:            corpus.End.AddDate(0, 0, -1).Format("2006-01-02"),
 		Workspace:      corpus.Workspace,
 		ThemeID:        theme.ID,
 		SuggestedLabel: theme.Label,
 		Independent:    theme.Independent,
+		Unattributed:   theme.Unattributed,
 		Documents:      documents,
 	}
+	if theme.SessionID != "" {
+		prompt.Session = &reportPromptSession{
+			Title:      theme.Label,
+			ActiveDays: theme.Effort.ActiveDays,
+			Events:     theme.Effort.Events,
+			UserTurns:  theme.Effort.UserTurns,
+			OpenTasks:  append([]string(nil), theme.OpenTasks...),
+		}
+	}
+	return prompt
 }
 
 func validateReportThemeResponse(response reportThemeResponse, theme reportTheme, corpus *reportCorpus) (reportThemeDigest, error) {
@@ -245,9 +281,11 @@ func validateReportThemeResponse(response reportThemeResponse, theme reportTheme
 		order[document.EvidenceID] = index
 	}
 	label := strings.TrimSpace(response.Label)
-	if theme.Independent {
-		label = "独立事项"
-	} else if label == "" {
+	if theme.Independent || theme.SessionID != "" || label == "" {
+		// A grouped section and a session section both already know what they
+		// are: the session's own title is what the person called the work, and a
+		// catch-all is named by what it collects. Only an unnamed document
+		// cluster asks the model for a label.
 		label = theme.Label
 	}
 	label = truncateReportRunes(label, 80)
@@ -274,6 +312,10 @@ func validateReportThemeResponse(response reportThemeResponse, theme reportTheme
 		ContextEvidenceIDs: append([]string(nil), theme.ContextEvidenceIDs...),
 		RepresentativeIDs:  append([]string(nil), theme.RepresentativeIDs...),
 		Independent:        theme.Independent,
+		SessionID:          theme.SessionID,
+		SessionPath:        theme.SessionPath,
+		Effort:             theme.Effort,
+		Unattributed:       theme.Unattributed,
 	}
 	allowedKinds := map[string]bool{"outcome": true, "decision": true, "progress": true, "risk": true, "next": true, "background": true}
 	for index, claim := range response.Claims {
@@ -392,10 +434,23 @@ func renderWeeklyDocumentReport(digest reportPeriodDigest) []byte {
 		scope = "全部 workspace"
 	}
 	out.WriteString("## 概述\n\n")
+	// Two numbers, not one: work items backed by a session record, and document
+	// themes nobody's session authored. Collapsing them into a single "themes"
+	// count is what let an import outrank the week's engineering.
+	unattributedThemes := 0
+	for _, theme := range digest.Themes {
+		if theme.SessionID == "" {
+			unattributedThemes++
+		}
+	}
 	fmt.Fprintf(&out,
-		"本周纳入 %d 份活动文档，归并为 %d 个逻辑工作项和 %d 个主题，覆盖 %d 个 Workspace；其中报告类文档 %d 份。\n\n",
-		digest.Counts.Documents, digest.Counts.WorkItems, digest.Counts.Themes, digest.Counts.Workspaces, digest.Counts.Reports)
+		"本周纳入 %d 份活动文档，覆盖 %d 个 Workspace；其中报告类文档 %d 份。\n\n",
+		digest.Counts.Documents, digest.Counts.Workspaces, digest.Counts.Reports)
+	fmt.Fprintf(&out, "报告按工作项组织：%d 个由会话记录支撑，%d 个仅由文档内容归并。\n\n",
+		len(digest.Themes)-unattributedThemes, unattributedThemes)
 	fmt.Fprintf(&out, "> 统计口径：Wiki 索引中文档的最后更新时间；范围：%s。\n\n", escapeMarkdownCell(scope))
+	renderReportEffortNote(&out, digest)
+	renderReportEffortTable(&out, digest)
 
 	documentsByID := make(map[string]reportDigestDocument, len(digest.Documents))
 	for _, document := range digest.Documents {
@@ -407,6 +462,7 @@ func renderWeeklyDocumentReport(digest reportPeriodDigest) []byte {
 	out.WriteString("---\n\n")
 	for index, theme := range digest.Themes {
 		fmt.Fprintf(&out, "## %s、%s\n\n", reportThemeOrdinal(index), theme.Label)
+		renderReportSessionEffort(&out, theme)
 		fmt.Fprintf(&out, "%s %s\n\n", theme.Summary.Text, reportClaimCitation(theme.Summary.EvidenceIDs))
 
 		milestones := make(map[int]struct{})
@@ -477,6 +533,9 @@ func renderWeeklyDocumentReport(digest reportPeriodDigest) []byte {
 		out.WriteString("---\n\n")
 	}
 
+	renderReportBulkImports(&out, digest)
+	renderReportOpenWork(&out, digest)
+
 	out.WriteString("## 下周计划\n\n")
 	nextCount := 0
 	for _, theme := range digest.Themes {
@@ -513,11 +572,24 @@ func renderWeeklyDocumentReport(digest reportPeriodDigest) []byte {
 }
 
 func reportThemeOrdinal(index int) string {
-	ordinals := [...]string{"一", "二", "三", "四", "五", "六", "七", "八"}
-	if index >= 0 && index < len(ordinals) {
-		return ordinals[index]
+	digits := [...]string{"一", "二", "三", "四", "五", "六", "七", "八", "九"}
+	if index < 0 {
+		return fmt.Sprintf("%d", index+1)
 	}
-	return fmt.Sprintf("%d", index+1)
+	number := index + 1
+	switch {
+	case number <= 9:
+		return digits[number-1]
+	case number == 10:
+		return "十"
+	case number < 20:
+		return "十" + digits[number-11]
+	case number%10 == 0 && number < 100:
+		return digits[number/10-1] + "十"
+	case number < 100:
+		return digits[number/10-1] + "十" + digits[number%10-1]
+	}
+	return fmt.Sprintf("%d", number)
 }
 
 func reportThemeDocuments(theme reportThemeDigest, documentsByID map[string]reportDigestDocument) []reportDigestDocument {
