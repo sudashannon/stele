@@ -23,12 +23,19 @@ describe('SideRail', () => {
     expect(screen.getByText('知识图谱')).toBeTruthy()
   })
 
-  it('includes the Ctrl+1…8 shortcuts in the button titles for the primary views', () => {
+  it('titles every numbered view with its own Ctrl shortcut', () => {
     render(<SideRail view="changes" onSelect={() => {}} />)
 
-    expect(screen.getByRole('button', { name: '变更仪表盘' }).getAttribute('title')).toContain('Ctrl')
-    expect(screen.getByRole('button', { name: '待办' }).getAttribute('title')).toContain('2')
-    expect(screen.getByRole('button', { name: '报告' }).getAttribute('title')).toContain('8')
+    // Derived from the item list so a reorder cannot leave a title behind.
+    for (const item of SIDE_RAIL_ITEMS) {
+      const title = screen.getByRole('button', { name: item.label }).getAttribute('title') ?? ''
+      if (item.shortcutKey === undefined) {
+        expect(title).toBe(item.label)
+        continue
+      }
+      expect(title).toContain('Ctrl')
+      expect(title).toContain(String(item.shortcutKey))
+    }
   })
 
   it('calls onSelect with the view key when a navigation button is clicked', () => {

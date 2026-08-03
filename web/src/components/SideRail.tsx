@@ -41,16 +41,19 @@ export interface SideRailProps {
   todoCount?: number
 }
 
+// Rail order is the shortcut order: the Nth item is Ctrl+N. Keeping the two in
+// step is what makes the numbers discoverable from the rail itself, so moving an
+// item renumbers the ones after it rather than leaving a gap.
 export const SIDE_RAIL_ITEMS: SideRailItem[] = [
   { key: 'changes', label: '变更仪表盘', icon: 'changes', shortcutKey: 1 },
-  { key: 'todos', label: '待办', icon: 'todos', shortcutKey: 2 },
-  { key: 'graph', label: '知识图谱', icon: 'graph', shortcutKey: 3 },
-  { key: 'timeline', label: '时间线', icon: 'timeline', shortcutKey: 4 },
-  { key: 'search', label: '语义搜索', icon: 'search', shortcutKey: 5 },
-  { key: 'recent', label: '最近更新', icon: 'recent', shortcutKey: 6 },
-  { key: 'lint', label: '文档健康', icon: 'lint', shortcutKey: 7 },
-  { key: 'report', label: '报告', icon: 'report', shortcutKey: 8 },
-  { key: 'sessions', label: 'Agent 会话', icon: 'sessions', shortcutKey: 9 },
+  { key: 'sessions', label: 'Agent 会话', icon: 'sessions', shortcutKey: 2 },
+  { key: 'todos', label: '待办', icon: 'todos', shortcutKey: 3 },
+  { key: 'graph', label: '知识图谱', icon: 'graph', shortcutKey: 4 },
+  { key: 'timeline', label: '时间线', icon: 'timeline', shortcutKey: 5 },
+  { key: 'search', label: '语义搜索', icon: 'search', shortcutKey: 6 },
+  { key: 'recent', label: '最近更新', icon: 'recent', shortcutKey: 7 },
+  { key: 'lint', label: '文档健康', icon: 'lint', shortcutKey: 8 },
+  { key: 'report', label: '报告', icon: 'report', shortcutKey: 9 },
   { key: 'shares', label: '分享', icon: 'share' },
   { key: 'calendar', label: '日历', icon: 'calendar' },
 ]

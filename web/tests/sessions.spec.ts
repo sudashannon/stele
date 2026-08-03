@@ -67,12 +67,12 @@ test('a session that used the tracker shows its task record', async ({ page }) =
   test.skip(true, 'no indexed session used the tracker on this machine')
 })
 
-test('Ctrl+9 selects the sessions view', async ({ page }) => {
+test('Ctrl+2 selects the sessions view', async ({ page }) => {
   await page.goto('/', OPEN)
   // domcontentloaded fires before React attaches its key listener.
   const railItem = page.getByRole('button', { name: 'Agent 会话' })
   await expect(railItem).toBeVisible()
-  await page.keyboard.press('Control+9')
+  await page.keyboard.press('Control+2')
   await expect(page.getByRole('button', { name: 'Agent 会话' })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('sessions-panel')).toBeVisible()
 })

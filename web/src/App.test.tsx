@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import App from './App'
+import { SIDE_RAIL_ITEMS } from './components/SideRail'
 import { fetchWorkspaces, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchSessionsWithMeta, fetchChatSession, fetchChangeDetail, fetchBookmarks, fetchTodos, addBookmark, removeWorkspace } from './api/client'
 import type { ChangeSummary, WorkspaceConfig } from './api/types'
 
@@ -602,21 +603,22 @@ describe('App view switcher', () => {
   })
 
 
-  it('maps Ctrl+1…9 to the same view order as the side rail, including Todo, Report and Agent 会话', async () => {
+  // The rail order IS the shortcut order, so this walks the rail and presses the
+  // matching number: a reordering that forgets to renumber fails here.
+  it('maps Ctrl+N to the Nth side-rail view', async () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
 
-    fireEvent.keyDown(document, { key: '2', ctrlKey: true })
-    expect(screen.getByRole('button', { name: '待办' }).getAttribute('aria-current')).toBe('page')
+    const numbered = SIDE_RAIL_ITEMS.filter((item) => item.shortcutKey !== undefined)
+    expect(numbered.map((item) => item.shortcutKey)).toEqual(numbered.map((_, index) => index + 1))
 
-    fireEvent.keyDown(document, { key: '8', ctrlKey: true })
-    expect(screen.getByRole('button', { name: '报告' }).getAttribute('aria-current')).toBe('page')
+    for (const item of numbered) {
+      fireEvent.keyDown(document, { key: String(item.shortcutKey), ctrlKey: true })
+      expect(screen.getByRole('button', { name: item.label }).getAttribute('aria-current')).toBe('page')
+    }
 
-    fireEvent.keyDown(document, { key: '9', ctrlKey: true })
-    expect(screen.getByRole('button', { name: 'Agent 会话' }).getAttribute('aria-current')).toBe('page')
-
-    fireEvent.keyDown(document, { key: '1', ctrlKey: true })
-    expect(screen.getByRole('button', { name: '变更仪表盘' }).getAttribute('aria-current')).toBe('page')
+    // Agent 会话 sits second, right after the dashboard.
+    expect(numbered[1].label).toBe('Agent 会话')
   })
 
   it('switches to the Agent 会话 view, mounts the panel, and opens a session in SessionDetail', async () => {
