@@ -47,5 +47,7 @@ echo === Done ===
 echo Share URL base: http://YOUR_WINDOWS_IP:8989
 echo Get your Windows IP: ipconfig ^| findstr IPv4
 echo.
-echo Optional explicit server flag: --share-url http://YOUR_WINDOWS_IP:8989
+echo Share links follow the host you opened the panel on, so they track this IP
+echo as DHCP moves it. Use --share-url only for a proxy or DNS name the panel
+echo cannot see from the inside.
 pause

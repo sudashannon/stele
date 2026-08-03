@@ -201,7 +201,7 @@ func resolveSessionSources(ompDir string, explicit *repeatedFlag, ompDefault str
 func main() {
 	port := flag.Int("port", 8989, "port to listen on")
 	bind := flag.String("bind", "localhost", "address to bind to (use 0.0.0.0 for LAN access)")
-	shareURL := flag.String("share-url", "", "public base URL for share links (default: auto-detect or localhost)")
+	shareURL := flag.String("share-url", "", "public base URL for share links (default: derived from each request's Host)")
 	baseDir := flag.String("dir", "openspec", "path to an OpenSpec, Trellis, or Superpowers workspace")
 	sessionsDir := flag.String("sessions-dir", "", "OMP transcript directory (default: ~/.omp/agent/sessions; an empty value with no --sessions-source disables the session layer)")
 	sessionSourceFlags := &repeatedFlag{}
@@ -215,15 +215,9 @@ func main() {
 		log.Fatalf("workspace registry: %v", err)
 	}
 
-	// Share URL precedence: --share-url flag > auto-detected LAN IP > localhost.
-	shareBaseURL := fmt.Sprintf("http://localhost:%d", *port)
-	if *shareURL != "" {
-		shareBaseURL = *shareURL
-	} else if ip := detectLANIP(); ip != "" {
-		shareBaseURL = fmt.Sprintf("http://%s:%d", ip, *port)
-	}
-	// Always prefer explicit --share-url; auto-detection is unreliable on WSL2.
-	shareManager := NewShareManager(shareBaseURL)
+	// Link origins are derived per request (see ShareManager.BaseURL); the flag
+	// is the escape hatch for a host the panel cannot observe from the inside.
+	shareManager := NewShareManager(*shareURL)
 
 	mux.HandleFunc("/api/sync", handleSync(reg))
 	mux.HandleFunc("/api/sync/config", handleSyncConfig(reg))
@@ -814,13 +808,13 @@ func handleCreateShare(w http.ResponseWriter, r *http.Request, mgr *ShareManager
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	_, url, err := mgr.CreateShare(req.Path, req.Workspace, ttl)
+	token, err := mgr.CreateShare(req.Path, req.Workspace, ttl)
 	if err != nil {
 		writeJSONError(w, err.Error(), 500)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"url": url})
+	json.NewEncoder(w).Encode(map[string]string{"url": mgr.ShareURL(r, token)})
 }
 
 // handleListShares returns all active share tokens.
@@ -829,7 +823,7 @@ func handleListShares(w http.ResponseWriter, r *http.Request, mgr *ShareManager)
 		writeJSONError(w, "method not allowed", 405)
 		return
 	}
-	shares := mgr.ListShares()
+	shares := mgr.ListShares(r)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(shares)
 }

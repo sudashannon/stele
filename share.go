@@ -5,9 +5,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -35,19 +38,34 @@ type ShareInfo struct {
 
 // ShareManager creates and validates time-limited share tokens for documents.
 type ShareManager struct {
-	mu      sync.RWMutex
-	tokens  map[string]*ShareEntry
-	baseURL string
+	mu     sync.RWMutex
+	tokens map[string]*ShareEntry
+
+	// override holds --share-url. When set it wins over everything else: it is
+	// the only way to publish links for a host the panel cannot observe from
+	// the inside (a reverse proxy, a tunnel, a public DNS name).
+	override string
+
+	// A detected LAN address is consulted only for loopback callers. Detection
+	// shells out (ipconfig.exe under WSL), so it is cached behind lanTTL.
+	lanMu     sync.Mutex
+	lanIP     string
+	lanProbed time.Time
+	detect    func() string
 }
 
-// NewShareManager creates a new ShareManager.
-func NewShareManager(baseURL string) *ShareManager {
-	if baseURL == "" {
-		baseURL = "http://localhost:8989"
-	}
+// lanTTL bounds how long a detected LAN address is reused: short enough that a
+// DHCP lease change is picked up within one refresh, long enough that a burst of
+// share requests does not spawn a process each.
+const lanTTL = 30 * time.Second
+
+// NewShareManager creates a new ShareManager. shareURL is the optional
+// --share-url override; when empty, every link origin is derived per request.
+func NewShareManager(shareURL string) *ShareManager {
 	m := &ShareManager{
-		tokens:  make(map[string]*ShareEntry),
-		baseURL: baseURL,
+		tokens:   make(map[string]*ShareEntry),
+		override: strings.TrimRight(strings.TrimSpace(shareURL), "/"),
+		detect:   detectLANIP,
 	}
 	m.load()
 	go func() {
@@ -90,21 +108,88 @@ func (m *ShareManager) save() {
 	os.WriteFile(shareCachePath(), data, 0644)
 }
 
-// CreateShare generates a new share token and persists it.
-func (m *ShareManager) CreateShare(path, workspace string, ttl time.Duration) (token, url string, err error) {
-	token, err = generateToken()
+// CreateShare generates a new share token and persists it. A token carries no
+// origin of its own - ShareURL composes the public link per request.
+func (m *ShareManager) CreateShare(path, workspace string, ttl time.Duration) (string, error) {
+	token, err := generateToken()
 	if err != nil {
-		return "", "", fmt.Errorf("generate token: %w", err)
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+	entry := &ShareEntry{Path: path, Workspace: workspace, CreatedAt: time.Now()}
+	if ttl > 0 {
+		entry.ExpiresAt = entry.CreatedAt.Add(ttl)
 	}
 	m.mu.Lock()
-	m.tokens[token] = &ShareEntry{Path: path, Workspace: workspace, CreatedAt: time.Now()}
-	if ttl > 0 {
-		m.tokens[token].ExpiresAt = time.Now().Add(ttl)
-	}
+	m.tokens[token] = entry
 	m.mu.Unlock()
 	m.save()
-	url = fmt.Sprintf("%s/share/%s", m.baseURL, token)
-	return token, url, nil
+	return token, nil
+}
+
+// ShareURL returns the link for a token as this caller should see it.
+func (m *ShareManager) ShareURL(r *http.Request, token string) string {
+	return m.BaseURL(r) + "/share/" + token
+}
+
+// BaseURL derives the origin that links handed to this caller must carry.
+//
+// The caller's own Host is authoritative: whatever host:port the browser used
+// to reach the panel is reachable from that browser by construction, and it
+// follows the machine around as its address changes. Snapshotting a detected
+// LAN IP once at startup - what this replaced - silently rots every later link
+// the moment DHCP moves the adapter.
+//
+// Loopback is the one host that cannot be handed to somebody else, so those
+// callers get a freshly detected LAN address instead, keeping the port they
+// dialed: that is the port a portproxy forwards.
+func (m *ShareManager) BaseURL(r *http.Request) string {
+	if m.override != "" {
+		return m.override
+	}
+	scheme := "http"
+	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	host := r.Host
+	if host == "" {
+		host = "localhost"
+	}
+	hostname, port, err := net.SplitHostPort(host)
+	if err != nil {
+		hostname, port = host, ""
+	}
+	if isLoopbackHost(hostname) {
+		if lan := m.lanAddr(); lan != "" {
+			host = lan
+			if port != "" {
+				host = net.JoinHostPort(lan, port)
+			}
+		}
+	}
+	return scheme + "://" + host
+}
+
+// isLoopbackHost reports whether a link built on this host could only ever
+// resolve back to the caller's own machine.
+func isLoopbackHost(hostname string) bool {
+	if hostname == "" || strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(strings.Trim(hostname, "[]")); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
+}
+
+// lanAddr returns the cached LAN address, refreshing it once per lanTTL.
+func (m *ShareManager) lanAddr() string {
+	m.lanMu.Lock()
+	defer m.lanMu.Unlock()
+	if !m.lanProbed.IsZero() && time.Since(m.lanProbed) < lanTTL {
+		return m.lanIP
+	}
+	m.lanIP, m.lanProbed = m.detect(), time.Now()
+	return m.lanIP
 }
 
 // ValidateShare looks up a token and returns its ShareEntry.
@@ -140,8 +225,10 @@ func (m *ShareManager) RevokeShare(token string) error {
 	return nil
 }
 
-// ListShares returns all active share entries.
-func (m *ShareManager) ListShares() []ShareInfo {
+// ListShares returns all active share entries, with link origins as seen by
+// this caller.
+func (m *ShareManager) ListShares(r *http.Request) []ShareInfo {
+	base := m.BaseURL(r)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]ShareInfo, 0, len(m.tokens))
@@ -152,7 +239,7 @@ func (m *ShareManager) ListShares() []ShareInfo {
 			Workspace: entry.Workspace,
 			ExpiresAt: entry.ExpiresAt,
 			CreatedAt: entry.CreatedAt,
-			URL:       fmt.Sprintf("%s/share/%s", m.baseURL, token),
+			URL:       base + "/share/" + token,
 		})
 	}
 	return result
@@ -184,55 +271,96 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// detectLANIP returns an IPv4 address reachable from the LAN.
+// windowsIPConfig is the WSL view of the Windows network tool. The panel's own
+// interfaces are NAT-internal under WSL, so Windows' adapters are the only ones
+// another machine can reach.
+const windowsIPConfig = "/mnt/c/Windows/System32/ipconfig.exe"
+
+// ipv4Pattern matches an address literal anywhere in a line, which keeps the
+// parser independent of localized field labels, of the GBK bytes a Chinese
+// Windows emits, and of decorations such as "(Preferred)".
+var ipv4Pattern = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
+
+// virtualAdapterMarkers identify adapters whose addresses are useless to a
+// colleague: NAT bridges to this VM, and tunnels only its own client can enter.
+// Adapter names stay ASCII on a localized Windows ("以太网适配器 vEthernet
+// (WSL (Hyper-V firewall))"), so matching the header is safe where matching a
+// field label would not be.
+var virtualAdapterMarkers = []string{
+	"vethernet", "wsl", "hyper-v", "virtualbox", "vmware", "docker", "loopback",
+	"isatap", "teredo", "bluetooth", "wintun", "tap-windows", "openvpn",
+	"wireguard", "tailscale", "zerotier",
+}
+
+// detectLANIP returns an address other machines can reach, or "" when nothing
+// qualifies - in which case the caller keeps the host it already had.
 func detectLANIP() string {
-	if _, err := os.Stat("/mnt/c/Windows/System32/ipconfig.exe"); err == nil {
-		out, cmdErr := exec.Command("/mnt/c/Windows/System32/ipconfig.exe").Output()
-		if cmdErr == nil {
-			var firstIP, fallbackIP string
-			for _, line := range strings.Split(string(out), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.Contains(line, "IPv4") {
-					parts := strings.Split(line, ":")
-					if len(parts) >= 2 {
-						ip := strings.TrimSpace(parts[len(parts)-1])
-						if ip == "" || strings.HasPrefix(ip, "127.") {
-							continue
-						}
-						if firstIP == "" {
-							firstIP = ip
-						}
-						if strings.HasPrefix(ip, "10.") {
-							return ip
-						}
-						fallbackIP = ip
-					}
-				}
-			}
-			if fallbackIP != "" {
-				return fallbackIP
-			}
-			if firstIP != "" {
-				return firstIP
-			}
-		}
-	}
-	out, err := exec.Command("ip", "-4", "-br", "addr", "show").Output()
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		if strings.HasPrefix(fields[1], "lo") {
-			continue
-		}
-		ip := strings.SplitN(fields[2], "/", 2)[0]
-		if ip != "" && !strings.HasPrefix(ip, "127.") {
+	if out, err := exec.Command(windowsIPConfig).Output(); err == nil {
+		if ip := pickWindowsLANIP(string(out)); ip != "" {
 			return ip
 		}
 	}
-	return ""
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	var public string
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		if ip.IsPrivate() {
+			return ip.String()
+		}
+		if public == "" {
+			public = ip.String()
+		}
+	}
+	return public
+}
+
+// pickWindowsLANIP selects a reachable address from ipconfig output. A private
+// address wins because a LAN link is the point; a routable one is accepted when
+// that is all there is.
+func pickWindowsLANIP(out string) string {
+	skipAdapter := false
+	var public string
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		// Adapter headers are the only lines starting at column zero and
+		// ending in a colon; every field under them is indented.
+		if !strings.HasPrefix(raw, " ") && !strings.HasPrefix(raw, "\t") && strings.HasSuffix(line, ":") {
+			skipAdapter = false
+			lower := strings.ToLower(line)
+			for _, marker := range virtualAdapterMarkers {
+				if strings.Contains(lower, marker) {
+					skipAdapter = true
+					break
+				}
+			}
+			continue
+		}
+		if skipAdapter || !strings.Contains(line, "IPv4") {
+			continue
+		}
+		ip := net.ParseIP(ipv4Pattern.FindString(line))
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+			continue
+		}
+		if ip.IsPrivate() {
+			return ip.String()
+		}
+		if public == "" {
+			public = ip.String()
+		}
+	}
+	return public
 }
