@@ -23,6 +23,7 @@ import (
 
 	"stele/chat"
 	"stele/internal/appdir"
+	"stele/internal/sessions"
 	"stele/internal/source"
 	"stele/internal/todo"
 	"stele/wiki"
@@ -143,12 +144,68 @@ func pollSessions(index *wiki.SessionsIndex, api *wiki.API, hub *wiki.SSEHub, in
 	}
 }
 
+// repeatedFlag collects a flag that may appear several times.
+type repeatedFlag struct{ values []string }
+
+func (f *repeatedFlag) String() string { return strings.Join(f.values, ",") }
+
+func (f *repeatedFlag) Set(value string) error {
+	f.values = append(f.values, value)
+	return nil
+}
+
+// resolveSessionSources turns configuration into runtime sources.
+//
+// --sessions-source runtime=path is the general form. --sessions-dir remains
+// the OMP shorthand, and when neither is given the OMP default location is
+// used, so an existing deployment keeps working untouched. A directory that
+// does not exist is dropped here rather than deeper down: the layer must stay
+// silent on machines without that runtime, while a misspelled runtime name is
+// a configuration error worth failing on.
+func resolveSessionSources(ompDir string, explicit *repeatedFlag, ompDefault string) ([]sessions.Source, error) {
+	type request struct{ name, root string }
+	var requests []request
+	for _, raw := range explicit.values {
+		name, root, found := strings.Cut(raw, "=")
+		if !found {
+			return nil, fmt.Errorf("--sessions-source %q: want runtime=path", raw)
+		}
+		name, root = strings.TrimSpace(name), strings.TrimSpace(root)
+		if name == "" || root == "" {
+			return nil, fmt.Errorf("--sessions-source %q: want runtime=path", raw)
+		}
+		requests = append(requests, request{name: name, root: root})
+	}
+	switch {
+	case ompDir != "":
+		requests = append(requests, request{name: "omp", root: ompDir})
+	case len(requests) == 0:
+		requests = append(requests, request{name: "omp", root: ompDefault})
+	}
+
+	var resolved []sessions.Source
+	for _, req := range requests {
+		provider, ok := sessions.ProviderByName(req.name)
+		if !ok {
+			return nil, fmt.Errorf("unknown session runtime %q (known: %s)", req.name, strings.Join(sessions.ProviderNames(), ", "))
+		}
+		if !dirExists(req.root) {
+			log.Printf("sessions: %s source %s does not exist; skipping", req.name, req.root)
+			continue
+		}
+		resolved = append(resolved, sessions.Source{Provider: provider, Root: req.root})
+	}
+	return resolved, nil
+}
+
 func main() {
 	port := flag.Int("port", 8989, "port to listen on")
 	bind := flag.String("bind", "localhost", "address to bind to (use 0.0.0.0 for LAN access)")
 	shareURL := flag.String("share-url", "", "public base URL for share links (default: auto-detect or localhost)")
 	baseDir := flag.String("dir", "openspec", "path to an OpenSpec, Trellis, or Superpowers workspace")
-	sessionsDir := flag.String("sessions-dir", "", "agent session transcript directory (default: ~/.omp/agent/sessions; empty dir disables the session layer)")
+	sessionsDir := flag.String("sessions-dir", "", "OMP transcript directory (default: ~/.omp/agent/sessions; an empty value with no --sessions-source disables the session layer)")
+	sessionSourceFlags := &repeatedFlag{}
+	flag.Var(sessionSourceFlags, "sessions-source", "agent session source as runtime=path, repeatable (runtimes: "+strings.Join(sessions.ProviderNames(), ", ")+")")
 	flag.Parse()
 
 	mux := http.NewServeMux()
@@ -222,12 +279,16 @@ func main() {
 	// hundreds of megabytes, so they are never scanned as a workspace source:
 	// a dedicated index parses them incrementally and grafts session nodes and
 	// session→document edges onto the graph after each rebuild.
+	//
+	// Each source names an agent runtime and the directory holding its
+	// transcripts; a runtime is adapted by a provider inside internal/sessions,
+	// so adding one never reaches past that package.
 	agentDir := filepath.Join(os.Getenv("HOME"), ".omp", "agent")
-	sessionsRoot := *sessionsDir
-	if sessionsRoot == "" {
-		sessionsRoot = filepath.Join(agentDir, "sessions")
+	sessionSources, err := resolveSessionSources(*sessionsDir, sessionSourceFlags, filepath.Join(agentDir, "sessions"))
+	if err != nil {
+		log.Fatalf("sessions: %v", err)
 	}
-	sessionsIndex := wiki.NewSessionsIndex(sessionsRoot, filepath.Join(wikiCacheDir, "sessions.json"))
+	sessionsIndex := wiki.NewSessionsIndex(filepath.Join(wikiCacheDir, "sessions.json"), sessionSources...)
 	wikiAPI.SetMemoryDir(filepath.Join(agentDir, "memories"))
 	rebuilder := newCoalescedRebuilder(func() error {
 		// Digests refresh before the rebuild so the replacement graph is

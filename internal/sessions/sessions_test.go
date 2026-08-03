@@ -251,6 +251,11 @@ func TestNormalizePath(t *testing.T) {
 	}
 }
 
+// ompSources is the single-source list the store takes for OMP transcripts.
+func ompSources(root string) []Source {
+	return []Source{{Provider: ompProvider{}, Root: root}}
+}
+
 func TestStoreRefreshCachesAndDropsMissing(t *testing.T) {
 	root := t.TempDir()
 	bucket := filepath.Join(root, "-repo")
@@ -261,25 +266,44 @@ func TestStoreRefreshCachesAndDropsMissing(t *testing.T) {
 	transcript(t, bucket, "2026-07-30T00-00-00-000Z_b.jsonl",
 		sessionLine("b", "/repo", "B", "2026-07-30T02:00:00.000Z"),
 	)
-	// A tool-artifact directory beside a transcript must not be descended into.
-	if err := os.MkdirAll(filepath.Join(bucket, "2026-07-30T00-00-00-000Z_a", "nested"), 0o755); err != nil {
+	// A session's artifact directory holds tool logs and reports alongside one
+	// transcript per subagent it dispatched. Only the transcripts are read, and
+	// they fold into the dispatching session rather than becoming sessions.
+	artifacts := filepath.Join(bucket, "2026-07-30T00-00-00-000Z_a")
+	if err := os.WriteFile(filepath.Join(mkdir(t, artifacts), "42.bash.log"), []byte("not a transcript\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	transcript(t, filepath.Join(bucket, "2026-07-30T00-00-00-000Z_a", "nested"), "deep.jsonl", `{"type":"session","id":"deep"}`)
+	transcript(t, filepath.Join(artifacts, "nested"), "Reviewer.jsonl",
+		sessionLine("sub", "/repo", "review", "2026-07-30T01:30:00.000Z"),
+		toolCallLine("2026-07-30T01:30:01.000Z", "edit", "改实现", map[string]any{"input": "[sub.md#1A2B]\nSWAP 1.=1:\n+x\n"}),
+	)
 
 	store := NewStore(filepath.Join(root, "sessions.json"))
-	changed, total, err := store.Refresh(root)
+	changed, total, err := store.Refresh(ompSources(root))
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
 	if len(changed) != 2 || total != 2 {
-		t.Fatalf("changed=%d total=%d, want 2/2 (nested transcripts are not discovered)", len(changed), total)
+		t.Fatalf("changed=%d total=%d, want 2/2 (the subagent folds into its parent)", len(changed), total)
 	}
 	if list := store.List(); list[0].ID != "b" {
 		t.Fatalf("List must sort by newest activity first, got %q", list[0].ID)
 	}
+	merged, ok := store.Get(first)
+	if !ok {
+		t.Fatal("Get must serve the primary transcript")
+	}
+	if !equal(merged.Subagents, []string{"Reviewer"}) {
+		t.Fatalf("Subagents = %v, want the folded transcript's name", merged.Subagents)
+	}
+	if !equal(merged.Edits, []string{"/repo/sub.md"}) {
+		t.Fatalf("Edits = %v, want the subagent's patched document", merged.Edits)
+	}
+	if merged.Source != "omp" {
+		t.Fatalf("Source = %q, want omp", merged.Source)
+	}
 
-	changed, total, err = store.Refresh(root)
+	changed, total, err = store.Refresh(ompSources(root))
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -290,12 +314,20 @@ func TestStoreRefreshCachesAndDropsMissing(t *testing.T) {
 	if err := os.Remove(first); err != nil {
 		t.Fatal(err)
 	}
-	if _, total, err = store.Refresh(root); err != nil || total != 1 {
+	if _, total, err = store.Refresh(ompSources(root)); err != nil || total != 1 {
 		t.Fatalf("deleted transcript must drop from the store: total=%d err=%v", total, err)
 	}
 	if _, ok := store.Get(first); ok {
 		t.Fatalf("Get must miss after the transcript disappears")
 	}
+}
+
+func mkdir(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestStoreSaveReloadRoundTrip(t *testing.T) {
@@ -306,7 +338,7 @@ func TestStoreSaveReloadRoundTrip(t *testing.T) {
 	)
 	cachePath := filepath.Join(root, "cache", "sessions.json")
 	store := NewStore(cachePath)
-	if _, _, err := store.Refresh(root); err != nil {
+	if _, _, err := store.Refresh(ompSources(root)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Save(); err != nil {
@@ -322,7 +354,7 @@ func TestStoreSaveReloadRoundTrip(t *testing.T) {
 		t.Fatalf("cached digest lost data: %+v", digest)
 	}
 	// A reloaded, unchanged transcript must not be reparsed.
-	changed, _, err := reloaded.Refresh(root)
+	changed, _, err := reloaded.Refresh(ompSources(root))
 	if err != nil {
 		t.Fatal(err)
 	}

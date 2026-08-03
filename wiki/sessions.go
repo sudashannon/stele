@@ -17,42 +17,68 @@ import (
 // while an agent is running, so they never travel through the document
 // pipeline (scan → embed → tag → mirror → community). Instead the layer keeps
 // its own digest cache and re-applies itself to the graph after each rebuild.
+//
+// One index serves several agent runtimes: each source pairs a provider (which
+// knows a runtime's layout and transcript format) with the directory to read.
 type SessionsIndex struct {
-	root  string
-	store *sessions.Store
+	sources []sessions.Source
+	store   *sessions.Store
 }
 
-// NewSessionsIndex prepares the layer. root is the transcript directory
-// (typically ~/.omp/agent/sessions) and cachePath is where digests persist.
-// An empty root disables the layer; a missing directory is not an error, so
-// the panel behaves identically on machines without an agent runtime.
-func NewSessionsIndex(root, cachePath string) *SessionsIndex {
-	if root == "" {
+// NewSessionsIndex prepares the layer over one or more runtime sources, with
+// cachePath holding the digest cache. No usable source disables the layer; a
+// missing directory is not an error, so the panel behaves identically on
+// machines without an agent runtime.
+func NewSessionsIndex(cachePath string, sources ...sessions.Source) *SessionsIndex {
+	usable := make([]sessions.Source, 0, len(sources))
+	for _, source := range sources {
+		if source.Provider == nil || source.Root == "" {
+			continue
+		}
+		usable = append(usable, sessions.Source{Provider: source.Provider, Root: filepath.Clean(source.Root)})
+	}
+	if len(usable) == 0 {
 		return nil
 	}
-	return &SessionsIndex{root: filepath.Clean(root), store: sessions.NewStore(cachePath)}
+	return &SessionsIndex{sources: usable, store: sessions.NewStore(cachePath)}
 }
 
-// Root reports the configured transcript directory.
-func (s *SessionsIndex) Root() string {
+// Sources reports the configured runtime sources.
+func (s *SessionsIndex) Sources() []sessions.Source {
 	if s == nil {
+		return nil
+	}
+	return append([]sessions.Source(nil), s.sources...)
+}
+
+// Root reports the first configured transcript directory. Kept for callers
+// that only need somewhere to point a watcher or a diagnostic at.
+func (s *SessionsIndex) Root() string {
+	if s == nil || len(s.sources) == 0 {
 		return ""
 	}
-	return s.root
+	return s.sources[0].Root
 }
 
 // Refresh re-reads transcripts whose size or mtime changed and persists the
 // digest cache. It returns how many digests changed.
+//
+// The duration is logged because a cold pass is not cheap and is otherwise
+// invisible: a measured corpus of 77 sessions (368 transcripts, 724.7 MB) takes
+// ~20s at 36 MB/s, and every cache-schema bump forces exactly that on the next
+// start. Steady-state passes only re-read the tail of what grew.
 func (s *SessionsIndex) Refresh() (int, error) {
 	if s == nil {
 		return 0, nil
 	}
-	changed, total, err := s.store.Refresh(s.root)
+	started := time.Now()
+	changed, total, err := s.store.Refresh(s.sources)
 	if err != nil {
 		return 0, err
 	}
 	if len(changed) > 0 {
-		log.Printf("wiki sessions: %d/%d transcript digest(s) updated", len(changed), total)
+		log.Printf("wiki sessions: %d/%d transcript digest(s) updated in %s",
+			len(changed), total, time.Since(started).Round(time.Millisecond))
 		if saveErr := s.store.Save(); saveErr != nil {
 			log.Printf("wiki sessions: failed to persist digest cache: %v", saveErr)
 		}
@@ -60,7 +86,7 @@ func (s *SessionsIndex) Refresh() (int, error) {
 	return len(changed), nil
 }
 
-// Digests returns every known digest, newest activity first.
+// Digests returns every known session's merged digest, newest activity first.
 func (s *SessionsIndex) Digests() []sessions.Digest {
 	if s == nil {
 		return nil
@@ -198,19 +224,42 @@ func documentComponents(all []Component) []Component {
 
 // SessionSummary is the API shape for one session.
 type SessionSummary struct {
-	ID               string         `json:"id"`
-	Path             string         `json:"path"`
-	Workspace        string         `json:"workspace"`
-	Title            string         `json:"title"`
-	Cwd              string         `json:"cwd"`
-	StartedAt        time.Time      `json:"startedAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
-	UserTurns        int            `json:"userTurns"`
-	ToolCalls        map[string]int `json:"toolCalls,omitempty"`
-	Writes           []string       `json:"writes"`
-	Edits            []string       `json:"edits"`
-	Reads            []string       `json:"reads"`
-	Intents          []string       `json:"intents"`
+	ID string `json:"id"`
+	// Source names the agent runtime this session came from.
+	Source    string         `json:"source,omitempty"`
+	Path      string         `json:"path"`
+	Workspace string         `json:"workspace"`
+	Title     string         `json:"title"`
+	Cwd       string         `json:"cwd"`
+	StartedAt time.Time      `json:"startedAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
+	UserTurns int            `json:"userTurns"`
+	ToolCalls map[string]int `json:"toolCalls,omitempty"`
+	Writes    []string       `json:"writes"`
+	Edits     []string       `json:"edits"`
+	Reads     []string       `json:"reads"`
+	Intents   []string       `json:"intents"`
+	// Subagents names the nested transcripts folded into this session, so a
+	// reader can tell aggregated totals from a single agent's own work.
+	Subagents []string `json:"subagents,omitempty"`
+	// Todos is the session's task list as it stood when the transcript ended,
+	// and TodosCompleted the tasks it finished under earlier lists - together
+	// the only surviving record of what it set out to do. Both are served by
+	// the single-session endpoint only (see sessionSummaries).
+	Todos          []sessions.TodoItem `json:"todos,omitempty"`
+	TodosCompleted []string            `json:"todosCompleted,omitempty"`
+	// TodoOpen / TodoTotal / TodoDone are the counts every caller needs even
+	// when the lists themselves are withheld from the list endpoint: they are
+	// what "this session left work unfinished" is filtered and sorted on.
+	TodoOpen  int `json:"todoOpen,omitempty"`
+	TodoTotal int `json:"todoTotal,omitempty"`
+	TodoDone  int `json:"todoDone,omitempty"`
+	// Activity counts each active day's turns and tool calls, keyed by local
+	// date. A resumed session spans days, so its work cannot be placed in time
+	// from StartedAt/UpdatedAt alone.
+	Activity         map[string]int `json:"activity,omitempty"`
+	TodoReplans      int            `json:"todoReplans,omitempty"`
+	TodosTruncated   bool           `json:"todosTruncated,omitempty"`
 	IntentsTruncated bool           `json:"intentsTruncated,omitempty"`
 	PathsTruncated   bool           `json:"pathsTruncated,omitempty"`
 }
@@ -218,8 +267,21 @@ type SessionSummary struct {
 // SessionSummaryOf projects a digest for the API, keeping only the touched
 // paths that resolve to indexed documents so clients can link every entry.
 func SessionSummaryOf(digest sessions.Digest, component Component, documents map[string]Component) SessionSummary {
+	open, done := 0, len(digest.TodosCompleted)
+	for _, item := range digest.Todos {
+		switch item.Status {
+		case sessions.TodoCompleted:
+			done++
+		case sessions.TodoDropped:
+		default:
+			// Pending, in progress and blocked are all work the session left
+			// on the table - that is the number worth surfacing.
+			open++
+		}
+	}
 	return SessionSummary{
 		ID:               digest.ID,
+		Source:           digest.Source,
 		Path:             digest.Path,
 		Workspace:        component.Workspace,
 		Title:            digest.Title,
@@ -232,6 +294,15 @@ func SessionSummaryOf(digest sessions.Digest, component Component, documents map
 		Edits:            indexedOnly(digest.Edits, documents),
 		Reads:            indexedOnly(digest.Reads, documents),
 		Intents:          digest.Intents,
+		Subagents:        digest.Subagents,
+		Todos:            digest.Todos,
+		TodosCompleted:   digest.TodosCompleted,
+		TodoOpen:         open,
+		TodoTotal:        len(digest.Todos),
+		TodoDone:         done,
+		Activity:         digest.Activity,
+		TodoReplans:      digest.TodoReplans,
+		TodosTruncated:   digest.TodosTruncated,
 		IntentsTruncated: digest.IntentsTruncated,
 		PathsTruncated:   digest.PathsTruncated,
 	}

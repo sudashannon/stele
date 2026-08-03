@@ -52,12 +52,77 @@ func sessionFixture(t *testing.T) (*API, string, string) {
 		ID: docPath, Path: docPath, Type: TypeDesign, Title: "PCIe tri-channel design", Workspace: "proj",
 	}}, nil)
 	api := &API{graph: graph, ws: workspaces, ready: true}
-	index := NewSessionsIndex(filepath.Join(root, "sessions"), filepath.Join(root, "cache", "sessions.json"))
+	index := NewSessionsIndex(filepath.Join(root, "cache", "sessions.json"), sessions.Source{Provider: sessions.OMPProvider(), Root: filepath.Join(root, "sessions")})
 	if _, err := index.Refresh(); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
 	api.SetSessionsIndex(index)
 	return api, docPath, transcriptPath
+}
+
+// A subagent's work reaches the graph and the API through the session that
+// dispatched it: one session node, one set of edges, totals that include the
+// subagent's edits.
+func TestSubagentWorkFoldsIntoTheDispatchingSession(t *testing.T) {
+	api, docPath, transcriptPath := sessionFixture(t)
+
+	planPath := filepath.Join(filepath.Dir(docPath), "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api.mu.Lock()
+	api.graph.AddComponent(Component{ID: planPath, Path: planPath, Type: TypePlan, Title: "Plan", Workspace: "proj"})
+	api.mu.Unlock()
+
+	// OMP nests one transcript per dispatched subagent beside the parent's.
+	artifacts := strings.TrimSuffix(transcriptPath, ".jsonl")
+	if err := os.MkdirAll(artifacts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		`{"type":"session","version":3,"id":"sub-1","timestamp":"2026-07-30T01:30:00.000Z","cwd":"` + filepath.Dir(filepath.Dir(docPath)) + `"}`,
+		fmt.Sprintf(`{"type":"message","timestamp":"2026-07-30T01:30:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","name":"edit","intent":"补计划","arguments":{"input":"[%s#1A2B]\nSWAP 1.=1:\n+x\n"}}]}}`, planPath),
+	}
+	if err := os.WriteFile(filepath.Join(artifacts, "PlanWriter.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := api.SessionsIndexSnapshot().Refresh(); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	api.ApplySessions()
+
+	if _, ok := api.graph.Component(filepath.Join(artifacts, "PlanWriter.jsonl")); ok {
+		t.Fatal("a subagent transcript must not become its own session node")
+	}
+	summaries := api.sessionSummaries()
+	if len(summaries) != 1 {
+		t.Fatalf("summaries = %d, want the one dispatching session", len(summaries))
+	}
+	summary := summaries[0]
+	if len(summary.Subagents) != 1 || summary.Subagents[0] != "PlanWriter" {
+		t.Fatalf("Subagents = %v", summary.Subagents)
+	}
+	if len(summary.Edits) != 1 || summary.Edits[0] != planPath {
+		t.Fatalf("Edits = %v, want the subagent's patched document", summary.Edits)
+	}
+	if summary.Source != "omp" {
+		t.Fatalf("Source = %q, want omp", summary.Source)
+	}
+	if summary.UserTurns != 1 {
+		t.Fatalf("UserTurns = %d: a subagent prompt is not a human turn", summary.UserTurns)
+	}
+	// The edge lands on the dispatching session, so the document's backlinks
+	// name the session a person can actually open.
+	var found bool
+	for _, edge := range api.graph.Forward(transcriptPath) {
+		if edge.To == planPath && edge.Kind == EdgeKindEdits {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the folded edit must produce a session→document edge from the parent")
+	}
 }
 
 func TestApplySessionsGraftsComponentAndEdges(t *testing.T) {
@@ -269,9 +334,13 @@ func TestHandleSessionsAndSession(t *testing.T) {
 	}
 	var listBody struct {
 		Sessions []SessionSummary `json:"sessions"`
+		Enabled  bool             `json:"enabled"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &listBody); err != nil {
 		t.Fatalf("decode: %v", err)
+	}
+	if !listBody.Enabled {
+		t.Fatal("enabled = false, want true with a transcript directory configured")
 	}
 	if len(listBody.Sessions) != 1 {
 		t.Fatalf("sessions = %d, want 1", len(listBody.Sessions))
@@ -412,9 +481,15 @@ func TestMCPSessionToolsExposeDigestsNotTranscripts(t *testing.T) {
 	}
 }
 
-func TestSessionsIndexDisabledWithoutRoot(t *testing.T) {
-	if index := NewSessionsIndex("", "/tmp/x.json"); index != nil {
-		t.Fatalf("an empty root must disable the layer")
+func TestSessionsIndexDisabledWithoutUsableSource(t *testing.T) {
+	if index := NewSessionsIndex("/tmp/x.json"); index != nil {
+		t.Fatal("no source must disable the layer")
+	}
+	if index := NewSessionsIndex("/tmp/x.json", sessions.Source{Provider: sessions.OMPProvider(), Root: ""}); index != nil {
+		t.Fatal("an empty root must disable the layer")
+	}
+	if index := NewSessionsIndex("/tmp/x.json", sessions.Source{Root: "/tmp/sessions"}); index != nil {
+		t.Fatal("a source without a provider must disable the layer")
 	}
 	var index *SessionsIndex
 	if changed, err := index.Refresh(); err != nil || changed != 0 {
@@ -429,6 +504,11 @@ func TestSessionsIndexDisabledWithoutRoot(t *testing.T) {
 	api.HandleSessions(recorder, httptest.NewRequest(http.MethodGet, "/api/wiki/sessions", nil))
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"sessions":[]`) {
 		t.Fatalf("disabled layer must serve an empty list, got %d %s", recorder.Code, recorder.Body.String())
+	}
+	// An empty list is ambiguous on its own, so the flag has to carry the
+	// difference between "off" and "idle" for the panel's empty state.
+	if !strings.Contains(recorder.Body.String(), `"enabled":false`) {
+		t.Fatalf("disabled layer must report enabled=false, got %s", recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
 	api.HandleSessionsRefresh(recorder, httptest.NewRequest(http.MethodPost, "/api/wiki/sessions/refresh", nil))

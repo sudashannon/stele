@@ -12,8 +12,15 @@ import (
 // HandleSessions returns every indexed agent session, newest activity first.
 // Touched-path lists are narrowed to indexed documents so a client can link
 // every entry it renders.
+//
+// `enabled` separates "no transcript directory configured" from "configured but
+// nothing indexed yet": an empty list alone cannot express the difference, and a
+// panel that cannot tell them apart has to guess in its empty state.
 func (a *API) HandleSessions(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": a.sessionSummaries()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions": a.sessionSummaries(),
+		"enabled":  a.SessionsIndexSnapshot() != nil,
+	})
 }
 
 // HandleSession returns one session by transcript path. It never serves the
@@ -62,6 +69,13 @@ func (a *API) HandleSessionsRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"changed": changed, "sessions": len(index.Digests())})
 }
 
+// sessionSummaries projects every session for the list endpoint.
+//
+// The task record is deliberately left out here: it is the largest part of a
+// summary (a re-planning session can carry hundreds of finished tasks), the
+// panel's list rows do not show it, and an agent calling wiki_sessions does not
+// want a few hundred task strings per session in its context. HandleSession
+// serves the full record for the one session a reader opened.
 func (a *API) sessionSummaries() []SessionSummary {
 	index, workspaces := a.sessionsSnapshot()
 	if index == nil {
@@ -76,7 +90,10 @@ func (a *API) sessionSummaries() []SessionSummary {
 		if !ok {
 			continue
 		}
-		summaries = append(summaries, SessionSummaryOf(digest, component, documents))
+		summary := SessionSummaryOf(digest, component, documents)
+		summary.Todos = nil
+		summary.TodosCompleted = nil
+		summaries = append(summaries, summary)
 	}
 	a.mu.RUnlock()
 	return summaries
