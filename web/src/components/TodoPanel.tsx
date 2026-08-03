@@ -665,6 +665,8 @@ export function TodoPanel({
             onDelete={onDelete}
             onNavigateWiki={onNavigateWiki}
             onNavigateChange={onNavigateChange}
+            onNavigateSession={onNavigateSession}
+            sessionPathById={sessionPathById}
             wikiComponents={wikiComponents}
             writable={writable}
             changes={changes}
@@ -896,6 +898,8 @@ function DetailPanel({
   onDelete,
   onNavigateWiki,
   onNavigateChange,
+  onNavigateSession,
+  sessionPathById,
   wikiComponents,
   writable,
   onClose,
@@ -907,12 +911,17 @@ function DetailPanel({
   onDelete: (id: string) => Promise<void>
   onNavigateWiki: (path: string) => void
   onNavigateChange: (workspace: string, changeName: string) => void
+  /** Opens the session a projected todo came from. */
+  onNavigateSession?: (path: string) => void
+  /** Session id -> transcript path for todos projected from a session. */
+  sessionPathById?: Record<string, string>
   wikiComponents: WikiComponent[]
   writable: boolean
   onClose: () => void
   overlay: boolean
   changes?: ChangeSummary[]
 }) {
+  const sessionPath = todo.externalRef ? sessionPathById?.[todo.externalRef.sessionId] : undefined
   const [title, setTitle] = useState(todo.title)
   const [notes, setNotes] = useState(todo.notes)
   const [saving, setSaving] = useState(false)
@@ -1062,10 +1071,32 @@ function DetailPanel({
 
         {todo.metadata.source === 'omp' && todo.externalRef && (
           <div data-testid="todo-detail-omp-origin" className="border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-xs text-[var(--color-text-secondary)]">
-            <div className="font-semibold text-[var(--color-accent)]">OMP 投影 · {todo.externalRef.phase}</div>
+            <div className="flex items-start justify-between gap-2">
+              <div className="font-semibold text-[var(--color-accent)]">OMP 投影 · {todo.externalRef.phase}</div>
+              {/* The projection knows which session produced this task; opening it
+                  is how a reader gets the context behind a one-line blocker. The
+                  button appears only when that session is indexed - a raw id with
+                  nowhere to go is worse than no button. */}
+              {sessionPath && onNavigateSession && (
+                <button
+                  type="button"
+                  data-testid="todo-detail-open-session"
+                  onClick={() => onNavigateSession(sessionPath)}
+                  className="shrink-0 border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-link)] hover:bg-[var(--color-layer)]"
+                  title="打开产生这条待办的会话"
+                >
+                  打开会话
+                </button>
+              )}
+            </div>
             <div className="mt-1 break-all">{todo.externalRef.sessionId} / {todo.externalRef.taskKey}</div>
             {todo.externalRef.blocker && (
               <div className="mt-1 text-[var(--color-danger)]">{todo.externalRef.blocker}</div>
+            )}
+            {!sessionPath && (
+              <div data-testid="todo-detail-session-missing" className="mt-1 text-[var(--color-text-tertiary)]">
+                该会话未被索引（工作目录可能不在已注册 workspace 内）
+              </div>
             )}
           </div>
         )}

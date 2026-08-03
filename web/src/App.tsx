@@ -834,7 +834,13 @@ export default function App() {
                 wikiComponents={wikiComponents}
                 changes={changes}
                 onNavigateWiki={handleNavigateWikiFromTodo}
-                onNavigateSession={(path) => openViewer(path, 'session')}
+                onNavigateSession={(path) => {
+                  // The todo view renders no viewer of its own, so the jump has to
+                  // land where a session can actually be shown - the same shape as
+                  // handleNavigateWikiFromTodo switching to the search view.
+                  openViewer(path, 'session')
+                  setView('sessions')
+                }}
                 sessionPathById={sessionPathById}
                 onNavigateChange={(workspace, changeName) => {
                   setView('changes')

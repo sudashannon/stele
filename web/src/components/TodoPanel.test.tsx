@@ -172,6 +172,49 @@ describe('TodoPanel grouping', () => {
     fireEvent.click(screen.getByTestId('todo-omp-origin-omp-2'))
     expect(onNavigateSession).toHaveBeenCalledTimes(1)
   })
+
+  // A blocked todo's one-line reason is rarely enough; the session that produced
+  // it holds the context. The detail panel is where a reader lands, so the jump
+  // has to be there and not only on the list row.
+  it('opens the source session from the detail panel, and says when it is not indexed', () => {
+    const projected = makeTodo({
+      id: 'omp-3',
+      title: '定位首包超时根因',
+      status: 'blocked',
+      metadata: { source: 'omp' },
+      externalRef: { system: 'omp', sessionId: 'sess-uuid', taskKey: '1:0', phase: '根因修复', blocker: '依赖板端历史 BSP' },
+    })
+    const onNavigateSession = vi.fn()
+    const { unmount } = render(
+      <TodoPanel
+        {...baseProps}
+        todos={[projected]}
+        counts={{ total: 1, open: 0, inProgress: 0, done: 0, blocked: 1, dropped: 0 }}
+        onNavigateSession={onNavigateSession}
+        sessionPathById={{ 'sess-uuid': '/home/u/.omp/agent/sessions/-repo/a.jsonl' }}
+      />,
+    )
+    fireEvent.click(screen.getByText('定位首包超时根因'))
+
+    fireEvent.click(screen.getByTestId('todo-detail-open-session'))
+    expect(onNavigateSession).toHaveBeenCalledWith('/home/u/.omp/agent/sessions/-repo/a.jsonl')
+    expect(screen.queryByTestId('todo-detail-session-missing')).toBeNull()
+    unmount()
+
+    // An unindexed session gets an explanation instead of a dead button.
+    render(
+      <TodoPanel
+        {...baseProps}
+        todos={[projected]}
+        counts={{ total: 1, open: 0, inProgress: 0, done: 0, blocked: 1, dropped: 0 }}
+        onNavigateSession={onNavigateSession}
+        sessionPathById={{}}
+      />,
+    )
+    fireEvent.click(screen.getByText('定位首包超时根因'))
+    expect(screen.queryByTestId('todo-detail-open-session')).toBeNull()
+    expect(screen.getByTestId('todo-detail-session-missing').textContent).toContain('未被索引')
+  })
 })
 
 describe('TodoPanel context prefill', () => {
