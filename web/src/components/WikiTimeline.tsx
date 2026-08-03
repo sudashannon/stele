@@ -451,7 +451,7 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
           data-testid="wiki-timeline-scope"
           role="group"
           aria-label="时间线口径"
-          className="mb-2 flex flex-wrap items-center gap-2 text-xs"
+          className="mb-2 flex shrink-0 flex-wrap items-center gap-2 text-xs"
         >
           {(['all', 'change', 'document', 'session'] as TimelineScope[]).map((key) => {
             const count = key === 'all'

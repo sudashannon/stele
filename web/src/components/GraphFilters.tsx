@@ -49,7 +49,7 @@ export function GraphFilters({
   return (
     <div
       data-testid="graph-filters"
-      className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
+      className="flex shrink-0 flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
     >
       {(activeCommunity !== null || activeWorkspaces.size < workspaces.length) && (
         <button
@@ -90,11 +90,16 @@ export function GraphFilters({
         </div>
       )}
 
+      {/* A horizontal scroller must be tall enough for its own scrollbar. A chip
+          is 22px and a classic Windows scrollbar takes 15-17px inside the box, so
+          the previous 26px strip left 9px of client height and the scrollbar
+          painted across the chips. Overlay scrollbars (macOS, Linux Chromium)
+          hide this, which is why it only showed up on Edge. */}
       {communityIds.length > 0 && (
         <div
           data-testid="community-filter-strip"
           aria-label="社区筛选"
-          className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overscroll-x-contain pb-1"
+          className="flex min-h-[2.5rem] min-w-0 flex-1 items-center gap-2 overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:thin]"
         >
           <span className="sticky left-0 z-[1] shrink-0 bg-[var(--color-surface)] pr-2 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
             社区
