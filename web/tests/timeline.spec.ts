@@ -38,7 +38,7 @@ test('the timeline covers the recent window across scopes', async ({ page }) => 
 // jsdom: the community strip is a horizontal scroller, and on a platform with
 // space-taking scrollbars (Windows) a 26px strip left 9px of client height for
 // 22px chips - the scrollbar painted across the legend.
-test('the community legend strip stays taller than a classic scrollbar', async ({ page }) => {
+test('the community legend never scrolls horizontally', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 700 })
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: '时间线' }).click()
@@ -46,15 +46,23 @@ test('the community legend strip stays taller than a classic scrollbar', async (
 
   const strip = page.getByTestId('community-filter-strip')
   await expect(strip).toBeVisible()
-  const geometry = await strip.evaluate((element) => {
-    const chip = element.querySelector('button')
-    return {
-      minHeight: parseFloat(getComputedStyle(element).minHeight),
-      height: element.getBoundingClientRect().height,
-      chipHeight: chip ? chip.getBoundingClientRect().height : 0,
-    }
-  })
-  // 22px chip + a 17px Windows scrollbar has to fit inside the strip.
-  expect(geometry.minHeight).toBeGreaterThanOrEqual(geometry.chipHeight + 17)
-  expect(geometry.height).toBeGreaterThanOrEqual(geometry.minHeight)
+  // A legend with a horizontal scrollbar hid most of itself (4411px of scroll in
+  // a 964px strip) and, where scrollbars take space, painted over its own chips.
+  const collapsed = await strip.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+    chips: element.querySelectorAll('[data-testid="community-chip"]').length,
+  }))
+  expect(collapsed.scrollWidth).toBeLessThanOrEqual(collapsed.clientWidth + 1)
+  expect(collapsed.chips).toBeLessThanOrEqual(8)
+
+  // The rest is one click away, and expanding still must not introduce a scroller.
+  await page.getByTestId('community-expand').click()
+  const expanded = await strip.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+    chips: element.querySelectorAll('[data-testid="community-chip"]').length,
+  }))
+  expect(expanded.chips).toBeGreaterThan(collapsed.chips)
+  expect(expanded.scrollWidth).toBeLessThanOrEqual(expanded.clientWidth + 1)
 })

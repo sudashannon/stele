@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { COMMUNITY_COLORS } from './graphPalette'
 import { Icon } from './icons'
 
@@ -14,6 +14,10 @@ interface GraphFiltersProps {
   communitySelectable?: boolean
   summary?: string
 }
+
+// How many community chips the collapsed legend shows. Enough to cover the
+// dominant communities on one line at a normal window width; the rest expand.
+const COLLAPSED_COMMUNITY_CHIPS = 8
 
 function labelForCommunity(id: number, communityLabels: Record<string, string>) {
   return communityLabels[String(id)] ?? `#${id}`
@@ -42,6 +46,10 @@ export function GraphFilters({
         }),
     [communityCounts],
   )
+
+  const [expanded, setExpanded] = useState(false)
+  const visibleCommunityIds = expanded ? communityIds : communityIds.slice(0, COLLAPSED_COMMUNITY_CHIPS)
+  const hiddenCommunityCount = communityIds.length - visibleCommunityIds.length
 
   const chipClass =
     'inline-flex shrink-0 items-center gap-1.5 border px-2 py-1 text-[length:var(--type-caption)] leading-none transition-colors'
@@ -90,21 +98,25 @@ export function GraphFilters({
         </div>
       )}
 
-      {/* A horizontal scroller must be tall enough for its own scrollbar. A chip
-          is 22px and a classic Windows scrollbar takes 15-17px inside the box, so
-          the previous 26px strip left 9px of client height and the scrollbar
-          painted across the chips. Overlay scrollbars (macOS, Linux Chromium)
-          hide this, which is why it only showed up on Edge. */}
+      {/* The legend wraps instead of scrolling horizontally.
+
+          As a scroller it was both unusable and broken: 26 communities needed
+          4411px of scroll inside a 964px strip, so most of the legend was out of
+          sight, and the strip was 26px tall while a chip is 22px - on a platform
+          whose scrollbars take space (Windows: 15-17px) the scrollbar painted
+          across the chips. Reserving height fixed the overlap but kept a
+          horizontal scroller in a legend; wrapping a capped subset removes the
+          scrollbar, and the rest is one click away. */}
       {communityIds.length > 0 && (
         <div
           data-testid="community-filter-strip"
           aria-label="社区筛选"
-          className="flex min-h-[2.5rem] min-w-0 flex-1 items-center gap-2 overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:thin]"
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-2"
         >
-          <span className="sticky left-0 z-[1] shrink-0 bg-[var(--color-surface)] pr-2 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
+          <span className="shrink-0 pr-1 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
             社区
           </span>
-          {communityIds.map((id) => {
+          {visibleCommunityIds.map((id) => {
             const active = activeCommunity === id
             const count = communityCounts[id] ?? 0
             return (
@@ -130,6 +142,26 @@ export function GraphFilters({
               </button>
             )
           })}
+          {hiddenCommunityCount > 0 && (
+            <button
+              type="button"
+              data-testid="community-expand"
+              onClick={() => setExpanded((open) => !open)}
+              className={`${chipClass} border-dashed border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-link)] hover:bg-[var(--color-layer)]`}
+            >
+              {expanded ? '收起' : `+${hiddenCommunityCount} 个社区`}
+            </button>
+          )}
+          {expanded && hiddenCommunityCount === 0 && communityIds.length > COLLAPSED_COMMUNITY_CHIPS && (
+            <button
+              type="button"
+              data-testid="community-expand"
+              onClick={() => setExpanded(false)}
+              className={`${chipClass} border-dashed border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-link)] hover:bg-[var(--color-layer)]`}
+            >
+              收起
+            </button>
+          )}
         </div>
       )}
 
