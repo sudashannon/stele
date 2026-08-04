@@ -1,43 +1,153 @@
 @import "tailwindcss";
 @import "@fontsource/ibm-plex-sans/400.css";
 @import "@fontsource/ibm-plex-sans/400-italic.css";
+@import "@fontsource/ibm-plex-sans/500.css";
 @import "@fontsource/ibm-plex-sans/600.css";
 @import "@fontsource/ibm-plex-sans/700.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 
 /*
- * IBM Carbon Design System tokens
- * https://carbondesignsystem.com/guidelines/color/overview
+ * App breakpoints — two gates only, defined once.
+ *
+ *   narrow:   width < 1200px   — single-column, overlay detail, hidden filters
+ *   wide:     width >= 1400px  — full master/detail, persistent sidebar & filters
+ *
+ * 1200–1399 is the default medium state. Do NOT add a third gate.
+ *
+ * This block MUST live in the stylesheet that owns `@import "tailwindcss"`.
+ * It was originally in its own breakpoints.css imported from App.tsx, which put
+ * it outside Tailwind's CSS graph: the variants never registered, so every
+ * `wide:block` / `narrow:hidden` compiled to nothing. The dashboard's sidebar
+ * carries `(sidebarOpen ? 'block' : 'hidden') + ' wide:block'`, so with the
+ * variant inert the whole change list silently vanished at every width.
+ */
+@theme {
+  --breakpoint-narrow: 1200px;
+  --breakpoint-wide: 1400px;
+}
+
+/*
+ * Design language: 「仪器 / Instrument」
+ *
+ * Carbon's industrial squareness, taken to its conclusion: this is a measuring
+ * instrument, so depth comes from luminance steps rather than shadow, the colour
+ * budget is one accent plus real status, monospace is the reading mode for
+ * machine strings, and categorical colour is replaced by a single-hue ramp that
+ * encodes magnitude.
+ *
+ * Token NAMES are unchanged from the previous Carbon set on purpose: roughly all
+ * styling in this app is Tailwind arbitrary-value lookups like
+ * `bg-[var(--color-surface)]`, so re-valuing is a one-file change while renaming
+ * would touch every component.
  */
 
-html {
-  /* ── Carbon semantic colors ── */
-  --color-accent: #0f62fe;
-  --color-accent-hover: #0043ce;
-  --color-accent-active: #002d9c;
-  --color-success: #24a148;
-  --color-danger: #da1e28;
-  --color-warn: #f1c21b;
-  /* Warn as a TEXT/BORDER color: #f1c21b fails contrast on white at small
-   * sizes, so anything that renders warn as glyphs or 1px strokes must use
-   * this darker amber instead of --color-warn (which stays a fill-only tone). */
-  --color-warn-text: #8e6a00;
-  --color-purple: #8a3ffc;
-  --color-teal: #007d79;
+/* ── CJK face, declared locally so it can carry size-adjust ──
+ * IBM Plex Sans has no CJK glyphs and the old stack named no CJK family, so
+ * every Chinese glyph in this zh-CN UI was resolved by OS fallback: Noto Sans
+ * CJK under WSL, 微软雅黑 on Windows. The typeface was chosen by the machine.
+ *
+ * size-adjust is not cosmetic. Measured by rasterising glyphs at 200px: Latin
+ * cap-height is 0.70em while CJK ink height is 0.875em, so Chinese renders 25%
+ * taller than Latin capitals at one font-size and mixed runs look unbalanced.
+ * Verified in Chromium: 94% moves 国/cap from 1.250 to 1.179.
+ *
+ * The weight mapping is also measured (ink coverage as a density proxy, Latin on
+ * 'n', CJK on '国'). Plex Sans 400 against 思源黑 400 is +11.0%, but Plex Sans
+ * 600 against 思源黑 500 is only -2.7% while 600/600 would be +5.8%. So an
+ * emphasis request maps CJK one step lighter than the Latin weight asked for.
+ *
+ * Paths are relative rather than bare specifiers so the resolver cannot be the
+ * thing that breaks; @fontsource's own CSS cannot be used here because it does
+ * not carry size-adjust.
+ */
+@font-face {
+  font-family: "SC UI";
+  src: url("../node_modules/@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  size-adjust: 94%;
+  font-display: swap;
+  unicode-range: U+2E80-303E, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: "SC UI";
+  src: url("../node_modules/@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  size-adjust: 94%;
+  font-display: swap;
+  unicode-range: U+2E80-303E, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  /* Latin 600 pairs with CJK 500: -2.7% density mismatch instead of +5.8%. */
+  font-family: "SC UI";
+  src: url("../node_modules/@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-500-normal.woff2") format("woff2");
+  font-weight: 600;
+  size-adjust: 94%;
+  font-display: swap;
+  unicode-range: U+2E80-303E, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
+@font-face {
+  font-family: "SC UI";
+  src: url("../node_modules/@fontsource/noto-sans-sc/files/noto-sans-sc-chinese-simplified-600-normal.woff2") format("woff2");
+  font-weight: 700;
+  size-adjust: 94%;
+  font-display: swap;
+  unicode-range: U+2E80-303E, U+3041-33FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FE30-FE4F, U+FF00-FFEF;
+}
 
-  /* ── Neutral palette (Carbon gray scale) ── */
-  --color-bg: #f4f4f4;
+html {
+  /* ── Families ──
+   * Machine strings dominate this product: change slugs, file paths, workspace
+   * names, hashes, counts. Monospace is a reading mode here, not decoration, so
+   * it is a first-class family. Do NOT put --font-mono on anything that can
+   * contain Chinese: the Latin would render monospaced while the CJK fell
+   * through to the proportional face, putting two character rhythms in one run.
+   */
+  --font-ui: "IBM Plex Sans", "SC UI", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", "SC UI", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ── Semantic colors ── */
+  --color-accent: #0f52d9;
+  --color-accent-hover: #0a3fa8;
+  --color-accent-active: #082f7d;
+  --color-success: #197b3d;
+  --color-danger: #c21f2b;
+  --color-warn: #d9a300;
+  /* Fills and text are different roles and need different tokens. The audited
+   * build rendered 8 lint rule names in #f1c21b on white at 1.68:1 because the
+   * warn FILL was used as a glyph colour. Anything drawn as glyphs or 1px
+   * strokes uses the *-text token; --color-warn stays fill-only. */
+  --color-warn-text: #7a5c00;
+  --color-success-text: #14682f;
+  --color-danger-text: #a5121d;
+  --color-purple: #6a3ac7;
+  --color-teal: #0f6b68;
+
+  /* ── Neutral palette: four luminance steps, cool-shifted ──
+   * Depth in this language is luminance, not shadow, so these four must stay
+   * measurably apart. The cool shift reads as instrument housing, not paper. */
+  --color-bg: #eef1f4;
   --color-surface: #ffffff;
-  --color-layer: #f4f4f4;
-  --color-layer-accent: #e0e0e0;
-  --color-border: #c6c6c6;
-  --color-border-subtle: #e0e0e0;
-  --color-border-hover: #8d8d8d;
-  --color-text-primary: #161616;
-  --color-text-secondary: #525252;
-  --color-text-tertiary: #8d8d8d;
+  --color-layer: #e3e8ed;
+  --color-layer-accent: #d4dbe2;
+  --color-hover: #f6f8fa;
+  --color-border: #b6c0ca;
+  --color-border-subtle: #d4dbe2;
+  --color-border-hover: #7d8794;
+  --color-text-primary: #10161c;
+  --color-text-secondary: #46515d;
+  /* Was #8d8d8d, which measures 3.02:1 on the page background and accounted for
+   * the bulk of 258 WCAG AA failures.
+   *
+   * The first fix was #616c78, but that only cleared --color-bg and white: it
+   * measures 4.34:1 on --color-layer #e3e8ed, which panels and rails use, so the
+   * third tier failed on one of its own four surfaces. Darkened until it passes
+   * on the darkest of them - 4.89:1 on --color-layer, 6.03:1 on white. Fixing
+   * the token beats a usage rule that has to be remembered at every call site. */
+  --color-text-tertiary: #5a646f;
   --color-text-on-color: #ffffff;
-  --color-link: #0f62fe;
-  --color-link-hover: #0043ce;
+  --color-link: var(--color-accent);
+  --color-link-hover: var(--color-accent-hover);
 
   /* ── Subtle surfaces ──
    * The "semantic color at ~10% over surface" pattern was hand-written in
@@ -50,49 +160,79 @@ html {
   --color-warn-subtle: color-mix(in srgb, var(--color-warn) 18%, var(--color-surface));
   --color-purple-subtle: color-mix(in srgb, var(--color-purple) 10%, var(--color-surface));
 
-  /* ── Lifecycle phase palette ──
-   * WikiTimeline hard-coded nine hex values for these; ChangeExplorer used
-   * Tailwind's bg-blue-50/bg-violet-50 for the same states. Both now resolve
-   * here so a phase is one color everywhere it appears. */
-  --color-phase-open: var(--color-accent);
-  --color-phase-design: var(--color-purple);
-  --color-phase-build: var(--color-teal);
-  --color-phase-verify: var(--color-success);
-  --color-phase-archive: var(--color-text-secondary);
-  --color-phase-rejected: var(--color-danger);
-  --color-phase-unknown: var(--color-text-tertiary);
+  /* Was referenced by SessionDetail and SessionsPanel but never declared, so it
+   * resolved to unset and those elements silently inherited their parent colour.
+   * Every use is a glyph or a border, so it aliases the text-safe amber. */
+  --color-warning: var(--color-warn-text);
+  /* Was referenced by MarkdownViewer's zoomed-image backdrop but never declared. */
+  --color-overlay: rgba(16, 22, 28, 0.72);
 
-  /* ── Carbon radii ──
-   * Carbon's product language is sharp. Containers, controls, chips, inputs,
-   * badges, panels and overlays MUST stay square — do not reach for
-   * rounded or pill shapes. The one exemption is a chart mark whose geometry
-   * is inherently circular (progress ring, graph node), which is data, not
-   * chrome. */
+  /* ── Lifecycle phase: encoded ORDINALLY along the viz ramp ──
+   * design → build → verify is a real ordering, which is what a sequential ramp
+   * is for: darker means further along. archive leaves the flow and goes
+   * neutral. Previously these were categorical hues (purple/teal/green), which
+   * spent three of the palette's colours on something that is not categorical. */
+  --color-phase-open: var(--viz-7);
+  --color-phase-design: var(--viz-6);
+  --color-phase-build: var(--viz-4);
+  --color-phase-verify: var(--viz-2);
+  --color-phase-archive: var(--color-text-tertiary);
+  --color-phase-rejected: var(--color-danger);
+  --color-phase-unknown: var(--color-border-hover);
+
+  /* ── Data visualisation: one hue, eight steps, one neutral tail ──
+   * The timeline rendered 1521 items across 26 categorical hues on 1-3px bars,
+   * with two legends that disagreed with each other. Past roughly eight hues,
+   * colour identifies nothing, so this language spends colour on MAGNITUDE and
+   * lets identity be carried by row position, label and ordering. Anything
+   * outside the top 8 collapses into --viz-rest, and the legend must state how
+   * many were collapsed. */
+  --viz-1: #0a2f7a;
+  --viz-2: #1247a8;
+  --viz-3: #1a5fd0;
+  --viz-4: #4180e0;
+  --viz-5: #6f9fe9;
+  --viz-6: #9dbef1;
+  --viz-7: #c3d7f7;
+  --viz-8: #e0eafc;
+  --viz-rest: #b6c0ca;
+  --viz-grid: #d4dbe2;
+  --viz-axis: #7d8794;
+  --viz-categorical-limit: 8;
+
+  /* ── Radii ──
+   * This language is square. Containers, controls, chips, inputs, badges,
+   * panels and overlays MUST stay square — do not reach for rounded or pill
+   * shapes. The one exemption is a chart mark whose geometry is inherently
+   * circular (progress ring, graph node, status dot), which is data, not chrome. */
   --radius-sm: 0px;
   --radius-md: 0px;
   --radius-lg: 0px;
 
-  /* ── Carbon elevation shadows ── */
-  --shadow-1: 0 1px 2px 0 rgba(0, 0, 0, 0.1);
-  --shadow-2: 0 2px 6px 0 rgba(0, 0, 0, 0.1);
-  --shadow-3: 0 4px 8px 0 rgba(0, 0, 0, 0.1);
-  --shadow-4: 0 6px 12px 0 rgba(0, 0, 0, 0.12);
-  --shadow-overlay: 0 8px 24px 0 rgba(0, 0, 0, 0.16);
+  /* ── Elevation ──
+   * Nothing in-plane gets a shadow: two adjacent surfaces are separated by a
+   * luminance step. Shadow is reserved for things that genuinely leave the
+   * plane — overlays, popovers, modals — because those must read as detached. */
+  --shadow-1: 0 1px 2px 0 rgba(16, 22, 28, 0.08);
+  --shadow-2: 0 2px 6px 0 rgba(16, 22, 28, 0.10);
+  --shadow-3: 0 4px 8px 0 rgba(16, 22, 28, 0.10);
+  --shadow-4: 0 6px 12px 0 rgba(16, 22, 28, 0.12);
+  --shadow-overlay: 0 8px 24px 0 rgba(16, 22, 28, 0.18);
 
   /* ── Legacy aliases for existing code ── */
   --shadow-card: var(--shadow-1);
   --shadow-modal: var(--shadow-overlay);
 
   /* ── Palette (command palette + overlay tokens) ── */
-  --palette-bg: rgba(22, 22, 22, 0.5);
-  --palette-surface: #ffffff;
-  --palette-input-border: #c6c6c6;
-  --palette-highlight: #e8e8e8;
-  --palette-match-bg: #d0e2ff;
-  --palette-match-text: #0043ce;
-  --palette-separator: #e0e0e0;
+  --palette-bg: rgba(16, 22, 28, 0.5);
+  --palette-surface: var(--color-surface);
+  --palette-input-border: var(--color-border);
+  --palette-highlight: var(--color-layer);
+  --palette-match-bg: #d3e2fb;
+  --palette-match-text: var(--color-accent-hover);
+  --palette-separator: var(--color-border-subtle);
 
-  /* ── Carbon spacing scale (4px grid) ── */
+  /* ── Spacing scale (4px grid) ── */
   --spacing-01: 0.125rem;  /* 2px  */
   --spacing-02: 0.25rem;   /* 4px  */
   --spacing-03: 0.5rem;    /* 8px  */
@@ -103,28 +243,57 @@ html {
   --spacing-08: 2.5rem;    /* 40px */
   --spacing-09: 3rem;      /* 48px */
 
-  /* ── Carbon type scale (16px base) ──
-   * 12px is the floor for anything a user reads to make a decision: labels,
-   * values, statuses, list rows. --type-micro is reserved for uppercase
-   * section eyebrows only. Nothing renders below 11px. */
+  /* ── Type scale (16px base) ──
+   * 14px is the BODY size and the plurality of the interface; 12px is for
+   * metadata, chips and column heads only. The audited build rendered 2925 of
+   * 3246 text nodes at 12px — an entire application set at label size.
+   *
+   * These stay size-only, and MUST be consumed as `text-[length:var(--type-x)]`.
+   * The bare form `text-[var(--type-x)]` compiles to a *colour* utility, because
+   * Tailwind cannot tell a size token from a colour one; `color: 0.75rem` is
+   * invalid at computed-value time, so the element loses BOTH its size and,
+   * since that rule sorts after the colour utilities, its intended colour —
+   * inheriting whichever ancestor happened to be above it. 81 sites shipped this
+   * way. `npm test` has a guard that fails if the bare form comes back. */
   --type-micro: 0.6875rem;   /* 11px — uppercase eyebrow labels ONLY */
-  --type-caption: 0.75rem;   /* 12px — Carbon label-01, the readable floor */
-  --type-body: 0.875rem;     /* 14px — Carbon body-01 */
-  --type-body-short: 1rem;   /* 16px — Carbon body-02 */
-  --type-heading: 1.125rem;  /* 18px — Carbon heading-03 */
+  --type-caption: 0.75rem;   /* 12px — metadata, chips, column heads */
+  --type-body: 0.875rem;     /* 14px — body, the interface default */
+  --type-body-short: 1rem;   /* 16px — reading surfaces */
+  --type-heading: 1.125rem;  /* 18px — section titles */
+  --type-title: 1.3125rem;   /* 21px — view titles */
+  --type-display: 1.75rem;   /* 28px — KPI readouts, paired with --font-mono */
+
+  /* Paired line-heights. Carbon pairs each size with a leading and the audited
+   * build wired only body-01, leaving fractional inherited values (17.14px,
+   * 18.57px) that put nothing on a 4px baseline. */
+  --leading-micro: 1rem;      /* 16px */
+  --leading-caption: 1rem;    /* 16px */
+  --leading-body: 1.25rem;    /* 20px */
+  --leading-body-short: 1.5rem; /* 24px */
+  --leading-heading: 1.5rem;  /* 24px */
+  --leading-title: 1.75rem;   /* 28px */
+  --leading-display: 2rem;    /* 32px */
+
+  /* Reading measure. A measure caps a TEXT COLUMN; it must never size a panel.
+   * A panel fills its container, and any width left over carries content — an
+   * outline, metadata, backlinks — or the container should be narrower. */
+  --measure: 72ch;
 }
 
 body {
-  font-family: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family: var(--font-ui);
   font-size: var(--type-body);
-  line-height: 1.42857;       /* Carbon body-01 line-height: 20px / 14px */
+  line-height: var(--leading-body);
   color: var(--color-text-primary);
   background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Carbon-style focus ring */
+/* Numerals in tables, counts and metrics must not change width between frames. */
+.tabular, th, td { font-variant-numeric: tabular-nums; }
+
+/* Focus ring */
 :focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
@@ -133,4 +302,12 @@ body {
 /* Remove default focus ring for mouse clicks */
 :focus:not(:focus-visible) {
   outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
