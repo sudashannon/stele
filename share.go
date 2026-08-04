@@ -276,6 +276,10 @@ func generateToken() (string, error) {
 // another machine can reach.
 const windowsIPConfig = "/mnt/c/Windows/System32/ipconfig.exe"
 
+// windowsARP is the neighbour table for those same adapters, which is how a
+// tethered NAT is told apart from the office LAN.
+const windowsARP = "/mnt/c/Windows/System32/arp.exe"
+
 // ipv4Pattern matches an address literal anywhere in a line, which keeps the
 // parser independent of localized field labels, of the GBK bytes a Chinese
 // Windows emits, and of decorations such as "(Preferred)".
@@ -296,8 +300,10 @@ var virtualAdapterMarkers = []string{
 // qualifies - in which case the caller keeps the host it already had.
 func detectLANIP() string {
 	if out, err := exec.Command(windowsIPConfig).Output(); err == nil {
-		if ip := pickWindowsLANIP(string(out)); ip != "" {
-			return ip
+		candidates := windowsLANCandidates(string(out))
+		if len(candidates) > 0 {
+			arpOut, _ := exec.Command(windowsARP, "-a").Output()
+			return preferLANWithPeers(candidates, string(arpOut))
 		}
 	}
 	addrs, err := net.InterfaceAddrs()
@@ -328,8 +334,21 @@ func detectLANIP() string {
 // address wins because a LAN link is the point; a routable one is accepted when
 // that is all there is.
 func pickWindowsLANIP(out string) string {
+	candidates := windowsLANCandidates(out)
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[0]
+}
+
+// windowsLANCandidates lists every address ipconfig offers that could plausibly
+// be handed to somebody else, private ones first because a LAN link is the
+// point. Adapter names are only a cheap first filter: a VPN or a tethered
+// device gets a generic name from Windows ("以太网 4" holding a Remote NDIS
+// device), so the list is ranked afterwards by evidence, not by name.
+func windowsLANCandidates(out string) []string {
 	skipAdapter := false
-	var public string
+	var private, public []string
 	for _, raw := range strings.Split(out, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" {
@@ -356,11 +375,79 @@ func pickWindowsLANIP(out string) string {
 			continue
 		}
 		if ip.IsPrivate() {
-			return ip.String()
+			private = append(private, ip.String())
+			continue
 		}
-		if public == "" {
-			public = ip.String()
+		public = append(public, ip.String())
+	}
+	return append(private, public...)
+}
+
+// preferLANWithPeers picks the candidate whose subnet demonstrably holds the most
+// other machines, keeping the declaration order on a tie - which includes the
+// case where the neighbour table says nothing at all.
+//
+// Name-based filtering cannot decide this. A phone or dongle sharing its
+// connection appears as an ordinary "以太网" adapter with DHCP, a gateway and a
+// private /24, and Windows may even route through it in preference to the real
+// LAN (measured: default route metric 25 on a tethered 192.168.123.0/24 against
+// 45 on the office WLAN). Neither the adapter name nor the route metric answers
+// the question a share link asks, which is whether anybody else is on that
+// network. The neighbour table does: the tether showed only its own gateway
+// while the office subnet showed twenty hosts.
+func preferLANWithPeers(candidates []string, arpOut string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	peers := arpPeerCounts(arpOut)
+	best, bestCount := candidates[0], 0
+	for _, ip := range candidates {
+		if n := peers[ip]; n > bestCount {
+			best, bestCount = ip, n
 		}
 	}
-	return public
+	return best
+}
+
+// arpPeerCounts maps each interface address to the number of real hosts seen on
+// its subnet.
+//
+// "arp -a" groups entries under an "Interface: <addr>" header, so an entry is
+// attributed without needing the netmask. Entry types are localized, so they are
+// never matched as text; the addresses that are not hosts are excluded
+// numerically instead - multicast, the all-ones broadcast, a directed broadcast
+// ending in .255, and the interface's own address.
+func arpPeerCounts(out string) map[string]int {
+	counts := make(map[string]int)
+	iface := ""
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		// An interface header is unindented and carries exactly one address.
+		if !strings.HasPrefix(raw, " ") && !strings.HasPrefix(raw, "\t") {
+			if match := ipv4Pattern.FindString(line); match != "" {
+				iface = match
+				counts[iface] = 0
+			}
+			continue
+		}
+		if iface == "" {
+			continue
+		}
+		ip := net.ParseIP(ipv4Pattern.FindString(line))
+		if ip == nil || ip.To4() == nil {
+			continue
+		}
+		if ip.IsMulticast() || ip.IsUnspecified() || ip.IsLoopback() {
+			continue
+		}
+		v4 := ip.To4()
+		if v4[3] == 255 || ip.String() == iface {
+			continue
+		}
+		counts[iface]++
+	}
+	return counts
 }

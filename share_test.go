@@ -267,6 +267,102 @@ func TestPickWindowsLANIPReturnsEmptyWhenOnlyVirtualAdaptersExist(t *testing.T) 
 	}
 }
 
+// Real output from the host that produced the bug: a phone or dongle sharing its
+// connection appears as an ordinary "以太网 4" adapter holding a Remote NDIS
+// device, with DHCP, a gateway and a private /24. No adapter-name rule can tell
+// it from the office Ethernet, and Windows even prefers its default route
+// (metric 25 against the WLAN's 45), so the share link pointed at a network
+// nobody else is on.
+const tetheredIPConfigFixture = "Windows IP \xc5\xe4\xd6\xc3\n" +
+	"\n" +
+	"\xd2\xd4\xcc\xab\xcd\xf8\xca\xca\xc5\xe4\xc6\xf7 \xd2\xd4\xcc\xab\xcd\xf8 4:\n" +
+	"\n" +
+	"   IPv4 \xb5\xd8\xd6\xb7 . . . . . . . . . . . . : 192.168.123.2\n" +
+	"   \xc4\xac\xc8\xcf\xcd\xf8\xb9\xd8. . . . . . . . . . : 192.168.123.1\n" +
+	"\n" +
+	"\xce\xde\xcf\xdf\xbe\xd6\xd3\xf2\xcd\xf8\xca\xca\xc5\xe4\xc6\xf7 WLAN:\n" +
+	"\n" +
+	"   IPv4 \xb5\xd8\xd6\xb7 . . . . . . . . . . . . : 10.0.28.45\n" +
+	"   \xc4\xac\xc8\xcf\xcd\xf8\xb9\xd8. . . . . . . . . . : 10.0.24.1\n" +
+	"\n" +
+	"\xd2\xd4\xcc\xab\xcd\xf8\xca\xca\xc5\xe4\xc6\xf7 vEthernet (WSL (Hyper-V firewall)):\n" +
+	"\n" +
+	"   IPv4 \xb5\xd8\xd6\xb7 . . . . . . . . . . . . : 172.18.160.1\n"
+
+// The matching neighbour table. The tether shows only its own gateway; the
+// office subnet shows other machines. Entry types are localized GBK, which is
+// why the parser must not read them.
+const tetheredARPFixture = "\n\xbd\xd3\xbf\xda: 192.168.123.2 --- 0xd\n" +
+	"  Internet \xb5\xd8\xd6\xb7         \xceïżœ\xed\xb5\xd8\xd6\xb7           \xc0\xe0\xd0\xcd\n" +
+	"  192.168.123.1         12-e9-ef-4a-1e-01     \xb6\xaf\xcc\xac\n" +
+	"  192.168.123.255       ff-ff-ff-ff-ff-ff     \xbe\xb2\xcc\xac\n" +
+	"  224.0.0.22            01-00-5e-00-00-16     \xbe\xb2\xcc\xac\n" +
+	"  239.255.255.250       01-00-5e-7f-ff-fa     \xbe\xb2\xcc\xac\n" +
+	"\n\xbd\xd3\xbf\xda: 10.0.28.45 --- 0x1e\n" +
+	"  10.0.24.1             00-11-22-33-44-55     \xb6\xaf\xcc\xac\n" +
+	"  10.0.24.135           00-11-22-33-44-56     \xb6\xaf\xcc\xac\n" +
+	"  10.0.25.27            00-11-22-33-44-57     \xb6\xaf\xcc\xac\n" +
+	"  10.0.30.199           00-11-22-33-44-58     \xb6\xaf\xcc\xac\n" +
+	"  10.0.31.255           ff-ff-ff-ff-ff-ff     \xbe\xb2\xcc\xac\n" +
+	"  224.0.0.22            01-00-5e-00-00-16     \xbe\xb2\xcc\xac\n"
+
+func TestLANPickerPrefersTheSubnetWithOtherHosts(t *testing.T) {
+	candidates := windowsLANCandidates(tetheredIPConfigFixture)
+	if len(candidates) != 2 || candidates[0] != "192.168.123.2" {
+		t.Fatalf("candidates = %v, want the tether first (declaration order) and the WLAN second", candidates)
+	}
+	if got := preferLANWithPeers(candidates, tetheredARPFixture); got != "10.0.28.45" {
+		t.Fatalf("preferLANWithPeers = %q, want 10.0.28.45: the tethered /24 holds only its gateway", got)
+	}
+}
+
+func TestLANPickerKeepsDeclarationOrderWhenEveryCandidateOnlyHasItsGateway(t *testing.T) {
+	candidates := windowsLANCandidates(tetheredIPConfigFixture)
+	// A quiet network: both adapters are up and each has resolved only its own
+	// router, so there is no evidence either way and the declared order stands.
+	quiet := "Interface: 192.168.123.2 --- 0xd\n" +
+		"  192.168.123.1         12-e9-ef-4a-1e-01     dynamic\n" +
+		"Interface: 10.0.28.45 --- 0x1e\n" +
+		"  10.0.24.1             00-11-22-33-44-55     dynamic\n"
+	if got := preferLANWithPeers(candidates, quiet); got != "192.168.123.2" {
+		t.Fatalf("preferLANWithPeers = %q, want the first candidate on a tie", got)
+	}
+	if got := preferLANWithPeers(candidates, ""); got != "192.168.123.2" {
+		t.Fatalf("preferLANWithPeers = %q, want the first candidate when arp says nothing", got)
+	}
+}
+
+func TestLANPickerPrefersAnActiveAdapterOverASilentOne(t *testing.T) {
+	candidates := windowsLANCandidates(tetheredIPConfigFixture)
+	// The tether is up but has resolved nobody; the WLAN has reached its router.
+	// One neighbour is thin evidence, but it beats none.
+	out := "Interface: 192.168.123.2 --- 0xd\n" +
+		"Interface: 10.0.28.45 --- 0x1e\n" +
+		"  10.0.24.1             00-11-22-33-44-55     dynamic\n"
+	if got := preferLANWithPeers(candidates, out); got != "10.0.28.45" {
+		t.Fatalf("preferLANWithPeers = %q, want the adapter that has resolved somebody", got)
+	}
+}
+
+func TestARPPeerCountsExcludesBroadcastMulticastAndSelf(t *testing.T) {
+	counts := arpPeerCounts(tetheredARPFixture)
+	if counts["192.168.123.2"] != 1 {
+		t.Fatalf("tether peers = %d, want 1 (its gateway only)", counts["192.168.123.2"])
+	}
+	if counts["10.0.28.45"] != 4 {
+		t.Fatalf("office peers = %d, want 4 (gateway plus three hosts, no broadcast or multicast)", counts["10.0.28.45"])
+	}
+}
+
+func TestARPPeerCountsIgnoresAnInterfacesOwnAddress(t *testing.T) {
+	out := "Interface: 10.0.28.45 --- 0x1e\n" +
+		"  10.0.28.45            04-f0-ee-90-27-52     dynamic\n" +
+		"  10.0.24.1             00-11-22-33-44-55     dynamic\n"
+	if got := arpPeerCounts(out)["10.0.28.45"]; got != 1 {
+		t.Fatalf("peers = %d, want 1: an interface is not its own neighbour", got)
+	}
+}
+
 func TestShareManager_SweepCleansExpiredTokens(t *testing.T) {
 	m := newShareManager(t, "")
 	token1, _ := m.CreateShare("/x/1.md", "", 1*time.Millisecond)
