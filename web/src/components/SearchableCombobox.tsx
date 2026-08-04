@@ -123,7 +123,7 @@ export function SearchableCombobox({
           }
         }}
         placeholder={placeholder}
-        className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50"
+        className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-50"
       />
       {open && (
         <div
@@ -132,12 +132,12 @@ export function SearchableCombobox({
           className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]"
         >
           {results.length === 0 ? (
-            <div className="px-2 py-2 text-xs text-[var(--color-text-tertiary)]">{emptyText}</div>
+            <div className="px-2 py-2 text-[length:var(--type-caption)] text-[var(--color-text-tertiary)]">{emptyText}</div>
           ) : (
             [...new Set(results.map((option) => option.group ?? ''))].map((group) => (
               <div key={group || '__ungrouped'}>
                 {group && (
-                  <div className="border-b border-[var(--color-border-subtle)] bg-[var(--color-bg)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)]">
+                  <div className="border-b border-[var(--color-border-subtle)] bg-[var(--color-bg)] px-2 py-1 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
                     {group}
                   </div>
                 )}
@@ -152,7 +152,7 @@ export function SearchableCombobox({
                     onMouseDown={(event) => event.preventDefault()}
                     onMouseEnter={() => setActiveIndex(index)}
                     onClick={() => choose(option)}
-                    className={`block w-full px-2 py-1.5 text-left text-xs ${
+                    className={`block w-full px-2 py-1.5 text-left text-[length:var(--type-caption)] ${
                       index === activeIndex
                         ? 'bg-[var(--palette-highlight)] text-[var(--color-text-primary)]'
                         : 'text-[var(--color-text-secondary)]'

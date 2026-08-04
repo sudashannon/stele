@@ -239,7 +239,9 @@ describe('ReportView', () => {
     vi.mocked(listReports).mockReturnValue(promise)
     render(<ReportView workspace="ws1" workspaces={workspaces} />)
 
-    expect((await screen.findByRole('status')).textContent).toContain('正在加载历史记录')
+    // Targeted by testid rather than by role: the provider-config gate is also a
+    // live region now, so role="status" alone matches whichever renders first.
+    expect((await screen.findByTestId('report-history-loading')).textContent).toContain('正在加载历史记录')
     reject(new Error('历史存储不可用'))
 
     expect((await screen.findByTestId('report-history-error')).textContent).toContain('历史存储不可用')

@@ -9,13 +9,13 @@ interface Props {
 function Badge({ testId, tone, label }: { testId: string; tone: 'ok' | 'neutral'; label: string }) {
   const toneClass =
     tone === 'ok'
-      ? 'bg-[var(--color-success-subtle)] text-[var(--color-success)]'
+      ? 'bg-[var(--color-success-subtle)] text-[var(--color-success-text)]'
       : 'bg-[var(--color-layer)] text-[var(--color-text-secondary)]'
   return (
     <span
       data-testid={testId}
       data-tone={tone}
-      className={`inline-flex items-center gap-1 border border-[var(--color-border-subtle)] px-2 py-1 text-xs font-semibold ${toneClass}`}
+      className={`inline-flex items-center gap-1 border border-[var(--color-border-subtle)] px-2 py-1 text-[length:var(--type-caption)] font-semibold ${toneClass}`}
     >
       <Icon name={tone === 'ok' ? 'check' : 'info'} size={14} />
       {label}

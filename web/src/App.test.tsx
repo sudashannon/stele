@@ -247,7 +247,7 @@ describe('App', () => {
       })
 
     render(<App />)
-    await screen.findByText('openspec')
+    await screen.findByRole('button', { name: 'openspec' })
     const changesRefreshCount = vi.mocked(fetchChangesWithMeta).mock.calls.length
     const workspaceRefreshCount = vi.mocked(fetchWorkspaces).mock.calls.length
     const wikiRefreshCount = vi.mocked(fetchWikiIndex).mock.calls.length
@@ -257,11 +257,11 @@ describe('App', () => {
     fireEvent.click(screen.getByTestId('confirm-remove-workspace'))
 
     await waitFor(() => expect(removeWorkspace).toHaveBeenCalledWith('openspec'))
-    await waitFor(() => expect(screen.queryByText('openspec')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'openspec' })).toBeNull())
     expect(vi.mocked(fetchChangesWithMeta).mock.calls.length).toBe(changesRefreshCount + 1)
     expect(vi.mocked(fetchWorkspaces).mock.calls.length).toBe(workspaceRefreshCount + 1)
     expect(vi.mocked(fetchWikiIndex).mock.calls.length).toBe(wikiRefreshCount + 1)
-    expect(screen.getByText('ideas')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'ideas' })).toBeTruthy()
     expect(screen.getByText('cache')).toBeTruthy()
   })
 
@@ -300,12 +300,15 @@ describe('App', () => {
 
     render(<App />)
     await screen.findByText('alpha')
+    // Expand the archived section in the full-width table so beta and gamma are visible.
+    fireEvent.click(screen.getByText('已归档 (2)'))
     expect(screen.getByText('beta')).toBeTruthy()
     expect(screen.getByText('gamma')).toBeTruthy()
     expect(screen.getByText('delta')).toBeTruthy()
     expect(screen.getByTestId('kpi-active').textContent).toContain('2') // alpha, delta
 
     // Click the "已归档" KPI card: narrows the change list to archived-only.
+    // The ChangeExplorer auto-expands archived when there are no active rows.
     fireEvent.click(screen.getByTestId('kpi-archived'))
     expect(screen.queryByText('alpha')).toBeNull()
     expect(screen.getByText('beta')).toBeTruthy()
@@ -316,7 +319,7 @@ describe('App', () => {
     expect(screen.getByTestId('kpi-archived').textContent).toContain('2')
 
     // Combine with the workspace filter (AND semantics): only ws2 + archived remains.
-    fireEvent.click(screen.getByText('ws2'))
+    fireEvent.click(screen.getByRole('button', { name: 'ws2' }))
     expect(screen.queryByText('beta')).toBeNull()
     expect(screen.getByText('gamma')).toBeTruthy()
   })
@@ -334,7 +337,11 @@ describe('App', () => {
     vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
 
     render(<App />)
-    fireEvent.click(await screen.findByText('Superpowers Cache'))
+    // Two rows share the name 'cache'; the workspace column disambiguates.
+    // Click the row whose aria-label names the 'ideas' workspace.
+    // The row label prefers the change title over its slug, so `cache` in the
+    // `ideas` workspace announces as its title.
+    fireEvent.click(await screen.findByRole('button', { name: '打开变更 Superpowers Cache，工作区 ideas' }))
 
     await waitFor(() => expect(fetchChangeDetail).toHaveBeenCalledWith('cache', 'ideas'))
   })
@@ -395,7 +402,7 @@ describe('App', () => {
     expect(screen.getByTestId('chat-messages').textContent).not.toContain('alpha 的历史消息')
   })
 
-  it('opening an artifact keeps the change list visible and mounted (persistent 2-pane, not a fullscreen overlay)', async () => {
+  it('opening an artifact keeps the change list mounted beneath the viewer overlay so scroll position and chat history survive', async () => {
     const changes = [makeChange({ name: 'alpha' }), makeChange({ name: 'beta' })]
     vi.mocked(fetchWorkspaces).mockResolvedValueOnce([])
     vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
@@ -413,18 +420,20 @@ describe('App', () => {
     })
 
     render(<App />)
-    await screen.findByText('alpha')
+    // `alpha` now appears both as a workspace chip and as a change row, so these
+    // queries address the row by its aria-label instead of by bare text.
+    const alphaRow = await screen.findByRole('button', { name: /^打开变更 alpha/ })
 
-    fireEvent.click(screen.getByText('alpha'))
+    fireEvent.click(alphaRow)
     const artifactButton = await screen.findByText('设计文档')
     fireEvent.click(artifactButton)
 
-    // The MarkdownViewer panel is showing (its close button is present)...
+    // The MarkdownViewer panel opens as an overlay (its close button is present)...
     await screen.findByText('✕ 关闭')
-    // ...but the change list is still mounted and visible alongside it, not
-    // hidden behind a fullscreen overlay.
-    expect(screen.getByText('alpha')).toBeTruthy()
-    expect(screen.getByText('beta')).toBeTruthy()
+    // ...but the change list is still mounted beneath the overlay, so
+    // switching artifacts does not lose scroll position or chat history.
+    expect(screen.getByRole('button', { name: /^打开变更 alpha/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^打开变更 beta/ })).toBeTruthy()
 
     fireEvent.click(screen.getByText('✕ 关闭'))
     expect(screen.queryByText('✕ 关闭')).toBeNull()
@@ -486,7 +495,7 @@ describe('App view switcher', () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
     expect(screen.getByTestId('change-empty-state')).toBeTruthy()
-    expect(screen.getByText('从左侧选择一个变更查看详情')).toBeTruthy()
+    expect(screen.getByText('点击上方表格中的一行查看变更详情')).toBeTruthy()
   })
 
   it('switches to the 图谱 view and mounts WikiGraph', async () => {

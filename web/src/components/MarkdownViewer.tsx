@@ -8,7 +8,7 @@ import { DiagramBlock } from './DiagramBlock'
 import { ShareModal } from './ShareModal'
 import { Icon } from './icons'
 import { SessionBacklinks } from './SessionBacklinks'
-
+import { StateBlock } from './StateBlock'
 function getDiagramLanguage(className?: string): 'mermaid' | 'plantuml' | null {
   if (className === 'language-mermaid') return 'mermaid'
   if (className === 'language-plantuml') return 'plantuml'
@@ -91,7 +91,7 @@ const markdownComponents: Components = {
   h1: ({ node, ...rest }) => <h1 className="mb-3 mt-5 text-2xl font-bold" {...rest} />,
   h2: ({ node, ...rest }) => <h2 className="mb-2 mt-5 text-xl font-semibold" {...rest} />,
   h3: ({ node, ...rest }) => <h3 className="mb-2 mt-4 text-lg font-semibold" {...rest} />,
-  p: ({ node, ...rest }) => <p className="mb-3 leading-7" {...rest} />,
+  p: ({ node, ...rest }) => <p className="mb-3 text-[length:var(--type-body-short)] leading-[var(--leading-body-short)]" {...rest} />,
   ul: ({ node, ...rest }) => <ul className="mb-3 list-disc pl-6" {...rest} />,
   ol: ({ node, ...rest }) => <ol className="mb-3 list-decimal pl-6" {...rest} />,
   li: ({ node, ...rest }) => <li className="mb-1" {...rest} />,
@@ -118,13 +118,13 @@ const markdownComponents: Components = {
     const language = getDiagramLanguage(className)
     if (language) return <DiagramBlock language={language} code={String(children).replace(/\n$/, '')} />
     return (
-      <code className="break-words bg-[var(--color-bg)] px-1 py-0.5 font-mono text-sm" {...rest}>
+      <code className="break-words bg-[var(--color-layer)] px-1 py-0.5 font-[var(--font-mono)] text-[length:var(--type-caption)]" {...rest}>
         {children}
       </code>
     )
   },
   pre: ({ node, ...rest }) => (
-    <pre className="mb-3 overflow-x-auto break-words bg-[var(--color-bg)] p-4 font-mono text-sm whitespace-pre-wrap" {...rest} />
+    <pre className="mb-3 overflow-x-auto bg-[var(--color-layer)] p-4 font-[var(--font-mono)] text-[length:var(--type-caption)] whitespace-pre" {...rest} />
   ),
 }
 
@@ -180,6 +180,9 @@ export function MarkdownViewer({
   const fetchRequestRef = useRef(0)
   const summaryRequestRef = useRef(0)
   const docTitle = path ? extractTitle(content ?? '', path) : ''
+
+  // Which heading is currently visible — used to highlight the TOC rail entry.
+  const [activeHeading, setActiveHeading] = useState<string | null>(null)
 
   useEffect(() => {
     if (body !== undefined) {
@@ -256,13 +259,24 @@ export function MarkdownViewer({
       img: ({ node, src, alt, ...rest }) => {
         const resolvedSrc = typeof src === 'string' ? resolveArtifactHref(path, src, workspace) : src
         return (
-          <img
-            {...rest}
-            src={resolvedSrc}
-            alt={alt}
-            className="max-w-full cursor-zoom-in"
+          <button
+            type="button"
+            className="cursor-zoom-in"
             onClick={() => typeof resolvedSrc === 'string' && setZoomed({ src: resolvedSrc, alt: alt ?? '' })}
-          />
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                if (typeof resolvedSrc === 'string') setZoomed({ src: resolvedSrc, alt: alt ?? '' })
+              }
+            }}
+          >
+            <img
+              {...rest}
+              src={resolvedSrc}
+              alt={alt}
+              className="max-w-full"
+            />
+          </button>
         )
       },
     }),
@@ -278,6 +292,32 @@ export function MarkdownViewer({
     if (summary.status === 'ready' && summary.auto) return
     summaryRef.current?.scrollIntoView?.({ block: 'start' })
   }, [summary])
+
+  // Track which heading is in the viewport so the TOC rail can highlight the
+  // active entry. IntersectionObserver reports every intersecting heading; we
+  // pick the one whose top is closest to the scroll container's top edge.
+  useEffect(() => {
+    const container = scrollRef.current
+    if (!container || !content) return
+    // Highlighting the active entry is progressive enhancement: the TOC still
+    // navigates without it. Environments without IntersectionObserver (jsdom,
+    // older embedded webviews) must degrade, not throw and take the whole
+    // document viewer down with them.
+    if (typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .map((e) => ({ id: e.target.id, top: e.boundingClientRect.top }))
+          .sort((a, b) => a.top - b.top)
+        if (visible.length > 0) setActiveHeading(visible[0].id)
+      },
+      { root: container, rootMargin: '-10% 0px -70% 0px', threshold: 0 },
+    )
+    const headings = container.querySelectorAll('h1[id], h2[id], h3[id]')
+    headings.forEach((h) => observer.observe(h))
+    return () => observer.disconnect()
+  }, [content])
 
 
   if (!path && body === undefined) return null
@@ -309,15 +349,15 @@ export function MarkdownViewer({
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-surface)] shadow-[var(--shadow-1)]" role="region" aria-label={filename}>
       <header className="sticky top-0 z-10 flex flex-col gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-3">
         <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0 text-sm" title={path ?? undefined}>
+          <div className="min-w-0 text-[length:var(--type-body)]" title={path ?? undefined}>
             <div className="flex items-center gap-2">
               <span className="font-semibold text-[var(--color-text-primary)]">{displayTitle}</span>
-              <span className="border border-[var(--color-border)] bg-[var(--color-layer)] px-1.5 py-0.5 text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+              <span className="border border-[var(--color-border)] bg-[var(--color-layer)] px-1.5 py-0.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
                 只读文档
               </span>
             </div>
             {displayTitle !== filename && (
-              <span className="mt-1 block truncate text-[var(--type-caption)] font-normal text-[var(--color-text-secondary)]">{path}</span>
+              <span className="mt-1 block truncate font-[var(--font-mono)] text-[length:var(--type-caption)] font-normal text-[var(--color-text-secondary)]">{path}</span>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -327,7 +367,7 @@ export function MarkdownViewer({
                 data-testid="summary-btn"
                 onClick={() => void handleSummarize()}
                 disabled={summary.status === 'loading'}
-                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Icon name="info" />
                 <span>{summary.status === 'loading' ? '摘要生成中…' : '生成摘要'}</span>
@@ -339,7 +379,7 @@ export function MarkdownViewer({
                 aria-label={isStarred ? '取消收藏' : '收藏'}
                 aria-pressed={!!isStarred}
                 onClick={() => onToggleStar(path, filename)}
-                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
               >
                 <Icon name={isStarred ? 'star-filled' : 'star'} />
                 <span>{isStarred ? '已收藏' : '收藏'}</span>
@@ -354,7 +394,7 @@ export function MarkdownViewer({
                   setRefreshKey((value) => value + 1)
                 }}
                 data-testid="refresh-btn"
-                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
               >
                 <Icon name="refresh" />
                 <span>刷新</span>
@@ -366,7 +406,7 @@ export function MarkdownViewer({
                 aria-label="添加待办"
                 data-testid="create-todo-btn"
                 onClick={onCreateTodo}
-                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
                 title="添加待办"
               >
                 <Icon name="todos" />
@@ -379,7 +419,7 @@ export function MarkdownViewer({
                 aria-label="跳转到变更"
                 onClick={() => onNavigateToChange(changeName)}
                 data-testid="navigate-change-btn"
-                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
                 title="跳转到变更视图"
               >
                 <Icon name="open" />
@@ -392,7 +432,7 @@ export function MarkdownViewer({
                 aria-label="分享"
                 onClick={() => setShareOpen(true)}
                 data-testid="share-open-btn"
-                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
               >
                 <Icon name="share" />
                 <span>分享</span>
@@ -402,7 +442,7 @@ export function MarkdownViewer({
               type="button"
               aria-label="关闭"
               onClick={onClose}
-              className="flex items-center gap-1 border border-[var(--color-border)] px-3 py-1.5 text-[var(--type-caption)] font-medium text-[var(--color-accent)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+              className="flex items-center gap-1 border border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption)] font-medium text-[var(--color-accent)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
             >
               <Icon name="close" />
               <span>关闭</span>
@@ -420,7 +460,7 @@ export function MarkdownViewer({
                   aria-current={active}
                   onClick={() => !active && onSelectArtifact?.(artifact.path)}
                   className={
-                    'shrink-0 whitespace-nowrap border px-2.5 py-1 text-[var(--type-caption)] ' +
+                    'shrink-0 whitespace-nowrap border px-2.5 py-1 text-[length:var(--type-caption)] ' +
                     (active
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
                       : 'border-[var(--color-border)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]')
@@ -438,28 +478,39 @@ export function MarkdownViewer({
           <nav
             data-testid="markdown-toc"
             aria-label="文档目录"
-            className="hidden w-60 shrink-0 overflow-y-auto border-r border-[var(--color-border)] px-3 py-6 lg:block"
+            // Hidden below the app's `narrow` gate (1200px) so a cramped viewport
+            // keeps full reading width. Uses the shared breakpoint rather than a
+            // component-local one, so the system stays at two gates.
+            className="toc-rail hidden w-48 shrink-0 overflow-y-auto border-r border-[var(--color-border)] px-3 py-6 min-[1200px]:block"
           >
-            <div className="mb-2 px-2 text-[var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">目录</div>
+            <div className="mb-2 px-2 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)]">目录</div>
             <ul className="space-y-0.5">
-              {toc.map((entry, index) => (
+              {toc.map((entry, index) => {
+                const isActive = entry.id === activeHeading
+                return (
                 <li key={`${entry.id}-${index}`}>
                   <button
                     type="button"
                     onClick={() => jumpTo(entry.id)}
-                    className="w-full truncate px-2 py-1 text-left text-[var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)] hover:text-[var(--color-accent)]"
+                    className={
+                      'w-full truncate px-2 py-1 text-left text-[length:var(--type-caption)] hover:bg-[var(--color-layer)] ' +
+                      (isActive
+                        ? 'font-medium text-[var(--color-accent)]'
+                        : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]')
+                    }
                     style={{ paddingLeft: `${(entry.level - 1) * 12 + 8}px` }}
                     title={entry.text}
                   >
                     {entry.text}
                   </button>
                 </li>
-              ))}
+                )
+              })}
             </ul>
           </nav>
         )}
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-          <div className="mx-auto max-w-5xl px-6 py-8 text-base leading-relaxed">
+          <div className="mx-auto max-w-[var(--measure)] px-6 py-8">
             {summary.status !== 'idle' && (
               <section
                 ref={summaryRef}
@@ -468,7 +519,7 @@ export function MarkdownViewer({
                 aria-live="polite"
                 className="mb-6 border border-[var(--color-border)] bg-[var(--color-layer)] p-4"
               >
-                <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+                <div className="mb-2 flex items-center gap-2 text-[length:var(--type-body)] font-semibold text-[var(--color-text-primary)]">
                   <Icon name="info" />
                   <span>文档摘要</span>
                 </div>
@@ -478,12 +529,12 @@ export function MarkdownViewer({
                     <span>正在生成摘要，请稍候…</span>
                   </div>
                 )}
-                {summary.status === 'error' && <div className="text-[length:var(--type-caption)] text-[var(--color-danger)]">{summary.message}</div>}
+                {summary.status === 'error' && <div className="text-[length:var(--type-caption)] text-[var(--color-danger-text)]">{summary.message}</div>}
                 {summary.status === 'ready' && <p className="whitespace-pre-wrap text-[length:var(--type-caption)] text-[var(--color-text-primary)]">{summary.text}</p>}
               </section>
             )}
-            {error && <div className="text-[var(--type-caption)] text-[var(--color-danger)]">{error}</div>}
-            {!error && content === null && <div className="text-[var(--type-caption)] text-[var(--color-text-secondary)]">加载中…</div>}
+            {error && <StateBlock kind="error" title={error} compact />}
+            {!error && content === null && <StateBlock kind="loading" title="加载中…" compact />}
             {!error && content !== null && (
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSlug]} components={components}>
                 {content}

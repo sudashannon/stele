@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { COMMUNITY_COLORS } from './graphPalette'
+import { communityColor } from './graphPalette'
 import { Icon } from './icons'
 
 interface GraphFiltersProps {
@@ -47,6 +47,11 @@ export function GraphFilters({
     [communityCounts],
   )
 
+  const communityRank = useMemo(
+    () => new Map(communityIds.map((id, rank) => [id, rank])),
+    [communityIds],
+  )
+
   const [expanded, setExpanded] = useState(false)
   const visibleCommunityIds = expanded ? communityIds : communityIds.slice(0, COLLAPSED_COMMUNITY_CHIPS)
   const hiddenCommunityCount = communityIds.length - visibleCommunityIds.length
@@ -64,7 +69,7 @@ export function GraphFilters({
           type="button"
           data-testid="filter-reset"
           onClick={onResetFilters}
-          className={`${chipClass} border-[var(--color-danger)] bg-[var(--color-danger-subtle)] text-[var(--color-danger)]`}
+          className={`${chipClass} border-[var(--color-danger)] bg-[var(--color-danger-subtle)] text-[var(--color-danger-text)]`}
         >
           <Icon name="close" size={12} />
           重置筛选
@@ -135,7 +140,7 @@ export function GraphFilters({
               >
                 <span
                   className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: COMMUNITY_COLORS[id % COMMUNITY_COLORS.length] }}
+                  style={{ backgroundColor: communityColor(communityRank.get(id) ?? Infinity) }}
                 />
                 <span>{labelForCommunity(id, communityLabels)}</span>
                 <span className="text-[var(--color-text-tertiary)]">{count}</span>

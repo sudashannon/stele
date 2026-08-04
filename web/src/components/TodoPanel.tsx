@@ -60,6 +60,9 @@ const RECENT_WIKI_OPTION_LIMIT = 20
 const TODO_ROW_HEIGHT = 56
 const TODO_WINDOW_SIZE = 60
 
+// Reason blocks group consecutive todos that share an identical blocker reason.
+const TODO_REASON_BLOCK_HEIGHT = 60
+
 
 function wikiUpdatedTimestamp(component: WikiComponent): number | null {
   if (!component.updatedAt) return null
@@ -230,19 +233,6 @@ export function TodoPanel({
     if (focusCaptureRef) focusCaptureRef.current = captureRef
   }, [focusCaptureRef, captureRef])
 
-  // Responsive breakpoints
-  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 900)
-  const [isMedium, setIsMedium] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 900 && window.innerWidth < 1280)
-
-  useEffect(() => {
-    const onResize = () => {
-      const w = window.innerWidth
-      setIsNarrow(w < 900)
-      setIsMedium(w >= 900 && w < 1280)
-    }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
 
   useEffect(() => {
     if (draftChange) { setQcChange(draftChange); setQcWorkspace(draftChange.workspace) }
@@ -337,6 +327,59 @@ export function TodoPanel({
     () => GROUP_SPECS.flatMap((spec) => groups[spec.key].map((todo) => ({ todo, group: spec.key }))),
     [groups],
   )
+
+  // Reason-group detection: consecutive todos with an identical, non-empty
+  // blocker reason are collapsed so the reason is rendered once for the group.
+  const reasonGroupMap = useMemo(() => {
+    const map = new Map<string, { isLeader: boolean; count: number; reason: string }>()
+    // Two-pass: first collect groups, then only mark leaders for count >= 2.
+    const pendingLeaders: { id: string; reason: string }[] = []
+    for (let i = 0; i < flattenedTodos.length; i++) {
+      const entry = flattenedTodos[i]
+      const reason = entry.todo.externalRef?.blocker
+      if (!reason) continue
+      const prev = i > 0 ? flattenedTodos[i - 1] : null
+      const prevReason = prev?.todo.externalRef?.blocker
+      if (prevReason === reason) {
+        const leader = pendingLeaders[pendingLeaders.length - 1]
+        const entry_ = map.get(leader.id)!
+        entry_.count++
+        map.set(entry.todo.id, { isLeader: false, count: entry_.count, reason })
+      } else {
+        pendingLeaders.push({ id: entry.todo.id, reason })
+        map.set(entry.todo.id, { isLeader: false, count: 1, reason })
+      }
+    }
+    // Mark leaders only for groups of size >= 2.
+    for (const pl of pendingLeaders) {
+      const entry = map.get(pl.id)
+      if (entry && entry.count >= 2) {
+        map.set(pl.id, { isLeader: true, count: entry.count, reason: pl.reason })
+      }
+    }
+    return map
+  }, [flattenedTodos])
+
+  // Variable row heights: leader rows include a reason block.
+  const entryHeights = useMemo(
+    () => flattenedTodos.map((e) => {
+      const rg = reasonGroupMap.get(e.todo.id)
+      return rg?.isLeader ? TODO_ROW_HEIGHT + TODO_REASON_BLOCK_HEIGHT : TODO_ROW_HEIGHT
+    }),
+    [flattenedTodos, reasonGroupMap],
+  )
+
+  // Cumulative heights for virtual-list offset lookups.
+  const cumulativeHeights = useMemo(() => {
+    const ch: number[] = []
+    let sum = 0
+    for (const h of entryHeights) {
+      sum += h
+      ch.push(sum)
+    }
+    return ch
+  }, [entryHeights])
+
   const visibleTodos = flattenedTodos.slice(windowStart, windowStart + TODO_WINDOW_SIZE)
   const selectedIsVisible = selectedId !== null && visibleTodos.some(({ todo }) => todo.id === selectedId)
   const tabbableId = selectedIsVisible ? selectedId : (visibleTodos[0]?.todo.id ?? null)
@@ -390,7 +433,7 @@ export function TodoPanel({
 
   if (loading && todos.length === 0) {
     return (
-      <div data-testid="todo-panel-loading" className="flex items-center justify-center h-full text-sm text-[var(--color-text-secondary)]">
+      <div data-testid="todo-panel-loading" className="flex items-center justify-center h-full text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
         加载中…
       </div>
     )
@@ -398,7 +441,7 @@ export function TodoPanel({
 
   if (error && todos.length === 0) {
     return (
-      <div data-testid="todo-panel-error" className="flex flex-col items-center justify-center h-full gap-2 text-sm text-[var(--color-danger)]">
+      <div data-testid="todo-panel-error" className="flex flex-col items-center justify-center h-full gap-2 text-[length:var(--type-body)] text-[var(--color-danger-text)]">
         <span>{error}</span>
       </div>
     )
@@ -415,13 +458,13 @@ export function TodoPanel({
     <div className="flex flex-col h-full bg-[var(--color-surface)]">
       {/* Read-only banner */}
       {writable === false && (
-        <div data-testid="todo-readonly-banner" className="flex items-center justify-center gap-1 text-xs bg-[var(--color-warn-subtle)] text-[var(--color-warn-text)] p-2 text-center shrink-0">
+        <div data-testid="todo-readonly-banner" className="flex items-center justify-center gap-1 text-[length:var(--type-caption)] bg-[var(--color-warn-subtle)] text-[var(--color-warn-text)] p-2 text-center shrink-0">
           <Icon name="warning" /> 局域网访问 — 只读模式（无法创建、编辑或删除待办）
         </div>
       )}
       {/* Mutation error banner — inline, non-fatal */}
       {error && todos.length > 0 && (
-        <div data-testid="todo-mutation-error" className="text-xs bg-[var(--color-danger-subtle)] text-[var(--color-danger)] p-2 text-center shrink-0">
+        <div data-testid="todo-mutation-error" className="text-[length:var(--type-caption)] bg-[var(--color-danger-subtle)] text-[var(--color-danger-text)] p-2 text-center shrink-0">
           {error}
         </div>
       )}
@@ -429,14 +472,14 @@ export function TodoPanel({
       {/* Header — compact: title + counts + daily completion strip */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] shrink-0">
         <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">待办</h2>
-          <span className="text-xs text-[var(--color-text-secondary)]">
+          <h2 className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)]">待办</h2>
+          <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)] truncate min-w-0">
             {pendingCount} 个待处理 · {inProgressCount} 个进行中 · {blockedCount} 个阻塞 · {doneCount} 个完成 · {droppedCount} 个放弃
           </span>
         </div>
         {todayStats.total > 0 && (
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-text-secondary)] tabular-nums">
+            <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)] tabular-nums">
               今天 {todayStats.completed}/{todayStats.total}
             </span>
             <div data-testid="todo-progress-strip" className="w-24 h-1.5 bg-[var(--color-border-subtle)] overflow-hidden">
@@ -457,7 +500,7 @@ export function TodoPanel({
               data-testid="todo-qc-workspace"
               value={qcWorkspace}
               onChange={(e) => setQcWorkspace(e.target.value)}
-              className="border border-[var(--color-border)] px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-accent)] bg-[var(--color-surface)] min-w-0 max-w-[8rem]"
+              className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-body)] focus:outline-none focus:border-[var(--color-accent)] bg-[var(--color-surface)] min-w-0 max-w-[8rem]"
               disabled={!writable}
             >
               <option value="">选择…</option>
@@ -477,7 +520,7 @@ export function TodoPanel({
                 }
               }}
               placeholder="快速添加待办…"
-              className="flex-1 border border-[var(--color-border)] px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-accent)]"
+              className="flex-1 border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-body)] focus:outline-none focus:border-[var(--color-accent)]"
               disabled={!writable}
             />
             <button
@@ -485,13 +528,13 @@ export function TodoPanel({
               onClick={handleQuickCapture}
               disabled={!quickCapture.trim() || !qcWorkspace || !writable}
               title={!qcWorkspace ? '请先选择工作区' : undefined}
-              className="bg-[var(--color-accent)] text-[var(--color-text-on-color)] px-3 text-sm disabled:opacity-40"
+              className="bg-[var(--color-accent)] text-[var(--color-text-on-color)] px-3 text-[length:var(--type-body)] disabled:opacity-40"
             >
               添加
             </button>
           </div>
           {(qcChange || qcWikiRefs.length > 0) && (
-            <div className="flex items-center gap-2 mt-1.5 text-xs text-[var(--color-text-secondary)]">
+            <div className="flex items-center gap-2 mt-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)] overflow-hidden min-w-0">
               <span>关联:</span>
               {qcChange && (
                 <span data-testid="todo-qc-change" className="px-1 py-0.5 bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
@@ -503,7 +546,7 @@ export function TodoPanel({
                   {ref.titleSnapshot}
                 </span>
               ))}
-              <button onClick={() => setConfirmClearContext(true)} className="flex items-center gap-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]">
+              <button onClick={() => setConfirmClearContext(true)} className="flex items-center gap-1 text-[var(--color-text-tertiary)] hover:text-[var(--color-danger-text)]">
                 <Icon name="trash" /> 清除
               </button>
             </div>
@@ -513,20 +556,19 @@ export function TodoPanel({
 
       {/* Body: filters | list | detail */}
       <div className="flex-1 flex min-h-0">
-        {/* Left filters — hidden on narrow, toggleable on medium */}
-        {!isNarrow && (
-          <div className={`w-[180px] shrink-0 border-r border-[var(--color-border)] overflow-y-auto ${isMedium && !filterOpen ? 'hidden' : ''}`}>
+        {/* Left filters — hidden on narrow, toggleable on medium, always visible on wide */}
+          <div className={`w-[180px] shrink-0 border-r border-[var(--color-border)] overflow-y-auto ${filterOpen ? 'block' : 'hidden'} narrow:hidden wide:block`}>
             <div className="p-3 space-y-3">
               {/* Status filter */}
               <div>
-                <div className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1.5">视图</div>
+                <div className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase mb-1.5">视图</div>
                 <div className="flex flex-col gap-0.5">
                   {STATUS_FILTERS.map((f) => (
                     <button
                       key={f.key}
                       data-testid={`todo-filter-${f.key}`}
                       onClick={() => setStatusFilter(f.key)}
-                      className={`text-left text-xs px-2 py-1 ${
+                      className={`text-left text-[length:var(--type-caption)] px-2 py-1 ${
                         statusFilter === f.key
                           ? 'bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium'
                           : 'text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]'
@@ -541,12 +583,12 @@ export function TodoPanel({
               {/* Workspace filter */}
               {todoWorkspaces.length > 1 && (
                 <div>
-                  <div className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1.5">工作区</div>
+                  <div className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase mb-1.5">工作区</div>
                   <select
                     data-testid="todo-workspace-filter"
                     value={workspaceFilter ?? ''}
                     onChange={(e) => setWorkspaceFilter(e.target.value || null)}
-                    className="w-full border border-[var(--color-border)] text-xs px-2 py-1 bg-[var(--color-surface)]"
+                    className="w-full border border-[var(--color-border)] text-[length:var(--type-caption)] px-2 py-1 bg-[var(--color-surface)]"
                   >
                     <option value="">全部</option>
                     {todoWorkspaces.map((ws) => (
@@ -558,29 +600,26 @@ export function TodoPanel({
 
               {/* Search */}
               <div>
-                <div className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase mb-1.5">搜索</div>
+                <div className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase mb-1.5">搜索</div>
                 <input
                   data-testid="todo-search-input"
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="搜索…"
-                  className="w-full border border-[var(--color-border)] text-xs px-2 py-1 focus:outline-none focus:border-[var(--color-accent)]"
+                  className="w-full border border-[var(--color-border)] text-[length:var(--type-caption)] px-2 py-1 focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
             </div>
           </div>
-        )}
 
-        {/* Filter toggle on medium widths */}
-        {isMedium && (
+        {/* Filter toggle — only visible on medium (1200–1399px) */}
           <button
             onClick={() => setFilterOpen((v) => !v)}
-            className="shrink-0 flex items-center gap-1 text-xs px-2 py-1 border-b border-r border-[var(--color-border)] hover:bg-[var(--palette-highlight)]"
+            className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption)] px-2 py-1 border-b border-r border-[var(--color-border)] hover:bg-[var(--palette-highlight)] narrow:hidden wide:hidden"
           >
             <Icon name={filterOpen ? 'chevron-left' : 'chevron-right'} /> 筛选
           </button>
-        )}
 
         {/* Middle: todo list */}
         <div
@@ -589,9 +628,18 @@ export function TodoPanel({
           className="flex-1 min-w-0 overflow-y-auto"
           onScroll={(event) => {
             if (flattenedTodos.length <= TODO_WINDOW_SIZE) return
+            const scrollTop = event.currentTarget.scrollTop
+            // Find the entry whose cumulative height first exceeds scrollTop.
+            let idx = flattenedTodos.length - 1
+            for (let i = 0; i < cumulativeHeights.length; i++) {
+              if (scrollTop < cumulativeHeights[i]) {
+                idx = i
+                break
+              }
+            }
             const next = Math.max(0, Math.min(
               flattenedTodos.length - TODO_WINDOW_SIZE,
-              Math.floor(event.currentTarget.scrollTop / TODO_ROW_HEIGHT) - 10,
+              idx,
             ))
             setWindowStart(next)
           }}
@@ -599,8 +647,8 @@ export function TodoPanel({
           {isEmpty ? (
             <div data-testid="todo-empty-state" className="flex flex-col items-center justify-center gap-2 text-center py-24 px-6">
               <Icon name="check" size={32} className="text-[var(--color-text-tertiary)]" />
-              <p className="text-sm font-medium text-[var(--color-text-primary)]">暂无待办</p>
-              <p className="text-xs text-[var(--color-text-secondary)]">使用上方输入框快速添加，或从变更/文档页面创建</p>
+              <p className="text-[length:var(--type-body)] font-medium text-[var(--color-text-primary)]">暂无待办</p>
+              <p className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">使用上方输入框快速添加，或从变更/文档页面创建</p>
             </div>
           ) : (
             <div className="divide-y divide-[var(--color-border-subtle)]">
@@ -608,7 +656,7 @@ export function TodoPanel({
                 <div
                   aria-hidden="true"
                   data-testid="todo-list-top-spacer"
-                  style={{ height: windowStart * TODO_ROW_HEIGHT }}
+                  style={{ height: windowStart > 0 ? cumulativeHeights[windowStart - 1] : 0 }}
                 />
               )}
               {GROUP_SPECS.map((g) => {
@@ -616,7 +664,7 @@ export function TodoPanel({
                 if (visible.length === 0) return null
                 return (
                   <div key={g.key} data-testid={`todo-group-${g.key}`}>
-                    <div className="sticky top-0 flex items-center gap-1 bg-[var(--color-bg)] px-4 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] z-10 border-b border-[var(--color-border-subtle)]">
+                    <div className="sticky top-0 flex items-center gap-1 bg-[var(--color-bg)] px-4 py-1.5 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] z-10 border-b border-[var(--color-border-subtle)]">
                       <Icon name={g.icon} size={12} /> {g.label} <span className="font-normal">({groups[g.key].length})</span>
                     </div>
                     {visible.map((todo) => (
@@ -640,6 +688,10 @@ export function TodoPanel({
                         sessionPathById={sessionPathById}
                         onNavigateChange={onNavigateChange}
                         wikiComponents={wikiComponents}
+                        reasonBlock={(() => {
+                          const rg = reasonGroupMap.get(todo.id)
+                          return rg?.isLeader ? { reason: rg.reason, count: rg.count } : undefined
+                        })()}
                         writable={writable}
                       />
                     ))}
@@ -649,8 +701,8 @@ export function TodoPanel({
               {windowStart + visibleTodos.length < flattenedTodos.length && (
                 <div
                   aria-hidden="true"
+                  style={{ height: cumulativeHeights.length > 0 ? cumulativeHeights[cumulativeHeights.length - 1] - (windowStart + visibleTodos.length < cumulativeHeights.length ? cumulativeHeights[windowStart + visibleTodos.length - 1] : cumulativeHeights[cumulativeHeights.length - 1]) : 0 }}
                   data-testid="todo-list-bottom-spacer"
-                  style={{ height: (flattenedTodos.length - windowStart - visibleTodos.length) * TODO_ROW_HEIGHT }}
                 />
               )}
             </div>
@@ -671,13 +723,12 @@ export function TodoPanel({
             writable={writable}
             changes={changes}
             onClose={() => setSelectedId(null)}
-            overlay={isNarrow}
           />
         )}
       </div>
       {confirmClearContext && (
         <Modal title="清除关联信息？" onClose={() => setConfirmClearContext(false)} data-testid="todo-clear-context-confirm">
-          <div className="space-y-4 p-4 text-sm text-[var(--color-text-secondary)]">
+          <div className="space-y-4 p-4 text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
             <p>当前待办草稿中的变更和文档关联将被清除。</p>
             <div className="flex justify-end gap-2">
               <button className="border border-[var(--color-border)] px-3 py-1.5" onClick={() => setConfirmClearContext(false)}>取消</button>
@@ -689,8 +740,6 @@ export function TodoPanel({
     </div>
   )
 }
-
-// ── TodoRow ──────────────────────────────────────────────────────────────────
 
 function TodoRow({
   todo,
@@ -706,6 +755,7 @@ function TodoRow({
   sessionPathById,
   wikiComponents,
   writable,
+  reasonBlock,
 }: {
   todo: Todo
   selected: boolean
@@ -717,12 +767,17 @@ function TodoRow({
   onNavigateWiki: (path: string) => void
   onNavigateChange: (workspace: string, changeName: string) => void
   /** Opens the session a projected todo came from. */
+
   onNavigateSession?: (path: string) => void
-  /** Session id -> transcript path, for todos projected from a session. */
   sessionPathById?: Record<string, string>
   wikiComponents: WikiComponent[]
   writable: boolean
+
+  /** Reason group block — only the leader of consecutive identical blocker reasons shows this. */
+  reasonBlock?: { reason: string; count: number }
 }) {
+
+  const [reasonExpanded, setReasonExpanded] = useState(false)
   const isDone = todo.status === 'done'
 
   return (
@@ -750,7 +805,7 @@ function TodoRow({
           ? 'border-l-[var(--color-accent)] bg-[var(--color-accent)]/5'
           : 'border-l-transparent hover:bg-[var(--palette-highlight)]'
       }`}
-      style={{ height: TODO_ROW_HEIGHT }}
+      style={{ height: reasonBlock ? TODO_ROW_HEIGHT + TODO_REASON_BLOCK_HEIGHT : TODO_ROW_HEIGHT }}
     >
       {/* Priority dot */}
       <span
@@ -766,7 +821,7 @@ function TodoRow({
             e.stopPropagation()
             onToggleDone()
           }}
-          className={`shrink-0 w-4 h-4 border mt-0.5 flex items-center justify-center text-xs ${
+          className={`shrink-0 w-4 h-4 border mt-0.5 flex items-center justify-center text-[length:var(--type-caption)] ${
             isDone
               ? 'bg-[var(--color-success)] border-[var(--color-success)] text-[var(--color-text-on-color)]'
               : 'border-[var(--color-border)] hover:border-[var(--color-accent)]'
@@ -779,18 +834,44 @@ function TodoRow({
 
       {/* Content */}
       <div className="min-w-0 flex-1">
-        <div className={`truncate text-sm ${isDone ? 'line-through text-[var(--color-text-tertiary)]' : 'text-[var(--color-text-primary)]'}`}>
+
+        {/* Reason block — shown only for the leader of a reason group */}
+        {reasonBlock && (
+          <div className="mb-1">
+            <p
+              data-testid={`todo-reason-${todo.id}`}
+              className={`text-[length:var(--type-body)] leading-[var(--leading-body)] text-[var(--color-text-secondary)] break-words ${
+                reasonExpanded ? '' : 'line-clamp-2'
+              }`}
+              style={{ maxWidth: 'var(--measure)' }}
+            >
+              {reasonBlock.reason}
+              {reasonBlock.count > 1 && (
+                <span className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)] ml-1">
+                  （共 {reasonBlock.count} 个任务）
+                </span>
+              )}
+            </p>
+            <button
+              onClick={(e) => { e.stopPropagation(); setReasonExpanded((v) => !v) }}
+              className="text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline mt-0.5"
+            >
+              {reasonExpanded ? '收起' : '展开'}
+            </button>
+          </div>
+        )}
+        <div className={`truncate text-[length:var(--type-body)] leading-[var(--leading-body)] ${isDone ? 'line-through text-[var(--color-text-tertiary)]' : 'text-[var(--color-text-primary)]'}`}>
           {todo.title || '(无标题)'}
         </div>
         <div className="mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap">
           {/* Due badge */}
           {todo.dueAt && (
             <span
-              className={`text-xs px-1 py-0 ${
+              className={`text-[length:var(--type-caption)] px-1 py-0 ${
                 isDone
                   ? 'text-[var(--color-text-tertiary)]'
                   : formatDueBadge(todo.dueAt) === '逾期'
-                    ? 'text-[var(--color-danger)] bg-[var(--color-danger-subtle)]'
+                    ? 'text-[var(--color-danger-text)] bg-[var(--color-danger-subtle)]'
                     : 'text-[var(--color-text-secondary)]'
               }`}
             >
@@ -800,7 +881,7 @@ function TodoRow({
 
           {/* Workspace tag */}
           {todo.workspace && (
-            <span className="text-xs text-[var(--color-text-tertiary)] bg-[var(--color-bg)] px-1">
+            <span className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)] bg-[var(--color-bg)] px-1">
               {todo.workspace}
             </span>
           )}
@@ -810,16 +891,21 @@ function TodoRow({
             // resolving that id to an indexed transcript turns the origin chip
             // into the way back to the work it came from.
             const sessionPath = sessionPathById?.[todo.externalRef.sessionId]
-            const label = `OMP · ${todo.externalRef.phase}${todo.externalRef.blocker ? ` · ${todo.externalRef.blocker}` : ''}`
-            const title = todo.externalRef.blocker || `OMP ${todo.externalRef.sessionId}/${todo.externalRef.taskKey}`
+            // The chip is an origin affordance, so it carries only `OMP · <phase>`.
+            // Appending the blocker produced a 280-character, 1489px unbroken run
+            // inside a virtualised 56px row - triple any sane line length. The full
+            // text stays reachable three ways: the grouped reason block above rows
+            // that share it, the detail drawer, and this chip's own title tooltip.
+            const chipLabel = `OMP · ${todo.externalRef.phase}`
+            const chipTitle = todo.externalRef.blocker || `OMP ${todo.externalRef.sessionId}/${todo.externalRef.taskKey}`
             if (!sessionPath || !onNavigateSession) {
               return (
                 <span
                   data-testid={`todo-omp-origin-${todo.id}`}
-                  className="text-xs text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1"
-                  title={title}
+                  className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)] bg-[var(--color-accent)]/10 px-1"
+                  title={chipTitle}
                 >
-                  {label}
+                  {chipLabel}
                 </span>
               )
             }
@@ -827,25 +913,25 @@ function TodoRow({
               <button
                 type="button"
                 data-testid={`todo-omp-origin-${todo.id}`}
-                className="text-xs text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1 hover:underline"
-                title={`${title}｜打开来源会话`}
+                className="text-[length:var(--type-caption)] text-[var(--color-accent)] bg-[var(--color-accent)]/10 px-1 hover:underline"
+                title={`${chipTitle}｜打开来源会话`}
                 onClick={(event) => {
                   event.stopPropagation()
                   onNavigateSession(sessionPath)
                 }}
               >
-                {label}
+                {chipLabel}
               </button>
             )
           })()}
 
           {/* Status tag */}
           {!isDone && (
-            <span className={`text-xs px-1 py-0 ${
+            <span className={`text-[length:var(--type-caption)] px-1 py-0 ${
               todo.status === 'in_progress'
                 ? 'bg-[var(--color-warn-subtle)] text-[var(--color-warn-text)]'
                 : todo.status === 'blocked'
-                  ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)]'
+                  ? 'bg-[var(--color-danger-subtle)] text-[var(--color-danger-text)]'
                   : todo.status === 'dropped'
                     ? 'bg-[var(--color-bg)] text-[var(--color-text-tertiary)]'
                     : 'text-[var(--color-text-tertiary)]'
@@ -861,7 +947,7 @@ function TodoRow({
                 e.stopPropagation()
                 onNavigateChange(todo.change!.workspace, todo.change!.name)
               }}
-              className="text-xs text-[var(--color-accent)] hover:underline"
+              className="text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline"
             >
               {todo.change.name}
             </button>
@@ -877,7 +963,7 @@ function TodoRow({
                   e.stopPropagation()
                   onNavigateWiki(comp?.path ?? ref.componentId)
                 }}
-                className="text-xs text-[var(--color-accent)] hover:underline"
+                className="text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline"
               >
                 {ref.titleSnapshot}
               </button>
@@ -903,7 +989,6 @@ function DetailPanel({
   wikiComponents,
   writable,
   onClose,
-  overlay,
   changes,
 }: {
   todo: Todo
@@ -918,7 +1003,6 @@ function DetailPanel({
   wikiComponents: WikiComponent[]
   writable: boolean
   onClose: () => void
-  overlay: boolean
   changes?: ChangeSummary[]
 }) {
   const sessionPath = todo.externalRef ? sessionPathById?.[todo.externalRef.sessionId] : undefined
@@ -1026,12 +1110,12 @@ function DetailPanel({
   const panel = (
     <div
       data-testid="todo-detail"
-      className={`flex flex-col h-full bg-[var(--color-surface)] ${overlay ? 'fixed inset-0 z-30' : 'w-[320px] shrink-0 border-l border-[var(--color-border)]'}`}
+      className="flex flex-col h-full bg-[var(--color-surface)] fixed inset-0 z-30 wide:relative wide:inset-auto wide:z-auto wide:w-[320px] wide:shrink-0 wide:border-l wide:border-[var(--color-border)]"
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)] shrink-0">
-        <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">待办详情</h3>
-        <button onClick={onClose} aria-label="关闭详情" className="text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
+        <h3 className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)]">待办详情</h3>
+        <button onClick={onClose} aria-label="关闭详情" className="text-[length:var(--type-body)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]">
           <Icon name="close" />
         </button>
       </div>
@@ -1040,7 +1124,7 @@ function DetailPanel({
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {/* Title */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">标题</label>
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">标题</label>
           <input
             data-testid="todo-detail-title"
             type="text"
@@ -1051,13 +1135,13 @@ function DetailPanel({
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
             }}
             disabled={!writable}
-            className="w-full border border-[var(--color-border)] px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
+            className="w-full border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-body)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
           />
         </div>
 
         {/* Notes */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">备注</label>
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">备注</label>
           <textarea
             data-testid="todo-detail-notes"
             value={notes}
@@ -1065,12 +1149,12 @@ function DetailPanel({
             onBlur={saveNotes}
             disabled={!writable}
             rows={3}
-            className="w-full border border-[var(--color-border)] px-2 py-1 text-sm resize-y focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
+            className="w-full border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-body)] resize-y focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
           />
         </div>
 
         {todo.metadata.source === 'omp' && todo.externalRef && (
-          <div data-testid="todo-detail-omp-origin" className="border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-xs text-[var(--color-text-secondary)]">
+          <div data-testid="todo-detail-omp-origin" className="border border-[var(--color-border)] bg-[var(--color-bg)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             <div className="flex items-start justify-between gap-2">
               <div className="font-semibold text-[var(--color-accent)]">OMP 投影 · {todo.externalRef.phase}</div>
               {/* The projection knows which session produced this task; opening it
@@ -1091,7 +1175,7 @@ function DetailPanel({
             </div>
             <div className="mt-1 break-all">{todo.externalRef.sessionId} / {todo.externalRef.taskKey}</div>
             {todo.externalRef.blocker && (
-              <div className="mt-1 text-[var(--color-danger)]">{todo.externalRef.blocker}</div>
+              <div className="mt-1 text-[var(--color-danger-text)]">{todo.externalRef.blocker}</div>
             )}
             {!sessionPath && (
               <div data-testid="todo-detail-session-missing" className="mt-1 text-[var(--color-text-tertiary)]">
@@ -1103,7 +1187,7 @@ function DetailPanel({
 
         {/* Status */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">状态</label>
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">状态</label>
           <div className="flex gap-1.5">
             {(['open', 'in_progress', 'blocked', 'done', 'dropped'] as TodoStatus[]).map((s) => (
               <button
@@ -1111,7 +1195,7 @@ function DetailPanel({
                 data-testid={`todo-status-${s}`}
                 onClick={() => updateField({ status: s })}
                 disabled={!writable}
-                className={`text-xs px-2.5 py-1 border ${
+                className={`text-[length:var(--type-caption)] px-2.5 py-1 border ${
                   todo.status === s
                     ? 'bg-[var(--color-accent)] text-[var(--color-text-on-color)] border-[var(--color-accent)]'
                     : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]'
@@ -1125,7 +1209,7 @@ function DetailPanel({
 
         {/* Priority */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">优先级</label>
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">优先级</label>
           <div className="flex gap-1.5">
             {(['urgent', 'high', 'normal', 'low'] as TodoPriority[]).map((p) => (
               <button
@@ -1133,7 +1217,7 @@ function DetailPanel({
                 data-testid={`todo-priority-${p}`}
                 onClick={() => updateField({ priority: p })}
                 disabled={!writable}
-                className={`text-xs px-2.5 py-1 border ${
+                className={`text-[length:var(--type-caption)] px-2.5 py-1 border ${
                   todo.priority === p
                     ? 'text-[var(--color-text-on-color)] border-transparent'
                     : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--palette-highlight)]'
@@ -1147,7 +1231,7 @@ function DetailPanel({
         </div>
         {/* Due date */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">截止日期</label>
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">截止日期</label>
           <div className="flex items-center gap-2">
             <input
               data-testid="todo-detail-duedate"
@@ -1157,13 +1241,13 @@ function DetailPanel({
                 updateField({ dueAt: e.target.value ? new Date(e.target.value).toISOString() : null })
               }
               disabled={!writable}
-              className="border border-[var(--color-border)] px-2 py-1 text-xs focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
+              className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-60"
             />
             {todo.dueAt && writable && (
               <button
                 data-testid="todo-clear-duedate"
                 onClick={() => setPendingAction({ kind: 'dueDate' })}
-                className="flex items-center gap-1 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-danger)]"
+                className="flex items-center gap-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)] hover:text-[var(--color-danger-text)]"
               >
                 <Icon name="trash" /> 清除
               </button>
@@ -1172,12 +1256,12 @@ function DetailPanel({
         </div>
         {/* Change association */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">关联变更</label>
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">关联变更</label>
           {todo.change ? (
             <div className="flex items-center gap-2">
               <button
                 onClick={() => onNavigateChange(todo.change!.workspace, todo.change!.name)}
-                className="text-xs text-[var(--color-accent)] hover:underline"
+                className="text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline"
               >
                 {todo.change.workspace}/{todo.change.name}
               </button>
@@ -1187,7 +1271,7 @@ function DetailPanel({
                     data-testid="todo-clear-change"
                     onClick={() => setPendingAction({ kind: 'change' })}
                     aria-label="清除关联变更"
-                    className="text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)]"
+                    className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger-text)]"
                   >
                     <Icon name="close" />
                   </button>
@@ -1197,7 +1281,7 @@ function DetailPanel({
                     onChange={(e) => {
                       if (e.target.value) updateField({ change: { workspace: todo.workspace, name: e.target.value } })
                     }}
-                    className="border border-[var(--color-border)] text-xs px-1 py-0.5 bg-[var(--color-surface)]"
+                    className="border border-[var(--color-border)] text-[length:var(--type-caption)] px-1 py-0.5 bg-[var(--color-surface)]"
                   >
                     <option value="">更换…</option>
                     {(changes ?? []).filter((c) => c.workspace === todo.workspace && c.name !== todo.change?.name).map((c) => (
@@ -1214,7 +1298,7 @@ function DetailPanel({
               onChange={(e) => {
                 if (e.target.value) updateField({ change: { workspace: todo.workspace, name: e.target.value } })
               }}
-              className="border border-[var(--color-border)] text-xs px-2 py-1 bg-[var(--color-surface)]"
+              className="border border-[var(--color-border)] text-[length:var(--type-caption)] px-2 py-1 bg-[var(--color-surface)]"
             >
               <option value="">选择变更…</option>
               {(changes ?? []).filter((c) => c.workspace === todo.workspace).map((c) => (
@@ -1222,13 +1306,13 @@ function DetailPanel({
               ))}
             </select>
           ) : (
-            <span className="text-xs text-[var(--color-text-tertiary)]">无</span>
+            <span className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)]">无</span>
           )}
         </div>
 
         {/* Wiki refs */}
         <div>
-          <label className="text-xs font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">
+          <label className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)] uppercase block mb-1">
             关联文档 ({todo.wikiRefs.length})
           </label>
           {todo.wikiRefs.length > 0 ? (
@@ -1239,7 +1323,7 @@ function DetailPanel({
                   <div key={ref.componentId} className="flex items-center gap-2">
                     <button
                       onClick={() => onNavigateWiki(comp?.path ?? ref.componentId)}
-                      className="text-xs text-[var(--color-accent)] hover:underline truncate"
+                      className="text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline truncate"
                     >
                       {comp?.title ?? ref.titleSnapshot}
                     </button>
@@ -1248,7 +1332,7 @@ function DetailPanel({
                         data-testid={`todo-remove-wikiref-${ref.componentId}`}
                         onClick={() => setPendingAction({ kind: 'wikiRef', componentId: ref.componentId })}
                         aria-label={`移除文档 ${comp?.title ?? ref.titleSnapshot}`}
-                        className="text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-danger)] shrink-0"
+                        className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)] hover:text-[var(--color-danger-text)] shrink-0"
                       >
                         <Icon name="close" />
                       </button>
@@ -1258,7 +1342,7 @@ function DetailPanel({
               })}
             </div>
           ) : (
-            <span className="text-xs text-[var(--color-text-tertiary)]">无</span>
+            <span className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)]">无</span>
           )}
           {writable && (
             <div className="mt-2">
@@ -1291,7 +1375,7 @@ function DetailPanel({
             <button
               data-testid="todo-delete-btn"
               onClick={() => setPendingAction({ kind: 'delete' })}
-              className="flex items-center gap-1 text-xs text-[var(--color-danger)] hover:underline"
+              className="flex items-center gap-1 text-[length:var(--type-caption)] text-[var(--color-danger-text)] hover:underline"
             >
               <Icon name="trash" /> 删除此待办
             </button>
@@ -1299,13 +1383,13 @@ function DetailPanel({
         )}
 
         {/* Timestamps */}
-        <div className="text-xs text-[var(--color-text-tertiary)] space-y-0.5">
+        <div className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)] space-y-0.5">
           <div>创建: {parseSafeDate(todo.createdAt)?.toLocaleString() ?? todo.createdAt}</div>
           <div>更新: {parseSafeDate(todo.updatedAt)?.toLocaleString() ?? todo.updatedAt}</div>
           {todo.completedAt && <div>完成: {parseSafeDate(todo.completedAt)?.toLocaleString() ?? todo.completedAt}</div>}
         </div>
 
-        {saving && <div className="text-xs text-[var(--color-text-secondary)] animate-pulse">保存中…</div>}
+        {saving && <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)] animate-pulse">保存中…</div>}
       </div>
     </div>
   )
@@ -1320,7 +1404,7 @@ function DetailPanel({
       data-testid="todo-destructive-confirm"
     >
       <div className="space-y-4 p-4">
-        <p className="text-sm text-[var(--color-text-secondary)]">
+        <p className="text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
           {pendingAction.kind === 'delete'
             ? '此操作将永久删除该待办，且无法撤销。'
             : '此操作将移除当前关联信息。'}
@@ -1330,7 +1414,7 @@ function DetailPanel({
             type="button"
             disabled={confirming}
             onClick={() => setPendingAction(null)}
-            className="border border-[var(--color-border)] px-3 py-1.5 text-xs disabled:opacity-50"
+            className="border border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption)] disabled:opacity-50"
           >
             取消
           </button>
@@ -1339,7 +1423,7 @@ function DetailPanel({
             data-testid="todo-destructive-confirm-submit"
             disabled={confirming}
             onClick={confirmAction}
-            className="bg-[var(--color-danger)] px-3 py-1.5 text-xs text-[var(--color-text-on-color)] disabled:opacity-50"
+            className="bg-[var(--color-danger)] px-3 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-on-color)] disabled:opacity-50"
           >
             {confirming ? '处理中…' : '确认'}
           </button>
@@ -1348,15 +1432,12 @@ function DetailPanel({
     </Modal>
   )
 
-  if (overlay) {
-    return (
-      <>
-        <div className="fixed inset-0 z-20 bg-[var(--palette-bg)]" onClick={onClose} />
-        {panel}
-        {confirmation}
-      </>
-    )
-  }
-
-  return <>{panel}{confirmation}</>
+  return (
+    <>
+      <div className="fixed inset-0 z-20 bg-[var(--palette-bg)] wide:hidden" onClick={onClose} />
+      {panel}
+      {confirmation}
+    </>
+  )
 }
+

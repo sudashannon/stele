@@ -382,11 +382,15 @@ describe('MarkdownViewer', () => {
     render(<MarkdownViewer path="/x/design.md" onClose={vi.fn()} />)
     await waitFor(() => expect(screen.getByText('some text')).toBeTruthy())
 
+    // The thumbnail is wrapped in a real button so the zoom has a keyboard route;
+    // the zoom affordance therefore lives on the control, not on the <img>.
     const thumb = screen.getByRole('img', { name: 'diagram' })
-    expect(thumb.className).toContain('cursor-zoom-in')
+    const zoomControl = thumb.closest('button')
+    expect(zoomControl).toBeTruthy()
+    expect(zoomControl!.className).toContain('cursor-zoom-in')
     expect(screen.queryByTestId('image-lightbox')).toBeNull()
 
-    fireEvent.click(thumb)
+    fireEvent.click(zoomControl!)
 
     const lightbox = screen.getByTestId('image-lightbox')
     expect(lightbox.getAttribute('role')).toBe('dialog')

@@ -67,7 +67,7 @@ export function WorkspaceChips({
         type="button"
         onClick={() => onSelect(null)}
         className={
-          'border px-3 py-1.5 text-[var(--type-caption)] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+          'border px-3 py-1.5 text-[length:var(--type-caption)] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
           (active === null
             ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
             : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]')
@@ -81,10 +81,10 @@ export function WorkspaceChips({
         const typeLabel = workspaceTypeLabel(workspace.type)
         const removeDisabled = disabledRemoveSet.has(workspace.alias)
         const sharedButtonClass =
-          'border px-3 py-1.5 text-[var(--type-caption)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]'
+          'border px-3 py-1.5 text-[length:var(--type-caption)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]'
 
         return (
-          <div key={workspace.alias} className="flex items-stretch shadow-[var(--shadow-1)]">
+          <div key={workspace.alias} className="group relative inline-flex items-center">
             <button
               type="button"
               onClick={() => onSelect(workspace.alias)}
@@ -100,7 +100,7 @@ export function WorkspaceChips({
               {typeLabel && (
                 <span
                   className={
-                    'border px-1.5 py-[1px] text-[var(--type-caption)] leading-none ' +
+                    'border px-1.5 py-[1px] text-[length:var(--type-caption)] leading-none ' +
                     (isActive
                       ? 'border-[color-mix(in_srgb,var(--color-text-on-color)_40%,transparent)] text-[var(--color-text-on-color)]'
                       : 'border-[var(--color-border-subtle)] text-[var(--color-text-tertiary)]')
@@ -110,6 +110,7 @@ export function WorkspaceChips({
                 </span>
               )}
             </button>
+            {/* Delete affordance visible only on hover/focus of the chip group */}
             {onRemove && (
               <button
                 type="button"
@@ -118,16 +119,18 @@ export function WorkspaceChips({
                 onClick={() => onRemove(workspace.alias)}
                 disabled={removeDisabled}
                 className={
-                  sharedButtonClass +
-                  ' border-l-0 px-2 ' +
+                  'absolute -right-1.5 -top-1.5 flex h-[18px] w-[18px] items-center justify-center border bg-[var(--color-surface)] text-[length:var(--type-caption)] leading-none ' +
+                  'opacity-0 ' +
+                  'group-hover:opacity-100 ' +
+                  'group-focus-within:opacity-100 ' +
+                  'focus-visible:opacity-100 ' +
+                  'transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
                   (removeDisabled
-                    ? 'cursor-not-allowed border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-tertiary)]'
-                    : isActive
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)] hover:bg-[var(--color-accent-hover)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]')
+                    ? 'cursor-not-allowed border-[var(--color-border-subtle)] text-[var(--color-text-tertiary)]'
+                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]')
                 }
               >
-                <Icon name="trash" size={14} />
+                <Icon name="trash" size={12} />
               </button>
             )}
           </div>
@@ -137,7 +140,7 @@ export function WorkspaceChips({
       <button
         type="button"
         onClick={() => setAdding(true)}
-        className="inline-flex items-center gap-2 border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+        className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
       >
         <Icon name="plus" size={14} />
         <span>添加 workspace</span>
@@ -150,20 +153,20 @@ export function WorkspaceChips({
             placeholder="alias"
             value={alias}
             onChange={(e) => setAlias(e.target.value)}
-            className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[var(--type-body)] text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-body)] text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           />
           <input
             data-testid="add-ws-path"
             placeholder="path"
             value={path}
             onChange={(e) => setPath(e.target.value)}
-            className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[var(--type-body)] text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-body)] text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           />
           <select
             data-testid="add-ws-type"
             value={sourceType}
             onChange={(e) => setSourceType(e.target.value as '' | WorkspaceSourceType)}
-            className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[var(--type-body)] text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            className="w-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-body)] text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           >
             <option value="">自动识别类型</option>
             <option value="openspec">OpenSpec</option>
@@ -173,7 +176,7 @@ export function WorkspaceChips({
           {error && (
             <div
               data-testid="add-ws-error"
-              className="border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] px-2 py-1.5 text-[var(--type-caption)] leading-snug text-[var(--color-danger)]"
+              className="border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] px-2 py-1.5 text-[length:var(--type-caption)] leading-snug text-[var(--color-danger-text)]"
             >
               {error}
             </div>
@@ -182,7 +185,7 @@ export function WorkspaceChips({
             <button
               type="button"
               onClick={cancel}
-              className="border border-[var(--color-border)] px-3 py-1 text-[var(--type-caption)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+              className="border border-[var(--color-border)] px-3 py-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
             >
               取消
             </button>
@@ -192,7 +195,7 @@ export function WorkspaceChips({
               onClick={submit}
               disabled={!canSubmit}
               className={
-                'border px-3 py-1 text-[var(--type-caption)] font-medium text-[var(--color-text-on-color)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+                'border px-3 py-1 text-[length:var(--type-caption)] font-medium text-[var(--color-text-on-color)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
                 (canSubmit
                   ? 'border-[var(--color-accent)] bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]'
                   : 'cursor-not-allowed border-[var(--color-border)] bg-[var(--color-layer-accent)] text-[var(--color-text-tertiary)]')

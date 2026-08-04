@@ -57,7 +57,7 @@ export function PhaseStepper({ currentPhase, lifecycle }: { currentPhase: string
       {isUnknown && (
         <div
           data-testid="phase-unknown-notice"
-          className="mb-2 flex items-center gap-1 text-xs font-semibold text-[var(--color-warn-text)]"
+          className="mb-2 flex items-center gap-1 text-[length:var(--type-caption)] font-semibold text-[var(--color-warn-text)]"
         >
           <Icon name="warning" size={14} />
           阶段信息缺失
@@ -81,11 +81,11 @@ export function PhaseStepper({ currentPhase, lifecycle }: { currentPhase: string
                         }
                       : undefined
                   }
-                  className={`flex h-7 w-7 items-center justify-center border-2 text-xs font-bold ${STEP_CLASSES[state]}`}
+                  className={`flex h-7 w-7 items-center justify-center border-2 text-[length:var(--type-caption)] font-bold ${STEP_CLASSES[state]}`}
                 >
                   {stepContent(state, i)}
                 </div>
-                <div className="mt-1 text-center text-xs">
+                <div className="mt-1 text-center text-[length:var(--type-caption)]">
                   <div className="font-semibold text-[var(--color-text-primary)]">{p.label}</div>
                   <div
                     className={STATE_TEXT_CLASSES[state]}

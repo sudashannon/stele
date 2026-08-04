@@ -3,7 +3,7 @@ import { fetchSession } from '../api/client'
 import type { SessionTodo, WikiSession } from '../api/types'
 import { useWikiEvents } from '../hooks/useWikiEvents'
 import { Icon } from './icons'
-
+import { StateBlock } from './StateBlock'
 function formatLocalTime(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
@@ -22,7 +22,7 @@ function PathSection({
     <section className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-primary)]">{heading}</h3>
-        <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{paths.length} 项</span>
+        <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"><span className="font-mono tabular-nums">{paths.length}</span> 项</span>
       </div>
       {paths.length === 0 ? (
         <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
@@ -35,7 +35,7 @@ function PathSection({
               <button
                 type="button"
                 onClick={() => onOpenDocument(path)}
-                className="w-full truncate border border-transparent px-2 py-1 text-left text-[length:var(--type-caption)] text-[var(--color-accent)] hover:border-[var(--color-border-subtle)] hover:bg-[var(--color-layer)]"
+                className="w-full truncate border border-transparent px-2 py-1 text-left text-[length:var(--type-caption)] text-[var(--color-accent)] hover:border-[var(--color-border-subtle)] hover:bg-[var(--color-layer)] font-mono"
                 title={path}
               >
                 {path}
@@ -50,7 +50,7 @@ function PathSection({
 
 // The tracker's own vocabulary, in the order a reader scans a plan.
 const TODO_STATUS: Record<string, { label: string; className: string }> = {
-  completed: { label: '已完成', className: 'text-[var(--color-success)]' },
+  completed: { label: '已完成', className: 'text-[var(--color-success-text)]' },
   in_progress: { label: '进行中', className: 'text-[var(--color-accent)]' },
   blocked: { label: '阻塞', className: 'text-[var(--color-warning)]' },
   dropped: { label: '已放弃', className: 'text-[var(--color-text-tertiary)] line-through' },
@@ -118,12 +118,12 @@ function TodoRecord({ session, onImport }: { session: WikiSession; onImport?: (i
           </button>
         )}
         {typeof importState === 'object' && 'imported' in importState && (
-          <span role="status" className="text-[length:var(--type-caption)] text-[var(--color-success)]">
+          <span role="status" className="text-[length:var(--type-caption)] text-[var(--color-success-text)]">
             已导入 {importState.imported} 项
           </span>
         )}
         {typeof importState === 'object' && 'error' in importState && (
-          <span role="alert" className="text-[length:var(--type-caption)] text-[var(--color-danger)]">
+          <span role="alert" className="text-[length:var(--type-caption)] text-[var(--color-danger-text)]">
             {importState.error}
           </span>
         )}
@@ -213,7 +213,7 @@ function ActivityStrip({ days }: { days: [string, number][] }) {
             className="flex min-w-[4.5rem] flex-col gap-0.5 border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-2 py-1 text-[length:var(--type-caption)]"
           >
             <span className="text-[var(--color-text-secondary)]">{day.slice(5)}</span>
-            <span className="tabular-nums text-[var(--color-text-primary)]">{count}</span>
+            <span className="tabular-nums font-mono text-[var(--color-text-primary)]">{count}</span>
             <span
               aria-hidden
               className="h-0.5 bg-[var(--color-accent)]"
@@ -290,10 +290,7 @@ export function SessionDetail({
   if (error === '404') {
     return (
       <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-4" data-testid="session-detail">
-        <div role="alert" className="flex items-center gap-2 text-[length:var(--type-caption)] text-[var(--color-danger)]">
-          <Icon name="warning" size={14} />
-          未找到该会话
-        </div>
+        <StateBlock kind="error" title="未找到该会话" compact />
       </div>
     )
   }
@@ -301,10 +298,7 @@ export function SessionDetail({
   if (error) {
     return (
       <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-4" data-testid="session-detail">
-        <div role="alert" className="flex items-center gap-2 text-[length:var(--type-caption)] text-[var(--color-danger)]">
-          <Icon name="warning" size={14} />
-          会话加载失败，请稍后重试
-        </div>
+        <StateBlock kind="error" title="会话加载失败，请稍后重试" compact />
       </div>
     )
   }
@@ -312,10 +306,7 @@ export function SessionDetail({
   if (!session) {
     return (
       <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-4" data-testid="session-detail">
-        <div role="status" className="flex items-center gap-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-          <Icon name="spinner" size={14} className="animate-spin" />
-          正在加载会话
-        </div>
+        <StateBlock kind="loading" title="正在加载会话" compact />
       </div>
     )
   }
@@ -325,7 +316,7 @@ export function SessionDetail({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-sm font-semibold text-[var(--color-text-primary)]" title={session.title}>{session.title}</h2>
+            <h2 className="truncate text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)]" title={session.title}>{session.title}</h2>
             <span className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-2 py-0.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
               {session.workspace}
             </span>
@@ -340,7 +331,7 @@ export function SessionDetail({
             )}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-            <span>时间范围：{formatLocalTime(session.startedAt)} → {formatLocalTime(session.updatedAt)}</span>
+            <span>时间范围：<span className="font-mono tabular-nums">{formatLocalTime(session.startedAt)}</span> → <span className="font-mono tabular-nums">{formatLocalTime(session.updatedAt)}</span></span>
             {activeDays.length > 1 && (
               <span data-testid="session-active-days" title="有记录活动的天数；起止之间大部分时间并没有人在">
                 活跃 {activeDays.length} 天（非连续）
@@ -368,9 +359,7 @@ export function SessionDetail({
           <section className="space-y-2">
             <h3 className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-primary)]">工具调用</h3>
             {topToolCalls.length === 0 ? (
-              <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-                暂无工具调用记录
-              </div>
+              <StateBlock kind="empty" title="暂无工具调用记录" compact />
             ) : (
               <ul className="space-y-1">
                 {topToolCalls.map(([name, count]) => (
@@ -386,9 +375,7 @@ export function SessionDetail({
           <section className="space-y-2">
             <h3 className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-primary)]">意图</h3>
             {session.intents.length === 0 ? (
-              <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-                暂无意图记录
-              </div>
+              <StateBlock kind="empty" title="暂无意图记录" compact />
             ) : (
               <div className="space-y-2">
                 <ul className="max-h-40 space-y-1 overflow-y-auto border border-[var(--color-border-subtle)] bg-[var(--color-layer)] p-2">

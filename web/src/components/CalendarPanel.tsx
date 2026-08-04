@@ -3,7 +3,7 @@ import { copyText } from '../utils/clipboard'
 import { TYPE_COLORS } from './graphPalette'
 import { useContextMenu } from './ContextMenu'
 import { Icon } from './icons'
-
+import { StateBlock } from './StateBlock'
 interface DayItem {
   id: string
   title: string
@@ -242,13 +242,9 @@ export function CalendarPanel({ onOpen }: CalendarPanelProps) {
       </div>
 
       {monthsLoading ? (
-        <div className="border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-8 text-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-          加载日历中…
-        </div>
+        <StateBlock kind="loading" title="加载日历中…" />
       ) : monthsError ? (
-        <div className="border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-8 text-center text-[length:var(--type-caption)] text-[var(--color-danger)]">
-          加载日历失败
-        </div>
+        <StateBlock kind="error" title="加载日历失败" />
       ) : (
         <div className="grid grid-cols-3 gap-4">{months.map(renderMonth)}</div>
       )}
@@ -258,19 +254,17 @@ export function CalendarPanel({ onOpen }: CalendarPanelProps) {
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="flex items-center gap-2 text-[length:var(--type-body)] font-semibold text-[var(--color-text-primary)]">
               <Icon name="calendar" size={16} />
-              <span>{selected}</span>
+              <span className="font-mono">{selected}</span>
             </h3>
-            <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-              {items.length} 个产物
-            </span>
+            <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"><span className="font-mono tabular-nums">{items.length}</span> 个产物</span>
           </div>
 
           {itemsLoading ? (
-            <p className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">加载中…</p>
+            <StateBlock kind="loading" title="加载中…" compact />
           ) : itemsError ? (
-            <p className="text-[length:var(--type-caption)] text-[var(--color-danger)]">加载当天产物失败</p>
+            <StateBlock kind="error" title="加载当天产物失败" compact />
           ) : groupedItems.length === 0 ? (
-            <p className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">当天无产物</p>
+            <StateBlock kind="empty" title="当天无产物" compact />
           ) : (
             <div className="space-y-4">
               {groupedItems.map(([workspace, workspaceItems]) => (
@@ -279,9 +273,7 @@ export function CalendarPanel({ onOpen }: CalendarPanelProps) {
                     <h4 className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-primary)]">
                       {workspace}
                     </h4>
-                    <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-                      {workspaceItems.length} 项
-                    </span>
+                    <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"><span className="font-mono tabular-nums">{workspaceItems.length}</span> 项</span>
                   </div>
                   <div className="flex flex-col gap-2">
                     {workspaceItems.map((item) => (
@@ -319,11 +311,9 @@ export function CalendarPanel({ onOpen }: CalendarPanelProps) {
           )}
         </div>
       ) : (
-        <div className="border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-8 text-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-          点击日期查看当天产物
-        </div>
+        <StateBlock kind="empty" title="点击日期查看当天产物" />
       )}
-      {copyError && <div role="alert" className="text-center text-[length:var(--type-caption)] text-[var(--color-danger)]">{copyError}</div>}
+      {copyError && <div role="alert" className="text-center text-[length:var(--type-caption)] text-[var(--color-danger-text)]">{copyError}</div>}
       {ctx.renderMenu}
     </div>
   )

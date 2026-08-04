@@ -80,7 +80,7 @@ export function KpiCards({
       value: classification.archived.length,
       testId: 'kpi-archived',
       icon: 'check',
-      chip: 'bg-[var(--color-success-subtle)] text-[var(--color-success)]',
+      chip: 'bg-[var(--color-success-subtle)] text-[var(--color-success-text)]',
     },
     {
       key: 'stuck',
@@ -98,7 +98,7 @@ export function KpiCards({
       testId: 'kpi-verify-failed',
       danger: classification.verifyFailed.length > 0,
       icon: 'warning',
-      chip: 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)]',
+      chip: 'bg-[var(--color-danger-subtle)] text-[var(--color-danger-text)]',
     },
     {
       key: 'incomplete-tasks',
@@ -134,12 +134,12 @@ export function KpiCards({
               <div className={'grid h-[34px] w-[34px] place-items-center ' + c.chip}>
                 <Icon name={c.icon} size={18} />
               </div>
-              <div className={'text-[13px] ' + (c.warn ? 'text-[var(--color-warn-text)] font-semibold' : 'text-[var(--color-text-secondary)]')}>
+              <div className={'text-[length:var(--type-caption)] ' + (c.warn ? 'text-[var(--color-warn-text)] font-semibold' : 'text-[var(--color-text-secondary)]')}>
                 {c.label}
               </div>
-              {isFilterActive && <span className="text-xs font-semibold text-[var(--color-accent)]">筛选中</span>}
+              {isFilterActive && <span className="text-[length:var(--type-caption)] font-semibold text-[var(--color-accent)]">筛选中</span>}
             </div>
-            <div className={'text-[27px] font-bold leading-none tracking-tight ' + (c.warn ? 'text-[var(--color-warn-text)]' : c.danger ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]')}>
+            <div className={'text-[length:var(--type-display)] leading-[var(--leading-display)] font-mono tabular-nums font-bold ' + (c.warn ? 'text-[var(--color-warn-text)]' : c.danger ? 'text-[var(--color-danger-text)]' : 'text-[var(--color-text-primary)]')}>
               {c.value}
             </div>
           </button>

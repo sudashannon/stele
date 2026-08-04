@@ -3,6 +3,7 @@ import { fetchRecent } from '../api/client'
 import type { RecentItem } from '../api/types'
 import { copyText } from '../utils/clipboard'
 import { useContextMenu } from './ContextMenu'
+import { StateBlock } from './StateBlock'
 import { typeBadgeClass } from './graphPalette'
 
 const MINUTE_MS = 60_000
@@ -91,13 +92,13 @@ export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
   }, [])
 
   if (loading && items.length === 0) {
-    return <div className="text-xs text-[var(--color-text-secondary)]">加载中…</div>
+    return <StateBlock kind="loading" title="加载中…" compact />
   }
   if (loadError && items.length === 0) {
-    return <div role="alert" className="text-xs text-[var(--color-danger)]">加载失败</div>
+    return <StateBlock kind="error" title="加载失败" compact />
   }
   if (items.length === 0) {
-    return <div className="text-xs text-[var(--color-text-secondary)]">暂无最近变更</div>
+    return <StateBlock kind="empty" title="暂无最近变更" compact />
   }
 
   return (
@@ -107,11 +108,11 @@ export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
           <section key={group.key} aria-labelledby={`recent-${group.key}`}>
             <h3
               id={`recent-${group.key}`}
-              className="mb-1.5 text-xs font-semibold text-[var(--color-text-secondary)]"
+              className="mb-1.5 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]"
             >
               {group.label}
             </h3>
-            <ul className="space-y-1.5 text-xs">
+            <ul className="space-y-1.5 text-[length:var(--type-body)]">
               {group.items.map((item) => (
                 <li key={item.id}>
                   <button
@@ -125,13 +126,13 @@ export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
                     className="flex w-full items-center gap-2 border border-[var(--color-border)] px-3 py-2 text-left hover:bg-[var(--color-layer)]"
                   >
                     <span
-                      className={`shrink-0 px-1.5 py-0.5 text-xs font-medium ${typeBadgeClass(item.type)}`}
+                      className={`shrink-0 px-1.5 py-0.5 text-[length:var(--type-caption)] font-medium font-mono ${typeBadgeClass(item.type)}`}
                     >
                       {item.type}
                     </span>
                     <span className="flex-1 truncate font-medium">{item.title}</span>
-                    <span className="shrink-0 text-[var(--color-text-secondary)]">{item.workspace}</span>
-                    <span className="shrink-0 tabular-nums text-[var(--color-text-secondary)]">
+                    <span className="shrink-0 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{item.workspace}</span>
+                    <span className="shrink-0 tabular-nums text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
                       {formatRelativeTime(item.updatedAt)}
                     </span>
                   </button>
@@ -141,14 +142,14 @@ export function RecentPanel({ onOpen }: { onOpen?: (path: string) => void }) {
           </section>
         ))}
       </div>
-      {loading && <div className="py-2 text-center text-xs text-[var(--color-text-secondary)]">加载中…</div>}
-      {loadError && <div role="alert" className="py-2 text-center text-xs text-[var(--color-danger)]">加载失败</div>}
-      {copyError && <div role="alert" className="py-2 text-center text-xs text-[var(--color-danger)]">{copyError}</div>}
+      {loading && <StateBlock kind="loading" title="加载中…" compact />}
+      {loadError && <StateBlock kind="error" title="加载失败" compact />}
+      {copyError && <div role="alert" className="py-2 text-center text-[length:var(--type-caption)] text-[var(--color-danger-text)]">{copyError}</div>}
       {hasMore && !loading && (
         <button
           type="button"
           onClick={() => { setLoading(true); load(items.length) }}
-          className="mt-1 w-full py-2 text-xs text-[var(--color-link)] hover:bg-[var(--color-layer)]"
+          className="mt-1 w-full py-2 text-[length:var(--type-caption)] text-[var(--color-link)] hover:bg-[var(--color-layer)]"
         >
           加载更多
         </button>

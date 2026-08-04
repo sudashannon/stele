@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import { fetchLintIssues, fixDeadLinks } from '../api/client'
 import type { LintIssue } from '../api/types'
 import type { FixDeadLinkRequest } from '../api/client'
 import { Icon } from './icons'
-
+import { StateBlock } from './StateBlock'
 const POLL_INTERVAL_MS = 3000
 const MAX_POLL_ATTEMPTS = 20
 
@@ -15,12 +15,21 @@ function parseDeadLinkSuggestion(detail: string): { oldPath: string; newPath: st
   return { oldPath: m[1], newPath: m[2] }
 }
 
+/** Map a lint rule to its severity level for the rule-summary table. */
+function ruleSeverity(rule: string): 'warn' | 'danger' {
+  // dead-link is the only rule that denotes a broken navigation edge;
+  // every other rule is a documentation hygiene warning.
+  if (rule === 'dead-link') return 'danger'
+  return 'warn'
+}
+
 export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
   const [issues, setIssues] = useState<LintIssue[]>([])
   const [gaveUp, setGaveUp] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [fixing, setFixing] = useState(false)
   const [fixError, setFixError] = useState<string | null>(null)
+  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -98,11 +107,20 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
     })
   }
 
+  const toggleRuleExpand = (rule: string) => {
+    setExpandedRules((prev) => {
+      const next = new Set(prev)
+      if (next.has(rule)) next.delete(rule)
+      else next.add(rule)
+      return next
+    })
+  }
+
   if (issues.length === 0) {
     if (!gaveUp) {
-      return <div className="text-xs text-[var(--color-text-secondary)] animate-pulse">索引构建中…</div>
+      return <StateBlock kind="loading" title="索引构建中…" compact />
     }
-    return <div className="text-xs text-[var(--color-text-secondary)]">未发现问题</div>
+    return <StateBlock kind="empty" title="未发现问题" compact />
   }
 
   const groups = new Map<string, LintIssue[]>()
@@ -112,43 +130,97 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
     else groups.set(issue.rule, [issue])
   }
 
+  const hasDeadLinkFix = selected.size > 0
+
   return (
-    <div className="space-y-4 text-xs">
-      {fixError && <div className="border border-[var(--color-warn)] px-2 py-1 text-[var(--color-warn)]">{fixError}</div>}
-      {[...groups.entries()].map(([rule, items]) => (
-        <section key={rule}>
-          <div className="sticky top-0 mb-1 flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] py-1">
-            <span className="shrink-0 text-[var(--color-warn)] font-mono font-semibold whitespace-nowrap">{rule}</span>
-            <span className="text-[var(--color-text-secondary)]">({items.length})</span>
-            {rule === 'dead-link' && selected.size > 0 && (
-              <button
-                type="button"
-                onClick={handleFix}
-                disabled={fixing}
-                className="ml-auto shrink-0 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] px-2 py-0.5 text-[var(--type-caption)] text-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:opacity-50"
-              >
-                {fixing ? '修复中…' : `修复选中 (${selected.size})`}
-              </button>
-            )}
-          </div>
-          <div className="space-y-1">
-            {items.map((i, idx) => {
-              const suggestion = parseDeadLinkSuggestion(i.detail)
+    <div>
+      {fixError && (
+        <div className="mb-2 border border-[var(--color-warn-text)] px-2 py-1 text-[var(--color-warn-text)]">{fixError}</div>
+      )}
+      {hasDeadLinkFix && (
+        <div className="mb-2 flex justify-end">
+          <button
+            type="button"
+            onClick={handleFix}
+            disabled={fixing}
+            className="shrink-0 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] px-2 py-0.5 text-[length:var(--type-caption)] text-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:opacity-50"
+          >
+            {fixing ? '修复中…' : `修复选中 (${selected.size})`}
+          </button>
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse bg-[var(--color-surface)]">
+          <thead>
+            <tr className="sticky top-0 bg-[var(--color-layer)]">
+              <th className="py-1 px-2 text-left text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] border-b border-[var(--color-border)]">
+                规则
+              </th>
+              <th className="py-1 px-2 text-left text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] border-b border-[var(--color-border)]" style={{ width: 80 }}>
+                严重度
+              </th>
+              <th className="py-1 px-2 text-right text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] border-b border-[var(--color-border)]" style={{ width: 80 }}>
+                数量
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...groups.entries()].map(([rule, items]) => {
+              const severity = ruleSeverity(rule)
+              const sevLabel = severity === 'danger' ? '严重' : '警告'
+              const isExpanded = expandedRules.has(rule)
               return (
-                <LintDetail
-                  key={idx}
-                  detail={i.detail}
-                  componentId={i.componentId}
-                  onOpen={onOpen}
-                  hasSuggestion={!!suggestion}
-                  checked={suggestion ? selected.has(i.componentId + '\x00' + suggestion.oldPath) : false}
-                  onToggle={suggestion ? () => toggleSelect(i.componentId, suggestion.oldPath) : undefined}
-                />
+                <React.Fragment key={rule}>
+                  <tr
+                    className="cursor-pointer border-t border-[var(--color-border-subtle)] hover:bg-[var(--color-layer)]"
+                    onClick={() => toggleRuleExpand(rule)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleRuleExpand(rule) } }}
+                  >
+                    <td className="py-1 px-2 font-mono text-[length:var(--type-body)] font-medium whitespace-nowrap">
+                      {rule}
+                    </td>
+                    <td className={
+                      'py-1 px-2 text-[length:var(--type-caption)] ' +
+                      (severity === 'danger'
+                        ? 'text-[var(--color-danger-text)]'
+                        : 'text-[var(--color-warn-text)]')
+                    }>
+                      {sevLabel}
+                    </td>
+                    <td className="py-1 px-2 text-right font-mono tabular-nums text-[length:var(--type-body)]">
+                      {items.length}
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={3} className="px-2 py-1">
+                        <div className="space-y-1">
+                          {items.map((i, idx) => {
+                            const suggestion = parseDeadLinkSuggestion(i.detail)
+                            return (
+                              <LintDetail
+                                key={idx}
+                                detail={i.detail}
+                                componentId={i.componentId}
+                                onOpen={onOpen}
+                                hasSuggestion={!!suggestion}
+                                checked={suggestion ? selected.has(i.componentId + '\x00' + suggestion.oldPath) : false}
+                                onToggle={suggestion ? () => toggleSelect(i.componentId, suggestion.oldPath) : undefined}
+                              />
+                            )
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               )
             })}
-          </div>
-        </section>
-      ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -182,7 +254,7 @@ function LintDetail({
 
   if (!match) {
     return (
-      <div className="flex items-center min-w-0 text-[var(--color-text-secondary)] pl-1" title={decodedDetail}>
+      <div className="flex items-center min-w-0 max-w-[var(--measure)] text-[length:var(--type-caption)] leading-[var(--leading-caption)] text-[var(--color-text-secondary)] pl-1" title={decodedDetail}>
         {hasSuggestion && <input type="checkbox" checked={checked} onChange={onToggle} className="shrink-0 mr-1" />}
         <span className="truncate">{decodedDetail}</span>
         {sourceButton}
@@ -191,10 +263,10 @@ function LintDetail({
   }
   const [, prefix, path, suffix, suggestion] = match
   return (
-    <div className="flex items-center min-w-0 text-[var(--color-text-secondary)] pl-1 flex-wrap gap-x-1" title={decodedDetail}>
+    <div className="flex items-center min-w-0 max-w-[var(--measure)] text-[length:var(--type-caption)] leading-[var(--leading-caption)] text-[var(--color-text-secondary)] pl-1 flex-wrap gap-x-1" title={decodedDetail}>
       {hasSuggestion && <input type="checkbox" checked={checked} onChange={onToggle} className="shrink-0 mr-1" />}
       <span className="shrink-0 whitespace-nowrap">{prefix}</span>
-      <span className="min-w-0 truncate" dir="rtl" style={{ textAlign: 'left' }}>
+      <span className="min-w-0 truncate font-mono" dir="rtl" style={{ textAlign: 'left' }}>
         {safeDecode(path)}
       </span>
       <span className="shrink-0 whitespace-nowrap">{suffix}</span>

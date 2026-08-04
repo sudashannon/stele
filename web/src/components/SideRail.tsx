@@ -102,7 +102,7 @@ function RailHint({ label }: { label: string }) {
   return (
     <span
       className={
-        // `text-[length:…]` is required: `text-[var(--type-caption)]` compiles
+        // `text-[length:…]` is required: `text-[length:var(--type-caption)]` compiles
         // to a *color* utility (Tailwind cannot tell a size token from a color
         // one), which overrode the color below and left the hint inheriting the
         // button's white text — an empty white tooltip next to the active item.

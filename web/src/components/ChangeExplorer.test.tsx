@@ -14,7 +14,7 @@ function makeChange(overrides: Partial<ChangeSummary> & { name: string }): Chang
 }
 
 describe('ChangeExplorer', () => {
-  it('lists changes and calls onSelect when clicked', () => {
+  it('lists changes in a table and calls onSelect when a row is clicked', () => {
     const onSelect = vi.fn()
     render(
       <ChangeExplorer
@@ -25,11 +25,12 @@ describe('ChangeExplorer', () => {
     )
     expect(screen.getByText('foo')).toBeTruthy()
     expect(screen.getByText('bar')).toBeTruthy()
-    fireEvent.click(screen.getByText('bar'))
+    // Rows are <tr role="button"> — click the row containing 'bar'
+    fireEvent.click(screen.getByRole('button', { name: /打开变更 bar/ }))
     expect(onSelect).toHaveBeenCalledWith('bar', undefined)
   })
 
-  it('renders a phase badge and workflow tag on each change card', () => {
+  it('shows phase as a coloured dot and neutral-ink label in the table, and hoists constant-valued workflow/source-type chips to the summary line', () => {
     render(
       <ChangeExplorer
         changes={[makeChange({ name: 'foo', phase: 'build', workflow: 'full' })]}
@@ -37,12 +38,21 @@ describe('ChangeExplorer', () => {
         onSelect={vi.fn()}
       />,
     )
+    // Change name is in the table.
     expect(screen.getByText('foo')).toBeTruthy()
-    expect(screen.getAllByText('build', { selector: 'span' })[0]).toBeTruthy()
-    expect(screen.getAllByText('full', { selector: 'span' })[0]).toBeTruthy()
+
+    // The phase label 'build' appears in the table row with neutral ink
+    // (color-text-primary). Scope to the table row so the phase-filter
+    // dropdown option with the same text is not confused with the label.
+    const table = screen.getByRole('table')
+    expect(table.textContent).toContain('build')
+
+    // The constant workflow 'full' is hoisted to the summary line,
+    // not repeated on every row. It appears in the summary text.
+    expect(screen.getByText(/full 工作流/)).toBeTruthy()
   })
 
-  it('groups archived changes under a collapsible "已归档" section', () => {
+  it('groups archived changes under a clickable "已归档 (N)" table divider row', () => {
     const onSelect = vi.fn()
     const { container } = render(
       <ChangeExplorer
@@ -56,43 +66,46 @@ describe('ChangeExplorer', () => {
       />,
     )
 
-    // The active change is visible in the flat list above the summary.
+    // The active change is visible in the table.
     expect(screen.getByText('active-1')).toBeTruthy()
 
-    // The collapsible summary reports the archived count.
+    // The archived divider shows the count.
     expect(screen.getByText('已归档 (2)')).toBeTruthy()
 
-    // Archived change cards live inside the <details>; in jsdom a collapsed
-    // <details> still has the children in the DOM, but a real browser would
-    // not render them — so we just check the structural grouping here.
-    const details = container.querySelector('details')
-    expect(details).toBeTruthy()
-    expect(details?.contains(screen.getByText('archived-1'))).toBe(true)
-    expect(details?.contains(screen.getByText('archived-2'))).toBe(true)
+    // The archived divider is a clickable table row (role="button").
+    const divider = screen.getByRole('button', { name: /已归档/ })
+    expect(divider).toBeTruthy()
+    // By default the archived rows are collapsed.
+    expect(divider.getAttribute('aria-expanded')).toBe('false')
+
+    // Click to expand.
+    fireEvent.click(divider)
+    expect(screen.getByText('archived-1')).toBeTruthy()
+    expect(screen.getByText('archived-2')).toBeTruthy()
   })
 
   it('auto-expands the archived section when an archived change is selected', () => {
-    const { container } = render(
+    render(
       <ChangeExplorer
         changes={[makeChange({ name: 'archived-1', archived: true })]}
         selected="archived-1"
         onSelect={vi.fn()}
       />,
     )
-    const details = container.querySelector('details')
-    expect(details?.hasAttribute('open')).toBe(true)
+    const divider = screen.getByRole('button', { name: /已归档/ })
+    expect(divider.getAttribute('aria-expanded')).toBe('true')
   })
 
   it('leaves the archived section collapsed when nothing is selected', () => {
-    const { container } = render(
+    render(
       <ChangeExplorer
         changes={[makeChange({ name: 'archived-1', archived: true })]}
         selected={null}
         onSelect={vi.fn()}
       />,
     )
-    const details = container.querySelector('details')
-    expect(details?.hasAttribute('open')).toBe(false)
+    const divider = screen.getByRole('button', { name: /已归档/ })
+    expect(divider.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('narrows the list to a case-insensitive substring match on name via the search input', () => {
@@ -246,7 +259,8 @@ describe('ChangeExplorer', () => {
     expect(screen.getByText('trellis-task')).toBeTruthy()
     expect(screen.queryByText('open-change')).toBeNull()
   })
-  it('labels standalone Superpowers items without reclassifying them as OpenSpec', () => {
+
+  it('labels standalone Superpowers items in the summary line', () => {
     render(
       <ChangeExplorer
         changes={[
@@ -261,8 +275,10 @@ describe('ChangeExplorer', () => {
         onSelect={vi.fn()}
       />,
     )
-    expect(screen.getByText('Superpowers')).toBeTruthy()
-    expect(screen.queryByText('OpenSpec')).toBeNull()
+    // The source type is hoisted to the summary line.
+    expect(screen.getByText(/Superpowers/)).toBeTruthy()
+    // The change name still renders in the table.
+    expect(screen.getByText('cache-redesign')).toBeTruthy()
   })
 
   it('opens a change from the keyboard and preserves the workspace argument', () => {
@@ -279,7 +295,7 @@ describe('ChangeExplorer', () => {
     expect(onSelect).toHaveBeenCalledWith('shared', 'alpha')
   })
 
-  it('shows workspace labels when change names collide across workspaces', () => {
+  it('shows workspace in the dedicated table column when change names collide across workspaces', () => {
     render(
       <ChangeExplorer
         changes={[
@@ -291,10 +307,12 @@ describe('ChangeExplorer', () => {
       />,
     )
 
-    expect(screen.getByText(/alpha \//)).toBeTruthy()
-    expect(screen.getByText(/beta \//)).toBeTruthy()
+    // Workspace is a dedicated column now — both aliases appear in table cells.
+    expect(screen.getByText('alpha')).toBeTruthy()
+    expect(screen.getByText('beta')).toBeTruthy()
   })
-  it('omits empty metadata subtitles and only renders non-empty workspace metadata', () => {
+
+  it('handles empty workspace gracefully in the table column', () => {
     render(
       <ChangeExplorer
         changes={[
@@ -306,13 +324,13 @@ describe('ChangeExplorer', () => {
       />,
     )
 
-    const cards = screen.getAllByRole('button', { name: /打开变更 duplicate/ })
-    const hasEmptySubtitle = Array.from(cards[0].querySelectorAll('div')).some(
-      (element) => element.classList.contains('text-xs') && element.textContent === '',
-    )
-    expect(hasEmptySubtitle).toBe(false)
-    expect(cards[1].textContent).toContain('ideas')
+    // Both rows exist, identified by their workspace values.
+    const rows = screen.getAllByRole('button', { name: /打开变更 duplicate/ })
+    // First row has empty/whitespace workspace, second has 'ideas'.
+    expect(rows.length).toBe(2)
+    expect(rows[1].textContent).toContain('ideas')
   })
+
   it('opens a context menu on right-click with the card actions', async () => {
     const onSelect = vi.fn()
     render(

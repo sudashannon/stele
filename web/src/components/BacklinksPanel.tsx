@@ -3,18 +3,19 @@ import { useEffect, useState } from 'react'
 import { fetchSessions, fetchWikiComponent } from '../api/client'
 import type { WikiEdge, WikiSession } from '../api/types'
 import { Icon } from './icons'
+import { StateBlock } from './StateBlock'
 import { SessionBacklinkList } from './SessionBacklinks'
 
 const KIND_BADGE_STYLES: Record<string, string> = {
   implements: 'border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]',
   references: 'border-[var(--color-purple)] bg-[var(--color-purple-subtle)] text-[var(--color-purple)]',
-  generates: 'border-[var(--color-success)] bg-[var(--color-success-subtle)] text-[var(--color-success)]',
+  generates: 'border-[var(--color-success)] bg-[var(--color-success-subtle)] text-[var(--color-success-text)]',
 }
 
 function EdgeKindBadge({ kind }: { kind: string }) {
   return (
     <span
-      className={`shrink-0 border px-1.5 py-0.5 text-[var(--type-caption)] font-medium ${KIND_BADGE_STYLES[kind] ?? 'border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-secondary)]'}`}
+      className={`shrink-0 border px-1.5 py-0.5 text-[length:var(--type-caption)] font-medium ${KIND_BADGE_STYLES[kind] ?? 'border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-secondary)]'}`}
     >
       {kind}
     </span>
@@ -28,7 +29,7 @@ function formatLocalTime(value: string): string {
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-2 border border-[var(--color-border-subtle)] bg-[var(--color-layer)] p-3 text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+    <div className="flex items-center gap-2 border border-[var(--color-border-subtle)] bg-[var(--color-layer)] p-3 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
       <Icon name="info" className="shrink-0" />
       <span>{text}</span>
     </div>
@@ -48,7 +49,7 @@ function EdgeSection({
 }) {
   return (
     <section className="space-y-2">
-      <div className="text-[var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
+      <div className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
         {heading}（{edges.length} 处引用）
       </div>
       {edges.length === 0 ? (
@@ -59,7 +60,7 @@ function EdgeSection({
             const path = edge[pathKey]
             return (
               <li key={`${edge.kind}-${path}-${index}`} className="flex items-start gap-2">
-                <span className="min-w-0 flex-1 break-all text-[var(--type-caption)] text-[var(--color-accent)]" title={path}>
+                <span className="min-w-0 flex-1 break-all text-[length:var(--type-caption)] text-[var(--color-accent)] font-mono" title={path}>
                   {path}
                 </span>
                 <EdgeKindBadge kind={edge.kind} />
@@ -102,18 +103,12 @@ export function BacklinksPanel({ componentId }: { componentId: string }) {
   if (data === null) {
     if (loadError) {
       return (
-        <div role="alert" className="flex items-center gap-2 text-[var(--type-caption)] text-[var(--color-danger)]">
-          <Icon name="warning" size={14} />
-          引用加载失败，请稍后重试
-        </div>
+        <StateBlock kind="error" title="引用加载失败，请稍后重试" compact />
       )
     }
 
     return (
-      <div role="status" className="flex items-center gap-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]">
-        <Icon name="spinner" size={14} className="animate-spin" />
-        正在加载引用
-      </div>
+      <StateBlock kind="loading" title="正在加载引用" compact />
     )
   }
 
@@ -121,7 +116,7 @@ export function BacklinksPanel({ componentId }: { componentId: string }) {
   const sessionBacklinks = data.backlinks.filter((edge) => edge.source === 'session')
 
   return (
-    <div className="space-y-4 text-[var(--type-caption)]">
+    <div className="space-y-4 text-[length:var(--type-caption)]">
       <EdgeSection
         heading="引用（forward）"
         edges={data.forward}

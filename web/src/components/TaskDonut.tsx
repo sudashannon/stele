@@ -15,7 +15,7 @@ export function TaskDonut({ completed, total }: { completed: number; total: numb
           </div>
         </div>
       </div>
-      <div data-testid="donut-fraction" className="mt-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+      <div data-testid="donut-fraction" className="mt-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
         {completed}/{total} 任务完成
       </div>
     </div>

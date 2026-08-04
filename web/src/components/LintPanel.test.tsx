@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { LintPanel } from './LintPanel'
 
@@ -30,6 +30,9 @@ describe('LintPanel', () => {
       ],
     } as Response)
     render(<LintPanel />)
+    await waitFor(() => expect(screen.getByText(/dead-link/)).toBeTruthy())
+    // Expand the dead-link rule row to reveal detail text
+    fireEvent.click(screen.getByText(/dead-link/))
     await waitFor(() => expect(screen.getByText('link to')).toBeTruthy())
     expect(screen.getByText(longPath)).toBeTruthy()
     expect(screen.getByText('has no matching component')).toBeTruthy()
@@ -50,6 +53,9 @@ describe('LintPanel', () => {
       ],
     } as Response)
     render(<LintPanel />)
+    await waitFor(() => expect(screen.getByText(/dead-link/)).toBeTruthy())
+    // Expand the dead-link rule row to reveal detail text
+    fireEvent.click(screen.getByText(/dead-link/))
     await waitFor(() => expect(screen.getByText('link to')).toBeTruthy())
     expect(screen.getByText(decodedPath)).toBeTruthy()
     expect(screen.queryByText(encodedPath)).toBeFalsy()
@@ -68,6 +74,9 @@ describe('LintPanel', () => {
       ],
     } as Response)
     render(<LintPanel />)
+    await waitFor(() => expect(screen.getByText(/dead-link/)).toBeTruthy())
+    // Expand the dead-link rule row to reveal detail text
+    fireEvent.click(screen.getByText(/dead-link/))
     await waitFor(() => expect(screen.getByText('link to')).toBeTruthy())
     expect(screen.getByText(malformedPath)).toBeTruthy()
   })

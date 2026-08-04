@@ -68,9 +68,9 @@ function DiagramFallback({
 }) {
   return (
     <div className="space-y-2" role="status" aria-live="polite">
-      <div className="text-[var(--type-caption)] font-medium text-[var(--color-danger)]">{message}</div>
+      <div className="text-[length:var(--type-caption)] font-medium text-[var(--color-danger-text)]">{message}</div>
       {detail && (
-        <div className="font-mono text-[var(--type-caption)] break-all text-[var(--color-text-secondary)]">
+        <div className="font-mono text-[length:var(--type-caption)] break-all text-[var(--color-text-secondary)]">
           {detail}
         </div>
       )}
@@ -78,12 +78,12 @@ function DiagramFallback({
         <button
           type="button"
           onClick={onReload}
-          className="border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+          className="border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
         >
           刷新页面
         </button>
       )}
-      <pre className="max-h-[200px] overflow-auto bg-[var(--color-layer)] p-3 font-mono text-[var(--type-caption)] whitespace-pre-wrap text-[var(--color-text-primary)]">
+      <pre className="max-h-[200px] overflow-auto bg-[var(--color-layer)] p-3 font-mono text-[length:var(--type-caption)] whitespace-pre-wrap text-[var(--color-text-primary)]">
         {code}
       </pre>
     </div>
@@ -92,7 +92,7 @@ function DiagramFallback({
 
 function DiagramLoading({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]" role="status">
+    <div className="flex items-center gap-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]" role="status">
       <span>{label}</span>
     </div>
   )

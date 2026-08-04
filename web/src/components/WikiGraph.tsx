@@ -6,7 +6,7 @@ import { GraphFilters } from './GraphFilters'
 import { useWikiEvents } from '../hooks/useWikiEvents'
 import { Modal } from './Modal'
 import { Icon } from './icons'
-import { COMMUNITY_COLORS, TYPE_COLORS } from './graphPalette'
+import { communityColor, COMMUNITY_REST_COLOR, TYPE_COLORS } from './graphPalette'
 
 
 type RGB = readonly [number, number, number]
@@ -65,6 +65,14 @@ function createCytoscapePalette() {
     generates: serializeRGB(warn),
   }
 
+  // Read --viz-1…--viz-8 from the token layer so the graph palette matches
+  // the timeline and filter chips. Fallback hex values mirror styles.css.
+  const vizFallbacks = ['#0a2f7a', '#1247a8', '#1a5fd0', '#4180e0', '#6f9fe9', '#9dbef1', '#c3d7f7', '#e0eafc']
+  const vizColors = vizFallbacks.map((fallback, i) =>
+    readColorToken(styles, `--viz-${i + 1}`, fallback),
+  )
+  const vizRest = readColorToken(styles, '--viz-rest', '#b6c0ca')
+
   return {
     accent: serializeRGB(accent),
     layer: serializeRGB(layer),
@@ -72,20 +80,8 @@ function createCytoscapePalette() {
     textPrimary: serializeRGB(textPrimary),
     textSecondary: serializeRGB(textSecondary),
     typeColors,
-    communityColors: [
-      accent,
-      success,
-      danger,
-      warn,
-      mixRGB(accent, success, 0.6),
-      mixRGB(accent, danger, 0.6),
-      mixRGB(success, warn, 0.6),
-      mixRGB(danger, warn, 0.6),
-      mixRGB(accent, surface, 0.7),
-      mixRGB(success, surface, 0.7),
-      mixRGB(danger, surface, 0.7),
-      mixRGB(warn, surface, 0.7),
-    ].map(serializeRGB),
+    vizColors: vizColors.map(serializeRGB),
+    vizRest: serializeRGB(vizRest),
     edgeColors,
   }
 }
@@ -282,6 +278,13 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     [communityCounts],
   )
 
+  const communityRank = useMemo(() => {
+    const sorted = Object.entries(communityCounts)
+      .sort(([, a], [, b]) => b - a)
+      .map(([idStr]) => Number(idStr))
+    return new Map(sorted.map((id, rank) => [id, rank]))
+  }, [communityCounts])
+
   const effectiveCommunityLabels = useMemo(() => {
     const labels: Record<string, string> = { ...communityLabels }
     topCommunities.forEach((id) => {
@@ -376,7 +379,9 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           const communityId = communities[component.id]
           const commColor =
             communityId !== null && communityId !== undefined && communityId >= 0
-              ? palette.communityColors[communityId % palette.communityColors.length]
+              ? (communityRank.has(communityId)
+                  ? palette.vizColors[communityRank.get(communityId)!]
+                  : palette.vizRest)
               : palette.surface
           return {
             data: {
@@ -557,7 +562,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   }, [activeCommunity])
 
   return (
-    <div className="flex h-[calc(100vh-160px)] min-h-[500px] w-full flex-col">
+    <div className="flex h-full min-h-[500px] w-full flex-col">
       {components.length > 0 && (
         <GraphFilters
           workspaces={workspaces}
@@ -574,7 +579,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
       <div className="relative flex-1 border-x border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         {components.length > 0 && (
           <div className="absolute left-3 top-3 z-10 flex max-w-[28rem] flex-col gap-2">
-            <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-sm">
+            <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
               <label className="block text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)]" htmlFor="wiki-graph-search">
                 语义搜索
               </label>
@@ -595,7 +600,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
               <button
                 type="button"
                 onClick={() => cyRef.current?.fit(undefined, 30)}
@@ -636,7 +641,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         {hover && (
           <div
             data-testid="wiki-graph-tooltip"
-            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm"
+            className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-[var(--shadow-overlay)]"
             style={{ left: hover.x, top: hover.y - 10 }}
           >
             {hover.title}
@@ -663,7 +668,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           <>
             <div
               data-testid="wiki-graph-legend"
-              className="absolute bottom-3 left-3 z-10 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm"
+              className="absolute bottom-3 left-3 z-10 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
             >
               <div className="mb-2 font-semibold text-[var(--color-text-secondary)]">类型</div>
               <ul className="space-y-1">
@@ -679,7 +684,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             {topCommunities.length > 0 && (
               <div
                 data-testid="wiki-graph-community-legend"
-                className="absolute bottom-3 right-3 z-10 w-60 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm"
+                className="absolute bottom-3 right-3 z-10 w-60 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <span className="font-semibold text-[var(--color-text-secondary)]">社区</span>
@@ -695,7 +700,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                   )}
                 </div>
                 <ul className="space-y-1">
-                  {topCommunities.map((id) => {
+                  {topCommunities.map((id, rank) => {
                     const active = activeCommunity === id
                     return (
                       <li key={id}>
@@ -713,7 +718,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                           <span className="flex min-w-0 items-center gap-2">
                             <span
                               className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: COMMUNITY_COLORS[id % COMMUNITY_COLORS.length] }}
+                              style={{ backgroundColor: communityColor(rank) }}
                             />
                             <span className="truncate">{labelForCommunity(id, effectiveCommunityLabels)}</span>
                           </span>
@@ -722,6 +727,18 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                       </li>
                     )
                   })}
+                  {Object.keys(communityCounts).length > topCommunities.length && (
+                    <li
+                      data-testid="wiki-graph-community-legend-item"
+                      className="flex items-center gap-2 px-2 py-1"
+                    >
+                      <span
+                        className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: COMMUNITY_REST_COLOR }}
+                      />
+                      <span className="truncate">其他 {Object.keys(communityCounts).length - topCommunities.length} 个社区</span>
+                    </li>
+                  )}
                 </ul>
               </div>
             )}
@@ -739,7 +756,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           <div className="space-y-3 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
             {overviewLoading && <p>正在加载社区综述…</p>}
             {!overviewLoading && overviewError && (
-              <p className="text-[var(--color-danger)]">{overviewError}</p>
+              <p className="text-[var(--color-danger-text)]">{overviewError}</p>
             )}
             {!overviewLoading && !overviewError && overviewBody && (
               <div data-testid="community-overview-body" className="whitespace-pre-wrap leading-6">

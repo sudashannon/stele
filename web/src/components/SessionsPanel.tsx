@@ -73,9 +73,9 @@ function CountBadge({ label, value, testId }: { label: string; value: number; te
   return (
     <span
       data-testid={testId}
-      className="shrink-0 border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-1.5 py-0.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)] tabular-nums"
+      className="shrink-0 border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-1.5 py-0.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
     >
-      {label} {value}
+      {label} <span className="font-mono tabular-nums">{value}</span>
     </span>
   )
 }
@@ -208,13 +208,13 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="搜索标题、意图或文档路径"
           aria-label="搜索会话"
-          className="min-w-0 flex-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-accent)] focus:outline-none"
+          className="min-w-0 flex-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-[length:var(--type-body)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-accent)] focus:outline-none"
         />
         <select
           value={workspace}
           onChange={(event) => setWorkspace(event.target.value)}
           aria-label="按工作区筛选"
-          className="border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
+          className="border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-body)] text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
         >
           <option value="">全部工作区</option>
           {workspaces.map((alias) => (
@@ -226,7 +226,7 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
             value={source}
             onChange={(event) => setSource(event.target.value)}
             aria-label="按 agent 运行时筛选"
-            className="border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
+            className="border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-body)] text-[var(--color-text-primary)] focus:border-[var(--color-accent)] focus:outline-none"
           >
             <option value="">全部运行时</option>
             {sources.map((name) => (
@@ -234,7 +234,7 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
             ))}
           </select>
         )}
-        <label className="flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs text-[var(--color-text-secondary)]">
+        <label className="flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
           <input
             type="checkbox"
             checked={producedOnly}
@@ -242,7 +242,7 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
           />
           仅有产出或改动
         </label>
-        <label className="flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs text-[var(--color-text-secondary)]">
+        <label className="flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
           <input
             type="checkbox"
             checked={unfinishedOnly}
@@ -256,23 +256,23 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
           onClick={() => void handleRefresh()}
           disabled={refreshing}
           data-testid="sessions-refresh"
-          className="flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)]"
+          className="flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-[length:var(--type-caption)] text-[var(--color-accent)] hover:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)]"
         >
           <Icon name="refresh" size={13} className={refreshing ? 'animate-spin' : undefined} />
           重扫
         </button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[var(--color-text-secondary)]">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
         <span data-testid="sessions-summary" className="tabular-nums">
-          会话 {visible.length}
-          {visible.length !== sessions.length && ` / ${sessions.length}`}
+          会话 <span className="font-mono">{visible.length}</span>
+          {visible.length !== sessions.length && <> / <span className="font-mono">{sessions.length}</span></>}
         </span>
-        <span className="tabular-nums">产出或改动 {stats.produced} 篇</span>
-        <span className="tabular-nums">读取 {stats.read} 篇</span>
+        <span className="tabular-nums">产出或改动 <span className="font-mono">{stats.produced}</span> 篇</span>
+        <span className="tabular-nums">读取 <span className="font-mono">{stats.read}</span> 篇</span>
         {stats.unfinished > 0 && (
           <span data-testid="sessions-unfinished-count" className="tabular-nums text-[var(--color-warning)]">
-            {stats.unfinished} 个会话留有未完成任务
+            <span className="font-mono">{stats.unfinished}</span> 个会话留有未完成任务
           </span>
         )}
         {filtersActive && (
@@ -282,30 +282,30 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
         )}
       </div>
 
-      {notice && <div role="status" className="text-xs text-[var(--color-success)]">{notice}</div>}
-      {error && <div role="alert" className="text-xs text-[var(--color-danger)]">{error}</div>}
+      {notice && <div role="status" className="text-[length:var(--type-caption)] text-[var(--color-success-text)]">{notice}</div>}
+      {error && <div role="alert" className="text-[length:var(--type-caption)] text-[var(--color-danger-text)]">{error}</div>}
 
       {loading && sessions.length === 0 && (
-        <div role="status" className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <div role="status" className="flex items-center gap-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
           <Icon name="spinner" size={14} className="animate-spin" />
           正在加载会话
         </div>
       )}
 
       {!loading && !enabled && (
-        <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
           会话记忆层未启用：未配置会话记录目录，或 <code>--sessions-dir</code> 指向的目录不存在。
         </div>
       )}
 
       {!loading && enabled && sessions.length === 0 && (
-        <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
           暂无已索引的会话。只有工作目录落在已注册 workspace 内的会话才会入图。
         </div>
       )}
 
       {!loading && sessions.length > 0 && visible.length === 0 && (
-        <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div className="border border-[var(--color-border-subtle)] bg-[var(--color-layer)] px-3 py-2 text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
           没有匹配的会话。
         </div>
       )}
@@ -315,7 +315,7 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
           <section key={group.dayStart} aria-labelledby={`sessions-day-${group.dayStart}`}>
             <h3
               id={`sessions-day-${group.dayStart}`}
-              className="mb-1.5 text-xs font-semibold text-[var(--color-text-secondary)]"
+              className="mb-1.5 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]"
             >
               {group.label}
             </h3>
@@ -337,7 +337,7 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
                         { id: 'copy-path', label: '复制会话路径', run: () => handleCopy(session.path) },
                         { id: 'copy-title', label: '复制标题', run: () => handleCopy(session.title) },
                       ])}
-                      className="w-full space-y-1 border border-[var(--color-border)] px-3 py-2 text-left text-xs hover:bg-[var(--color-layer)]"
+                      className="w-full space-y-1 border border-[var(--color-border)] px-3 py-2 text-left text-[length:var(--type-body)] hover:bg-[var(--color-layer)]"
                     >
                       <span className="flex items-center gap-2">
                         <span className="flex-1 truncate font-medium text-[var(--color-text-primary)]" title={session.title}>
@@ -352,20 +352,20 @@ export function SessionsPanel({ onOpen }: { onOpen?: (path: string) => void }) {
                             title="结束时仍未完成的任务"
                             className="shrink-0 border border-[var(--color-warning)] px-1.5 py-0.5 text-[length:var(--type-caption)] text-[var(--color-warning)] tabular-nums"
                           >
-                            未完成 {open}
+                            未完成 <span className="font-mono">{open}</span>
                           </span>
                         )}
-                        <span className="shrink-0 text-[var(--color-text-secondary)]">{session.workspace || '—'}</span>
-                        <span className="shrink-0 tabular-nums text-[var(--color-text-secondary)]">
+                        <span className="shrink-0 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{session.workspace || '—'}</span>
+                        <span className="shrink-0 tabular-nums text-[length:var(--type-caption)] text-[var(--color-text-secondary)] font-mono">
                           {formatClock(session.updatedAt)}
                         </span>
                       </span>
                       <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-                        <span className="tabular-nums">{session.userTurns} 轮</span>
-                        {days > 1 && <span className="tabular-nums" title="有记录活动的天数">活跃 {days} 天</span>}
-                        <span className="tabular-nums">{totalToolCalls(session)} 次工具</span>
+                        <span className="tabular-nums"><span className="font-mono">{session.userTurns}</span> 轮</span>
+                        {days > 1 && <span className="tabular-nums" title="有记录活动的天数">活跃 <span className="font-mono">{days}</span> 天</span>}
+                        <span className="tabular-nums"><span className="font-mono">{totalToolCalls(session)}</span> 次工具</span>
                         {tools.length > 0 && (
-                          <span className="truncate">
+                          <span className="truncate font-mono">
                             {tools.map(([name, count]) => `${name} ${count}`).join(' · ')}
                           </span>
                         )}

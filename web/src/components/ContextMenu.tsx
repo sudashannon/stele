@@ -154,8 +154,8 @@ export function ContextMenu({ items, x, y, onClose }: Props) {
               onClose()
             }}
             className={
-              'flex w-full items-center gap-2 px-3 py-2 text-left text-[var(--type-caption)] transition-colors enabled:hover:bg-[var(--color-layer)] enabled:focus-visible:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:opacity-40 ' +
-              (item.danger ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-primary)]')
+              'flex w-full items-center gap-2 px-3 py-2 text-left text-[length:var(--type-caption)] transition-colors enabled:hover:bg-[var(--color-layer)] enabled:focus-visible:bg-[var(--color-layer)] disabled:cursor-not-allowed disabled:opacity-40 ' +
+              (item.danger ? 'text-[var(--color-danger-text)]' : 'text-[var(--color-text-primary)]')
             }
           >
             {iconName ? <Icon name={iconName} className="shrink-0" /> : <span className="w-4 shrink-0" aria-hidden="true" />}

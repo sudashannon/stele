@@ -409,9 +409,16 @@ describe('WikiGraph', () => {
     const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
       elements: Array<{ data: { id: string; commColor?: string; kind?: string } }>
     }
-    expect(call.elements.find((element) => element.data.id === '/x/a.md')?.data.commColor).toBe('rgb(15, 98, 254)')
-    expect(call.elements.find((element) => element.data.id === '/x/b.md')?.data.commColor).toBe('rgb(15, 98, 254)')
-    expect(call.elements.find((element) => element.data.id === '/x/c.md')?.data.commColor).toBe('rgb(36, 161, 72)')
+    // Community colour is now rank-based on the --viz-* ramp rather than a
+    // per-type hue, so the two members of the top community share --viz-1 and
+    // the next community takes --viz-2. The contract under test is that members
+    // of one community agree and different communities differ.
+    const colorA = call.elements.find((element) => element.data.id === '/x/a.md')?.data.commColor
+    const colorB = call.elements.find((element) => element.data.id === '/x/b.md')?.data.commColor
+    const colorC = call.elements.find((element) => element.data.id === '/x/c.md')?.data.commColor
+    expect(colorA).toBeTruthy()
+    expect(colorB).toBe(colorA)
+    expect(colorC).not.toBe(colorA)
 
     await waitFor(() => expect(screen.getByTestId('wiki-graph-community-legend')).toBeTruthy())
     expect(screen.getAllByText('发布流程').length).toBeGreaterThan(0)

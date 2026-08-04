@@ -265,7 +265,11 @@ describe('SessionsPanel', () => {
     render(<SessionsPanel />)
     await screen.findByText('跨天会话')
 
-    expect(screen.getByText('活跃 3 天')).toBeTruthy()
+    // The count renders in its own mono span, so `活跃 3 天` is split across
+    // elements and no single text node holds it. Match on normalised textContent.
+    expect(
+      screen.getByText((_, element) => element?.textContent?.replace(/\s+/g, '') === '活跃3天'),
+    ).toBeTruthy()
     // One day is the unremarkable case and stays out of the row.
     expect(screen.queryByText('活跃 1 天')).toBeNull()
   })

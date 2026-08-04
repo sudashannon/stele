@@ -250,8 +250,13 @@ describe('WikiTimeline', () => {
 
     render(<WikiTimeline />)
 
-    await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-community-legend-item')).toHaveLength(12))
-    expect(screen.getByTestId('wiki-timeline-community-overflow').textContent).toContain('另有 2 个社区')
+    // The cap dropped from 12 to 8: past roughly eight hues colour stops
+    // identifying anything, so the tail collapses to one neutral entry. With 14
+    // communities that is 8 coloured entries and 6 merged into the bucket. The
+    // bucket says 其他 rather than 另有 because those communities ARE drawn, in
+    // grey — the same wording the graph legend uses.
+    await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-community-legend-item')).toHaveLength(8))
+    expect(screen.getByTestId('wiki-timeline-community-overflow').textContent).toContain('其他 6 个社区')
   })
 
   it('shows the tooltip and places a focused top-edge bar tooltip below its single focus border', async () => {
@@ -297,7 +302,10 @@ describe('WikiTimeline', () => {
     expect(focusTooltip.style.top).toBe('30px')
     expect(bar.className).toContain('focus-visible:border-[var(--color-text-primary)]')
     expect(bar.style.boxShadow).toBe('')
-    expect(bar.style.getPropertyValue('--timeline-bar-border')).toBe('var(--color-accent)')
+    // The bar's accent border now comes from the community's rank on the --viz-*
+    // ramp rather than a fixed accent, so assert that a ranked community yields
+    // its ramp colour instead of pinning one token name.
+    expect(bar.style.getPropertyValue('--timeline-bar-border')).toMatch(/^var\(--viz-[1-8]\)$/)
   })
 
   it('falls back to an empty component list when the fetch fails', async () => {

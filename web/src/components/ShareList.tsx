@@ -92,12 +92,12 @@ export function ShareList() {
 
   return (
     <div className="p-4" data-testid="share-list">
-      <h2 className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mb-3">已分享文档</h2>
+      <h2 className="text-[length:var(--type-micro)] font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider mb-3">已分享文档</h2>
       {feedback && (
         <p
           role={feedback.kind === 'error' ? 'alert' : 'status'}
           data-testid="share-list-feedback"
-          className={`mb-3 text-xs ${feedback.kind === 'error' ? 'text-[var(--color-danger)]' : 'text-[var(--color-success)]'}`}
+          className={`mb-3 text-[length:var(--type-caption)] ${feedback.kind === 'error' ? 'text-[var(--color-danger-text)]' : 'text-[var(--color-success-text)]'}`}
         >
           <span className="inline-flex items-center gap-1.5">
             <Icon name={feedback.kind === 'error' ? 'warning' : 'check'} size={14} />
@@ -106,24 +106,24 @@ export function ShareList() {
         </p>
       )}
       {loading ? (
-        <div role="status" className="inline-flex items-center gap-2 text-[var(--color-text-secondary)] text-sm py-4">
+        <div role="status" className="inline-flex items-center gap-2 text-[var(--color-text-secondary)] text-[length:var(--type-body)] py-4">
           <Icon name="spinner" size={16} className="animate-spin" />
           正在加载分享…
         </div>
       ) : shares.length === 0 ? (
-        <p className="text-sm text-[var(--color-text-secondary)]">暂无分享。可在 Markdown 查看器中创建分享链接。</p>
+        <p className="text-[length:var(--type-body)] text-[var(--color-text-secondary)]">暂无分享。可在 Markdown 查看器中创建分享链接。</p>
       ) : (
         <div className="space-y-2">
           {shares.map((share) => {
             const copying = operation === `copy:${share.token}`
             return (
-              <article key={share.token} className="bg-[var(--color-surface)] border border-[var(--color-border)] p-3 text-sm">
+              <article key={share.token} className="bg-[var(--color-surface)] border border-[var(--color-border)] p-3 text-[length:var(--type-body)]">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="font-medium text-[var(--color-text-primary)] truncate" title={share.path}>
                       {filename(share.path)}
                     </div>
-                    <div className="text-xs text-[var(--color-text-secondary)] mt-1 space-y-0.5">
+                    <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)] mt-1 space-y-0.5">
                       <div>Workspace：{share.workspace || '未指定'}</div>
                       <time className="block" dateTime={share.created_at}>{formatCreated(share.created_at)}</time>
                       <time className="block" dateTime={share.expires_at || undefined}>{formatExpiry(share.expires_at)}</time>
@@ -134,7 +134,7 @@ export function ShareList() {
                       type="button"
                       onClick={() => void handleCopy(share)}
                       disabled={operation !== null}
-                      className="inline-flex items-center gap-1.5 text-xs px-2 py-1 border border-[var(--color-border)] hover:bg-[var(--color-bg)] hover:border-[var(--color-accent)] disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 text-[length:var(--type-caption)] px-2 py-1 border border-[var(--color-border)] hover:bg-[var(--color-bg)] hover:border-[var(--color-accent)] disabled:opacity-50"
                       aria-label={`复制 ${filename(share.path)} 的分享链接`}
                     >
                       <Icon name={copying ? 'spinner' : 'copy'} size={14} className={copying ? 'animate-spin' : undefined} />
@@ -144,7 +144,7 @@ export function ShareList() {
                       type="button"
                       onClick={() => setConfirmToken(share.token)}
                       disabled={operation !== null}
-                      className="inline-flex items-center gap-1.5 text-xs px-2 py-1 border border-[var(--color-border)] text-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] hover:border-[var(--color-danger)] disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 text-[length:var(--type-caption)] px-2 py-1 border border-[var(--color-border)] text-[var(--color-danger-text)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] hover:border-[var(--color-danger)] disabled:opacity-50"
                       aria-label={`撤销 ${filename(share.path)} 的分享`}
                     >
                       <Icon name="trash" size={14} />
@@ -168,7 +168,7 @@ export function ShareList() {
           data-testid="share-list-revoke-confirm"
         >
           <div className="p-4">
-          <p className="text-sm text-[var(--color-text-secondary)]">
+          <p className="text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
             撤销“{filename(confirmingShare.path)}”的分享后，现有链接将立即失效。
           </p>
           <div className="mt-5 flex justify-end gap-2">
@@ -176,7 +176,7 @@ export function ShareList() {
               type="button"
               onClick={() => setConfirmToken(null)}
               disabled={operation !== null}
-              className="px-3 py-2 text-sm border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-50"
+              className="px-3 py-2 text-[length:var(--type-body)] border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-50"
             >
               取消
             </button>
@@ -185,7 +185,7 @@ export function ShareList() {
               onClick={() => void handleRevoke()}
               disabled={operation !== null}
               data-testid="share-list-revoke-confirm-btn"
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-sm bg-[var(--color-danger)] text-[var(--color-text-on-color)] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-[length:var(--type-body)] bg-[var(--color-danger)] text-[var(--color-text-on-color)] disabled:opacity-50"
             >
               <Icon
                 name={operation?.startsWith('revoke:') ? 'spinner' : 'trash'}

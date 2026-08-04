@@ -134,7 +134,11 @@ describe('TodoPanel grouping', () => {
 
     const origin = screen.getByTestId('todo-omp-origin-omp-1')
     expect(origin.textContent).toContain('build')
-    expect(origin.textContent).toContain('waiting')
+    // The blocker is no longer concatenated into the chip's visible label — a
+    // 240-character sentence inside a 56px virtualised row produced a 1489px
+    // unbroken line. It stays discoverable from the row via the title tooltip,
+    // and in full in the detail drawer and the grouped reason block.
+    expect(origin.getAttribute('title')).toContain('waiting')
     fireEvent.click(screen.getByTestId('todo-filter-blocked'))
     expect(screen.getByText('OMP blocked')).toBeTruthy()
     expect(screen.queryByText('Dropped task')).toBeNull()

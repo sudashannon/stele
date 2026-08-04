@@ -20,6 +20,7 @@ import { KpiCards, classifyChanges } from './components/KpiCards'
 import { BookmarkPanel } from './components/BookmarkPanel'
 import { Modal } from './components/Modal'
 import { SettingsPanel } from './components/SettingsPanel'
+import { StateBlock } from './components/StateBlock'
 import { SideRail, SIDE_RAIL_ITEMS, type SideRailView } from './components/SideRail'
 import { StaleBundleNotice } from './components/StaleBundleNotice'
 import { WorkspaceChips } from './components/WorkspaceChips'
@@ -91,14 +92,14 @@ function ViewFallback({ label }: { label: string }) {
   return (
     <div
       data-testid="lazy-view-fallback"
-      className="m-4 flex min-h-[10rem] items-center gap-3 border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--spacing-05)] py-[var(--spacing-05)] text-[var(--type-body)] text-[var(--color-text-secondary)] shadow-[var(--shadow-1)]"
+      className="m-4 flex min-h-[10rem] items-center gap-3 border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--spacing-05)] py-[var(--spacing-05)] text-[length:var(--type-body)] text-[var(--color-text-secondary)] shadow-[var(--shadow-1)]"
     >
       <Icon name="spinner" size={16} className="animate-spin text-[var(--color-accent)]" />
       <div className="space-y-1">
-        <p className="text-[var(--type-caption)] font-medium text-[var(--color-text-primary)]">
+        <p className="text-[length:var(--type-caption)] font-medium text-[var(--color-text-primary)]">
           正在加载{label}
         </p>
-        <p className="text-[var(--type-caption)] text-[var(--color-text-secondary)]">
+        <p className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
           保持当前上下文，视图资源仅在进入后按需加载。
         </p>
       </div>
@@ -646,11 +647,11 @@ export default function App() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex items-center p-3 xl:hidden">
+        <div className="flex items-center p-3 wide:hidden">
           <button
             data-testid="hamburger-toggle"
             onClick={() => setSidebarOpen((open) => !open)}
-            className="border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-primary)]"
+            className="border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[length:var(--type-caption)] font-medium text-[var(--color-text-primary)]"
           >
             工作区筛选
           </button>
@@ -659,10 +660,10 @@ export default function App() {
         {failedWorkspaces.length > 0 && (
           <div
             data-testid="workspace-warning-banner"
-            className="mx-3 mb-3 border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] p-3 text-[var(--type-caption)]"
+            className="mx-3 mb-3 border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] p-3 text-[length:var(--type-caption)]"
           >
             <div className="flex items-start gap-3">
-              <Icon name="warning" size={16} className="mt-0.5 text-[var(--color-danger)]" />
+              <Icon name="warning" size={16} className="mt-0.5 text-[var(--color-danger-text)]" />
               <div className="min-w-0 flex-1 space-y-2">
                 <p className="font-medium text-[var(--color-text-primary)]">
                   以下 workspace 无法读取，已暂时跳过。
@@ -672,7 +673,7 @@ export default function App() {
                     const removalLocked = lockedWorkspaceAliases.has(alias)
                     return (
                       <li key={alias} className="flex flex-wrap items-center gap-2">
-                        <span className="border border-[var(--color-danger)] bg-[var(--color-surface)] px-2 py-1 text-[var(--type-caption)] text-[var(--color-text-primary)]">
+                        <span className="border border-[var(--color-danger)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
                           {alias}
                         </span>
                         <button
@@ -686,10 +687,10 @@ export default function App() {
                           disabled={removalLocked}
                           onClick={() => openWorkspaceRemoval(alias)}
                           className={
-                            'border px-2 py-1 text-[var(--type-caption)] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+                            'border px-2 py-1 text-[length:var(--type-caption)] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
                             (removalLocked
                               ? 'cursor-not-allowed border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-tertiary)]'
-                              : 'border-[var(--color-danger)] bg-[var(--color-surface)] text-[var(--color-danger)] hover:bg-[var(--color-danger-subtle)]')
+                              : 'border-[var(--color-danger)] bg-[var(--color-surface)] text-[var(--color-danger-text)] hover:bg-[var(--color-danger-subtle)]')
                           }
                         >
                           移除
@@ -706,7 +707,7 @@ export default function App() {
         {wikiIndexing && (
           <div
             data-testid="wiki-indexing-banner"
-            className="mx-3 mb-3 flex items-start gap-3 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] p-3 text-[var(--type-caption)]"
+            className="mx-3 mb-3 flex items-start gap-3 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] p-3 text-[length:var(--type-caption)]"
           >
             <Icon name="info" size={16} className="mt-0.5 text-[var(--color-accent)]" />
             <p className="text-[var(--color-text-primary)]">
@@ -718,14 +719,9 @@ export default function App() {
         )}
 
         {view === 'changes' && (
-          <div className="flex min-h-0 flex-1">
-            <aside
-              data-testid="sidebar"
-              className={
-                (sidebarOpen ? 'block' : 'hidden') +
-                ' w-full shrink-0 overflow-y-auto border-r border-[var(--color-border)] p-3 xl:block xl:w-[340px]'
-              }
-            >
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            {/* Workspace chips row — moved from the deleted sidebar */}
+            <div className="shrink-0 px-3 pt-3">
               <WorkspaceChips
                 workspaces={workspaces}
                 active={activeWorkspace}
@@ -748,39 +744,53 @@ export default function App() {
                 onRemove={openWorkspaceRemoval}
                 removeDisabledAliases={Array.from(lockedWorkspaceAliases)}
               />
-              <ChangeExplorer
-                changes={visibleChanges}
-                selected={selected?.name ?? null}
-                selectedWorkspace={selected?.workspace}
-                onSelect={(name, workspace) => {
-                  openViewer(null)
-                  setChangeArtifacts([])
-                  setSelected({ name, workspace })
-                  setSidebarOpen(false)
-                }}
-              />
-            </aside>
+            </div>
 
-            <main className="flex-1 overflow-y-auto p-4">
-              {viewerPath ? (
-                <Suspense fallback={<ViewFallback label="文档" />}>
-                  {renderViewer({
-                    artifacts: changeArtifacts,
-                    workspace: selectedChange?.workspace,
-                    onSelectArtifact: (path: string) => openViewer(path, 'document'),
-                    onCreateTodo: viewerTodoHandler,
-                  })}
-                </Suspense>
-              ) : (
-                <div className="space-y-4">
-                  <KpiCards
-                    changes={workspaceChanges}
-                    stuckThresholdDays={STUCK_THRESHOLD_DAYS}
-                    now={classificationNow}
-                    activeFilter={activeKpiFilter}
-                    onFilterSelect={setActiveKpiFilter}
-                  />
-                  {selectedChange ? (
+            {/* Main content column — full width, no sidebar */}
+            <div className="relative flex-1 overflow-hidden p-4">
+              <div className="h-full overflow-y-auto space-y-4">
+                <KpiCards
+                  changes={workspaceChanges}
+                  stuckThresholdDays={STUCK_THRESHOLD_DAYS}
+                  now={classificationNow}
+                  activeFilter={activeKpiFilter}
+                  onFilterSelect={setActiveKpiFilter}
+                />
+
+                {/* Surface separator: luminance step, no shadow.
+                    Separates the KPI readout row (surface) from the table (surface)
+                    with a --color-layer band, the middle depth step. */}
+                <div className="h-7 bg-[var(--color-layer)] border-t border-[var(--color-border)]" />
+
+                <ChangeExplorer
+                  changes={visibleChanges}
+                  selected={selected?.name ?? null}
+                  selectedWorkspace={selected?.workspace}
+                  onSelect={(name, workspace) => {
+                    openViewer(null)
+                    setChangeArtifacts([])
+                    setSelected({ name, workspace })
+                  }}
+                />
+
+                {selectedChange ? (
+                  <>
+                    {/* Back-to-list affordance — replaces the sidebar toggle */}
+                    <div className="flex items-center gap-2 mt-4 mb-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelected(null)
+                          openViewer(null)
+                          setChangeArtifacts([])
+                        }}
+                        className="underline hover:text-[var(--color-accent)]"
+                      >
+                        ← 返回列表
+                      </button>
+                      <span>·</span>
+                      <span>{selectedChange.title || selectedChange.name}</span>
+                    </div>
                     <ChangeDetail
                       change={selectedChange}
                       onOpenArtifact={(path) => openViewer(path, 'document')}
@@ -798,24 +808,34 @@ export default function App() {
                           : undefined
                       }
                     />
-                  ) : (
-                    <div
-                      data-testid="change-empty-state"
-                      className="flex flex-col items-center justify-center gap-3 border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-24 text-center"
-                    >
-                      <Icon name="changes" size={28} className="text-[var(--color-text-tertiary)]" />
-                      <p className="text-[var(--type-body)] font-medium text-[var(--color-text-primary)]">
-                        从左侧选择一个变更查看详情
-                      </p>
-                      <p className="text-[var(--type-caption)] text-[var(--color-text-secondary)]">
-                        可通过上方 KPI 卡片筛选，或在左侧工作区与搜索中定位目标变更
-                      </p>
-                    </div>
-                  )}
+                  </>
+                ) : (
+                  <StateBlock
+                    kind="empty"
+                    testId="change-empty-state"
+                    title="点击上方表格中的一行查看变更详情"
+                    detail="可通过上方 KPI 卡片筛选，或在搜索与筛选中定位目标变更"
+                  />
+                )}
+              </div>
+
+              {/* Document viewer — rendered as an overlay so the change list
+                  stays mounted beneath it, preserving scroll position and
+                  chat history when switching between artifacts. */}
+              {viewerPath && (
+                <div className="absolute inset-0 z-10 overflow-y-auto bg-[var(--color-surface)]">
+                  <Suspense fallback={<ViewFallback label="文档" />}>
+                    {renderViewer({
+                      artifacts: changeArtifacts,
+                      workspace: selectedChange?.workspace,
+                      onSelectArtifact: (path: string) => openViewer(path, 'document'),
+                      onCreateTodo: viewerTodoHandler,
+                    })}
+                  </Suspense>
                 </div>
               )}
-            </main>
-          </div>
+              </div>
+            </div>
         )}
 
         {view === 'todos' && (
@@ -1006,13 +1026,13 @@ export default function App() {
           data-testid="remove-workspace-modal"
         >
           <div className="space-y-4 p-4">
-            <p className="text-[var(--type-body)] text-[var(--color-text-primary)]">
+            <p className="text-[length:var(--type-body)] text-[var(--color-text-primary)]">
               将从当前面板移除 <strong>{workspacePendingRemoval}</strong>。已同步的文档不会被删除，后续仍可重新添加。
             </p>
             {workspaceRemovalError && (
               <div
                 data-testid="remove-workspace-error"
-                className="border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] px-3 py-2 text-[var(--type-caption)] text-[var(--color-danger)]"
+                className="border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-danger-text)]"
               >
                 {workspaceRemovalError}
               </div>
@@ -1022,7 +1042,7 @@ export default function App() {
                 type="button"
                 onClick={closeWorkspaceRemoval}
                 disabled={workspaceRemovalPending}
-                className="border border-[var(--color-border)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                className="border border-[var(--color-border)] px-3 py-2 text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
               >
                 取消
               </button>
@@ -1032,7 +1052,7 @@ export default function App() {
                 onClick={confirmWorkspaceRemoval}
                 disabled={workspaceRemovalPending}
                 className={
-                  'border px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-on-color)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+                  'border px-3 py-2 text-[length:var(--type-caption)] font-medium text-[var(--color-text-on-color)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
                   (workspaceRemovalPending
                     ? 'cursor-wait border-[var(--color-danger)] bg-[var(--color-danger)]/70'
                     : 'border-[var(--color-danger)] bg-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_85%,black)]')

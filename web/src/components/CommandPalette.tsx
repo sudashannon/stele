@@ -123,11 +123,11 @@ export function CommandPalette({ palette, shortcuts }: Props) {
             }}
             onKeyDown={onKeyDown}
             placeholder={isShortcutMode ? '快捷键速查…' : '搜索命令…  (Ctrl+K 开关)'}
-            className="flex-1 border-none bg-transparent text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+            className="flex-1 border-none bg-transparent text-[length:var(--type-body)] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
             autoComplete="off"
             spellCheck={false}
           />
-          <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-secondary)]">
+          <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             Esc
           </kbd>
         </div>
@@ -141,7 +141,7 @@ export function CommandPalette({ palette, shortcuts }: Props) {
           {isShortcutMode && shortcuts ? (
             <ShortcutList shortcuts={shortcuts} />
           ) : orderedResults.length === 0 ? (
-            <div className="py-6 text-center text-sm text-[var(--color-text-secondary)]">
+            <div className="py-6 text-center text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
               {query ? '无匹配命令' : '输入关键词搜索…'}
             </div>
           ) : (
@@ -154,7 +154,7 @@ export function CommandPalette({ palette, shortcuts }: Props) {
           )}
         </div>
 
-        <div className="flex items-center gap-4 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div className="flex items-center gap-4 border-t border-[var(--color-border)] px-4 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
           <span className="inline-flex items-center gap-1">
             <Icon name="chevron-down" />
             导航
@@ -203,7 +203,7 @@ function ActionList({
     rows.push(
       <div
         key={`cat-${category}`}
-        className="text-xs font-semibold px-2 py-1 uppercase tracking-wider"
+        className="text-[length:var(--type-micro)] font-semibold px-2 py-1 uppercase tracking-wider"
         style={{ color: 'var(--color-text-tertiary)' }}
       >
         {category}
@@ -219,7 +219,7 @@ function ActionList({
           data-palette-idx={idx}
           role="option"
           aria-selected={isSelected}
-          className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm"
+          className="flex cursor-pointer items-center gap-3 px-3 py-2 text-[length:var(--type-body)]"
           style={{
             backgroundColor: isSelected ? 'var(--palette-highlight)' : 'transparent',
             color: 'var(--color-text-primary)',
@@ -241,7 +241,7 @@ function ActionList({
             />
             {item.action.subtitle && (
               <span
-                className="block text-xs"
+                className="block text-[length:var(--type-caption)]"
                 style={{ color: 'var(--color-text-secondary)' }}
                 dangerouslySetInnerHTML={{
                   __html: highlightMatches(
@@ -253,7 +253,7 @@ function ActionList({
             )}
           </span>
           {item.action.shortcut && (
-            <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-secondary)]">
+            <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
               {item.action.shortcut}
             </kbd>
           )}
@@ -271,7 +271,7 @@ function ShortcutList({ shortcuts }: { shortcuts: ShortcutDef[] }) {
   return (
     <div>
       <div
-        className="text-xs font-semibold px-2 py-1 uppercase tracking-wider"
+        className="text-[length:var(--type-micro)] font-semibold px-2 py-1 uppercase tracking-wider"
         style={{ color: 'var(--color-text-tertiary)' }}
       >
         快捷键
@@ -279,12 +279,12 @@ function ShortcutList({ shortcuts }: { shortcuts: ShortcutDef[] }) {
       {shortcuts.map((s, i) => (
         <div
           key={i}
-          className="flex items-center justify-between px-3 py-2 text-sm"
+          className="flex items-center justify-between px-3 py-2 text-[length:var(--type-body)]"
           role="listitem"
           style={{ color: 'var(--color-text-primary)' }}
         >
           <span>{s.label}</span>
-          <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-xs text-[var(--color-text-secondary)]">
+          <kbd className="shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1.5 py-0.5 font-mono text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             {formatShortcut(s)}
           </kbd>
         </div>

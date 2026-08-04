@@ -21,21 +21,26 @@ export const TYPE_COLORS: Record<string, string> = {
   diagram: 'var(--color-danger)',
   session: 'var(--color-purple)',
 }
+/** Maximum distinct categorical community colours before collapsing to --viz-rest. */
+export const COMMUNITY_CATEGORICAL_LIMIT = 8
 
 export const COMMUNITY_COLORS = [
-  'var(--color-accent)',
-  'var(--color-success)',
-  'var(--color-danger)',
-  'var(--color-warn)',
-  'color-mix(in srgb, var(--color-accent) 60%, var(--color-success))',
-  'color-mix(in srgb, var(--color-accent) 60%, var(--color-danger))',
-  'color-mix(in srgb, var(--color-success) 60%, var(--color-warn))',
-  'color-mix(in srgb, var(--color-danger) 60%, var(--color-warn))',
-  'color-mix(in srgb, var(--color-accent) 70%, var(--color-surface))',
-  'color-mix(in srgb, var(--color-success) 70%, var(--color-surface))',
-  'color-mix(in srgb, var(--color-danger) 70%, var(--color-surface))',
-  'color-mix(in srgb, var(--color-warn) 70%, var(--color-surface))',
+  'var(--viz-1)',
+  'var(--viz-2)',
+  'var(--viz-3)',
+  'var(--viz-4)',
+  'var(--viz-5)',
+  'var(--viz-6)',
+  'var(--viz-7)',
+  'var(--viz-8)',
 ]
+export const COMMUNITY_REST_COLOR = 'var(--viz-rest)'
+
+/** Colour for a community at a given 0-based rank by weight.
+ *  Ranks 0–7 map to --viz-1…--viz-8; rank ≥ 8 returns --viz-rest. */
+export function communityColor(rank: number): string {
+  return rank < COMMUNITY_COLORS.length ? COMMUNITY_COLORS[rank] : COMMUNITY_REST_COLOR
+}
 
 /**
  * Document-type badge styling for the list views (最近更新 / 语义搜索). Both
@@ -50,12 +55,12 @@ export const TYPE_BADGE_STYLES: Record<string, string> = {
   proposal: 'bg-[var(--color-purple-subtle)] text-[var(--color-purple)]',
   design: 'bg-[var(--color-layer)] text-[var(--color-teal)]',
   tasks: 'bg-[var(--color-warn-subtle)] text-[var(--color-warn-text)]',
-  spec: 'bg-[var(--color-danger-subtle)] text-[var(--color-danger)]',
-  plan: 'bg-[var(--color-success-subtle)] text-[var(--color-success)]',
+  spec: 'bg-[var(--color-danger-subtle)] text-[var(--color-danger-text)]',
+  plan: 'bg-[var(--color-success-subtle)] text-[var(--color-success-text)]',
   knowledge: 'bg-[var(--color-layer-accent)] text-[var(--color-text-primary)]',
   report: 'bg-[var(--color-layer)] text-[var(--color-accent)]',
   artifact: 'bg-[var(--color-layer)] text-[var(--color-text-secondary)]',
-  diagram: 'bg-[var(--color-layer)] text-[var(--color-danger)]',
+  diagram: 'bg-[var(--color-layer)] text-[var(--color-danger-text)]',
   // Shares the purple identity of the graph node color, but pairs it with the
   // plain layer background used by design/report/diagram so the badge never
   // reads as `proposal` (which owns the purple-subtle background).

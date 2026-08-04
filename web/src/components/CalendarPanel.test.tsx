@@ -15,7 +15,7 @@ describe('CalendarPanel', () => {
 
     render(<CalendarPanel onOpen={() => {}} />)
 
-    expect((await screen.findByText('加载日历失败')).getAttribute('class')).toContain('text-[var(--color-danger)]')
+    expect((await screen.findByText('加载日历失败')).closest('[role="alert"]')).toBeTruthy()
     expect(screen.queryByText('2026年 1月')).toBeNull()
   })
 

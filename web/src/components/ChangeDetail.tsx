@@ -20,8 +20,8 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 
 const VERIFY_STATUSES = {
-  pass: { label: '已通过', icon: 'check' as const, className: 'text-[var(--color-success)] bg-[var(--color-success-subtle)]' },
-  fail: { label: '失败', icon: 'warning' as const, className: 'text-[var(--color-danger)] bg-[var(--color-danger-subtle)]' },
+  pass: { label: '已通过', icon: 'check' as const, className: 'text-[var(--color-success-text)] bg-[var(--color-success-subtle)]' },
+  fail: { label: '失败', icon: 'warning' as const, className: 'text-[var(--color-danger-text)] bg-[var(--color-danger-subtle)]' },
   pending: { label: '待验证', icon: 'info' as const, className: 'text-[var(--color-text-secondary)] bg-[var(--color-layer)]' },
 }
 
@@ -41,7 +41,7 @@ function VerifyStatus({ result }: { result: string }) {
   return (
     <span
       data-testid="change-verify-result"
-      className={`inline-flex items-center gap-1 border border-[var(--color-border-subtle)] px-2 py-1 text-xs font-semibold ${status.className}`}
+      className={`inline-flex items-center gap-1 border border-[var(--color-border-subtle)] px-2 py-1 text-[length:var(--type-caption)] font-semibold ${status.className}`}
     >
       <Icon name={status.icon} size={14} />
       {status.label}
@@ -49,11 +49,11 @@ function VerifyStatus({ result }: { result: string }) {
   )
 }
 
-function MetadataItem({ label, value, testId }: { label: string; value: string; testId: string }) {
+function MetadataItem({ label, value, testId, mono }: { label: string; value: string; testId: string; mono?: boolean }) {
   return (
     <div data-testid={testId} className="min-w-0 border-l-2 border-[var(--color-border)] pl-2">
-      <div className="text-xs text-[var(--color-text-secondary)]">{label}</div>
-      <div className="truncate text-xs font-semibold text-[var(--color-text-primary)]" title={value}>{value}</div>
+      <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{label}</div>
+      <div className={`truncate text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)] ${mono ? 'font-mono' : ''}`} title={value}>{value}</div>
     </div>
   )
 }
@@ -98,9 +98,9 @@ export function ChangeDetail({
     <div className="bg-[var(--color-surface)] p-5 shadow-[var(--shadow-card)] space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold">{change.title || change.name}</h3>
+          <h3 className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold">{change.title || change.name}</h3>
           {change.title && change.title !== change.name && (
-            <div className="text-xs text-[var(--color-text-secondary)]">{change.name}</div>
+            <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)] font-mono">{change.name}</div>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -116,7 +116,7 @@ export function ChangeDetail({
               type="button"
               data-testid="change-todo-action"
               onClick={() => onNavigateToTodos(change.workspace!, change.name)}
-              className="inline-flex shrink-0 items-center gap-1 border border-[var(--color-border)] px-2 py-1 text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-subtle)]"
+              className="inline-flex shrink-0 items-center gap-1 border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-subtle)]"
               title="添加待办"
             >
               <Icon name="plus" size={14} />
@@ -126,22 +126,22 @@ export function ChangeDetail({
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3 border-y border-[var(--color-border-subtle)] py-3 sm:grid-cols-3 lg:grid-cols-5">
-        <MetadataItem label="工作流" value={change.workflow} testId="metadata-workflow" />
-        {change.sourceType && <MetadataItem label="来源" value={SOURCE_LABELS[change.sourceType] ?? change.sourceType} testId="metadata-source" />}
-        {change.buildMode && <MetadataItem label="构建模式" value={change.buildMode} testId="metadata-build-mode" />}
-        {change.reviewMode && <MetadataItem label="审查模式" value={change.reviewMode} testId="metadata-review-mode" />}
-        {change.tddMode && <MetadataItem label="TDD 模式" value={change.tddMode} testId="metadata-tdd-mode" />}
+        <MetadataItem label="工作流" value={change.workflow} testId="metadata-workflow" mono />
+        {change.sourceType && <MetadataItem label="来源" value={SOURCE_LABELS[change.sourceType] ?? change.sourceType} testId="metadata-source" mono />}
+        {change.buildMode && <MetadataItem label="构建模式" value={change.buildMode} testId="metadata-build-mode" mono />}
+        {change.reviewMode && <MetadataItem label="审查模式" value={change.reviewMode} testId="metadata-review-mode" mono />}
+        {change.tddMode && <MetadataItem label="TDD 模式" value={change.tddMode} testId="metadata-tdd-mode" mono />}
         {change.autoTransition !== undefined && (
           <MetadataItem label="自动流转" value={change.autoTransition ? '已开启' : '已关闭'} testId="metadata-auto-transition" />
         )}
-        {change.verifiedAt && <MetadataItem label="验证时间" value={formatLocalTime(change.verifiedAt)} testId="metadata-verified-at" />}
+        {change.verifiedAt && <MetadataItem label="验证时间" value={formatLocalTime(change.verifiedAt)} testId="metadata-verified-at" mono />}
         <div className="min-w-0">
-          <div className="mb-1 text-xs text-[var(--color-text-secondary)]">验证结果</div>
+          <div className="mb-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">验证结果</div>
           <VerifyStatus result={change.verifyResult} />
         </div>
       </div>
       {change.stateWarning && (
-        <div className="flex items-start gap-2 border-l-4 border-[var(--color-warn)] bg-[var(--color-warn-subtle)] p-2 text-xs text-[var(--color-warn-text)]">
+        <div className="flex items-start gap-2 border-l-4 border-[var(--color-warn)] bg-[var(--color-warn-subtle)] p-2 text-[length:var(--type-caption)] text-[var(--color-warn-text)]">
           <Icon name="warning" size={16} className="mt-px shrink-0" />
           <span>{change.stateWarning}</span>
         </div>
@@ -183,11 +183,11 @@ export function ChangeDetail({
       })()}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="border border-[var(--color-border)] p-3">
-          <h4 className="text-xs font-semibold text-[var(--color-text-primary)] mb-2">产出物</h4>
+          <h4 className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)] mb-2">产出物</h4>
           <ArtifactList changeName={change.name} workspace={change.workspace} onSelectArtifact={onOpenArtifact} />
         </div>
         <div className="border border-[var(--color-border)] p-3">
-          <h4 className="text-xs font-semibold text-[var(--color-text-primary)] mb-2">文档关联</h4>
+          <h4 className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)] mb-2">文档关联</h4>
           <BacklinksPanel componentId={change.componentId ?? change.name} />
         </div>
       </div>

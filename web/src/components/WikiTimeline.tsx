@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { fetchSessions, fetchWikiGraph } from '../api/client'
 import type { WikiComponent, WikiSession } from '../api/types'
 import { GraphFilters } from './GraphFilters'
-import { COMMUNITY_COLORS, TYPE_COLORS } from './graphPalette'
+import { communityColor, COMMUNITY_CATEGORICAL_LIMIT, COMMUNITY_REST_COLOR, TYPE_COLORS } from './graphPalette'
 import { useWikiEvents } from '../hooks/useWikiEvents'
 
 const ROW_HEIGHT = 28
@@ -13,7 +13,6 @@ const PX_PER_DAY = 18
 const LEFT_LABEL_WIDTH = 140
 const MIN_BAR_WIDTH = 6
 const MIN_DOC_WIDTH = 3
-const MAX_COMMUNITY_LEGEND_ITEMS = 12
 
 // What the timeline draws. It used to draw changes only, which is why it went
 // blank from mid-July: the work moved to knowledge documents and superpowers
@@ -381,24 +380,27 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
     return { x: xForTime(t.getTime()), label: '今天' }
   }, [xForTime])
 
-  const communityLegend = useMemo(
-    () =>
-      Object.keys(communityCounts)
-        .map(Number)
-        .sort((a, b) => {
-          const countDifference = (communityCounts[b] ?? 0) - (communityCounts[a] ?? 0)
-          return countDifference !== 0 ? countDifference : a - b
-        })
-        .slice(0, MAX_COMMUNITY_LEGEND_ITEMS)
-        .map((id) => ({
-          id,
-          label: effectiveCommunityLabels[String(id)] ?? `#${id}`,
-          count: communityCounts[id],
-          color: COMMUNITY_COLORS[id % COMMUNITY_COLORS.length],
-        })),
-    [communityCounts, effectiveCommunityLabels],
-  )
-  const hiddenCommunityCount = Math.max(0, Object.keys(communityCounts).length - communityLegend.length)
+  const communityRank = useMemo(() => {
+    const sorted = Object.keys(communityCounts)
+      .map(Number)
+      .sort((a, b) => (communityCounts[b] ?? 0) - (communityCounts[a] ?? 0))
+    return new Map(sorted.map((id, rank) => [id, rank]))
+  }, [communityCounts])
+
+  const communityLegend = useMemo(() => {
+    const sorted = Object.entries(communityCounts).sort(([, a], [, b]) => b - a)
+    const top = sorted.slice(0, COMMUNITY_CATEGORICAL_LIMIT)
+    const rest = sorted.slice(COMMUNITY_CATEGORICAL_LIMIT)
+    const items = top.map(([idStr, count], rank) => ({
+      id: Number(idStr),
+      label: effectiveCommunityLabels[idStr] ?? `#${idStr}`,
+      count,
+      color: communityColor(rank),
+    }))
+    const restCount = rest.length
+    const restTotal = rest.reduce((sum, [, count]) => sum + count, 0)
+    return { items, restCount, restTotal }
+  }, [communityCounts, effectiveCommunityLabels])
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const landedScope = useRef<string>('')
@@ -433,14 +435,14 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
 
   if (loadError) {
     return (
-      <div className="flex h-full items-center justify-center text-[length:var(--type-caption)] text-[var(--color-danger)]">
+      <div className="flex h-full items-center justify-center text-[length:var(--type-caption)] text-[var(--color-danger-text)]">
         加载时间线数据失败
       </div>
     )
   }
 
   return (
-    <div className="relative flex h-[calc(100vh-160px)] min-h-[400px] w-full flex-col">
+    <div className="relative flex h-full min-h-[400px] w-full flex-col">
       {!loaded && (
         <div className="flex flex-1 items-center justify-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
           <span className="animate-pulse">加载中…</span>
@@ -451,7 +453,7 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
           data-testid="wiki-timeline-scope"
           role="group"
           aria-label="时间线口径"
-          className="mb-2 flex shrink-0 flex-wrap items-center gap-2 text-xs"
+          className="mb-2 flex shrink-0 flex-wrap items-center gap-2 text-[length:var(--type-caption)]"
         >
           {(['all', 'change', 'document', 'session'] as TimelineScope[]).map((key) => {
             const count = key === 'all'
@@ -553,7 +555,7 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
                       y1={36}
                       x2={tick.x}
                       y2={chartHeight + 36}
-                      stroke="var(--color-border-subtle)"
+                      stroke="var(--viz-grid)"
                       strokeWidth={1}
                     />
                   ))}
@@ -576,7 +578,7 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
                       x={tick.x + 4}
                       y={18}
                       fontSize={12}
-                      fill="var(--color-text-secondary)"
+                      fill="var(--viz-axis)"
                     >
                       {tick.label}
                     </text>
@@ -600,10 +602,13 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
                     const rowItems = filteredItems.filter((item) => item.workspace === ws)
                     const rowTop = rowIndex * ROW_HEIGHT + 36
                     return rowItems.map((item) => {
+                      // Geometry is derived per bar: a zero-length span still has
+                      // to be clickable, so the width floors at the item's own
+                      // minWidth rather than collapsing to nothing.
                       const x = xForTime(item.start)
                       const width = Math.max(item.minWidth, xForTime(item.end) - x)
                       const accentColor = item.communityId != null
-                        ? COMMUNITY_COLORS[item.communityId % COMMUNITY_COLORS.length]
+                        ? communityColor(communityRank.get(item.communityId) ?? Infinity)
                         : 'var(--color-border)'
                       return (
                         <button
@@ -667,18 +672,13 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
             </div>
           )}
 
-          {communityLegend.length > 0 && (
+          {communityLegend.items.length > 0 && (
             <div className="border-x border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
-              <div className="mb-2 flex items-center justify-between gap-3 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
+              <div className="mb-2 flex items-center gap-3 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
                 <span>当前社区分布</span>
-                {hiddenCommunityCount > 0 && (
-                  <span data-testid="wiki-timeline-community-overflow" className="font-normal">
-                    显示前 {communityLegend.length} 个 · 另有 {hiddenCommunityCount} 个社区
-                  </span>
-                )}
               </div>
               <ul className="flex flex-wrap gap-x-4 gap-y-2">
-                {communityLegend.map((community) => (
+                {communityLegend.items.map((community) => (
                   <li
                     key={community.id}
                     data-testid="wiki-timeline-community-legend-item"
@@ -692,6 +692,19 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
                     <span className="text-[var(--color-text-secondary)]">{community.count}</span>
                   </li>
                 ))}
+                {communityLegend.restCount > 0 && (
+                  <li
+                    data-testid="wiki-timeline-community-overflow"
+                    className="flex items-center gap-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
+                  >
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: COMMUNITY_REST_COLOR }}
+                    />
+                    <span>其他 {communityLegend.restCount} 个社区</span>
+                    <span className="text-[var(--color-text-secondary)]">{communityLegend.restTotal}</span>
+                  </li>
+                )}
               </ul>
             </div>
           )}
@@ -699,8 +712,8 @@ export function WikiTimeline({ onOpen }: WikiTimelineProps) {
       )}
       {hover && (
         <div
+          className={`pointer-events-none fixed z-20 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-[var(--shadow-overlay)] ${hover.placement === 'above' ? '-translate-y-full' : ''}`}
           data-testid="wiki-timeline-tooltip"
-          className={`pointer-events-none fixed z-20 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-sm ${hover.placement === 'above' ? '-translate-y-full' : ''}`}
           style={{ left: hover.x, top: hover.y + (hover.placement === 'above' ? -10 : 10) }}
         >
           <div className="font-medium">{hover.title}</div>

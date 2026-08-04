@@ -124,17 +124,17 @@ export function GuardButton({
           data-testid="guard-confirm-dialog"
         >
           <div className="space-y-4 p-4">
-            <p className="text-[var(--type-body)] text-[var(--color-text-primary)]">
+            <p className="text-[length:var(--type-body)] text-[var(--color-text-primary)]">
               即将执行：
             </p>
-            <code className="block overflow-x-auto bg-[var(--color-layer)] p-3 font-mono text-[var(--type-caption)] text-[var(--color-text-primary)]">
+            <code className="block overflow-x-auto bg-[var(--color-layer)] p-3 font-mono text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
               {command ?? `comet-guard ${changeName} ${targetPhase} --apply`}
             </code>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => setConfirming(false)}
-                className="border border-[var(--color-border)] px-3 py-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]"
+                className="border border-[var(--color-border)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
               >
                 取消
               </button>
@@ -142,7 +142,7 @@ export function GuardButton({
                 type="button"
                 data-testid="guard-confirm-yes"
                 onClick={execute}
-                className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-on-color)]"
+                className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 py-2 text-[length:var(--type-caption)] font-medium text-[var(--color-text-on-color)]"
               >
                 确认
               </button>
@@ -159,9 +159,9 @@ export function GuardButton({
           data-testid="guard-output"
           data-tone={tone}
           className={
-            'text-xs p-2 mt-2 max-h-40 overflow-y-auto ' +
+            'text-[length:var(--type-caption)] p-2 mt-2 max-h-40 overflow-y-auto ' +
             (tone === 'danger'
-              ? 'bg-[var(--color-danger)]/10 text-[var(--color-danger)]'
+              ? 'bg-[var(--color-danger)]/10 text-[var(--color-danger-text)]'
               : 'bg-[var(--color-text-primary)] text-[var(--color-bg)]')
           }
         >

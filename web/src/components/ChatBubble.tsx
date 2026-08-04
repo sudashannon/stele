@@ -199,7 +199,7 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
           className="fixed bottom-20 right-4 flex h-[min(80vh,720px)] w-[440px] flex-col border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]"
         >
           <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-3">
-            <span className="text-sm font-semibold text-[var(--color-text-primary)]">Chat · {effectiveChange}</span>
+            <span className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)]">Chat · {effectiveChange}</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -208,7 +208,7 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
                 onClick={() => setGraphMode((value) => !value)}
                 title="图谱模式：将当前变更在知识图谱中的关联上下文注入对话"
                 className={
-                  'flex items-center gap-1 border px-2 py-1 text-[var(--type-caption)] font-medium ' +
+                  'flex items-center gap-1 border px-2 py-1 text-[length:var(--type-caption)] font-medium ' +
                   (graphMode
                     ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
                     : 'border-[var(--color-border)] bg-[var(--color-layer)] text-[var(--color-text-secondary)]')
@@ -228,24 +228,24 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
               </button>
             </div>
           </div>
-          <div data-testid="chat-messages" ref={messagesRef} className="flex-1 space-y-2 overflow-y-auto p-3 text-sm">
+          <div data-testid="chat-messages" ref={messagesRef} className="flex-1 space-y-2 overflow-y-auto p-3 text-[length:var(--type-body)]">
             {messages.map((msg, index) => (
               <div
                 key={index}
                 data-testid={`chat-msg-${msg.role}`}
                 className={
-                  'max-w-[85%] px-3 py-2 text-[var(--type-caption)] ' +
+                  'max-w-[85%] px-3 py-2 text-[length:var(--type-caption)] ' +
                   (msg.role === 'user'
                     ? 'ml-auto bg-[var(--color-accent)] text-[var(--color-text-on-color)] whitespace-pre-wrap'
                     : msg.role === 'error'
-                      ? 'border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] text-[var(--color-danger)]'
+                      ? 'border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] text-[var(--color-danger-text)]'
                       : 'bg-[var(--color-layer)] text-[var(--color-text-primary)]')
                 }
               >
                 {msg.role === 'assistant' ? (
                   <>
                     {msg.thinking && !msg.text && (
-                      <div className="mb-1 text-[var(--type-caption)] italic text-[var(--color-text-secondary)]">思考中：{msg.thinking}</div>
+                      <div className="mb-1 text-[length:var(--type-caption)] italic text-[var(--color-text-secondary)]">思考中：{msg.thinking}</div>
                     )}
                     <div className="prose prose-sm max-w-none [&_p]:my-1">
                       <ReactMarkdown>{msg.text}</ReactMarkdown>
@@ -262,9 +262,9 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
               {documentPath && (
                 <div
                   data-testid="chat-current-document"
-                  className="flex items-center gap-1.5 px-3 py-2 text-[var(--type-caption)] text-[var(--color-text-secondary)]"
+                  className="flex items-center gap-1.5 px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
                 >
-                  <Icon name="check" size={12} className="shrink-0 text-[var(--color-success)]" />
+                  <Icon name="check" size={12} className="shrink-0 text-[var(--color-success-text)]" />
                   <span className="shrink-0">当前文档</span>
                   <span className="truncate text-[var(--color-text-primary)]" title={documentPath}>
                     {documentPath.split(/[\\/]/).pop()}
@@ -276,7 +276,7 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
                   type="button"
                   data-testid="context-panel-toggle"
                   onClick={() => setContextPanelOpen((value) => !value)}
-                  className="flex w-full items-center justify-between border-t border-[var(--color-border-subtle)] px-3 py-2 text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+                  className="flex w-full items-center justify-between border-t border-[var(--color-border-subtle)] px-3 py-2 text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
                 >
                   <span>
                     追加文档
@@ -288,7 +288,7 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
               {contextPanelOpen && contextFiles.length > 0 && (
                 <div className="space-y-2 px-3 pb-3">
                   <div className="space-y-2">
-                    <label htmlFor="chat-context-combobox" className="block text-[var(--type-caption)] font-medium text-[var(--color-text-secondary)]">
+                    <label htmlFor="chat-context-combobox" className="block text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)]">
                       添加文档
                     </label>
                     <SearchableCombobox
@@ -313,7 +313,7 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
                           type="button"
                           data-testid={`context-file-chip-${path}`}
                           onClick={() => toggleContextFile(path)}
-                          className="flex items-center gap-1 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] px-2 py-1 text-[var(--type-caption)] text-[var(--color-accent)]"
+                          className="flex items-center gap-1 border border-[var(--color-accent)] bg-[var(--color-accent-subtle)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-accent)]"
                           title={path}
                         >
                           <span className="max-w-[220px] truncate">{path.split('/').pop()}</span>
@@ -334,14 +334,14 @@ export function ChatBubble({ changeName, workspace, documentPath, componentId }:
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="询问关于此变更的问题…"
-              className="h-10 flex-1 resize-none border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm"
+              className="h-10 flex-1 resize-none border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-body)]"
             />
             <button
               type="button"
               data-testid="chat-send"
               onClick={() => void handleSend()}
               disabled={sending || !input.trim()}
-              className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 text-sm text-[var(--color-text-on-color)] disabled:opacity-50"
+              className="border border-[var(--color-accent)] bg-[var(--color-accent)] px-3 text-[length:var(--type-body)] text-[var(--color-text-on-color)] disabled:opacity-50"
             >
               发送
             </button>

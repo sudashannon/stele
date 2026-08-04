@@ -143,7 +143,7 @@ export function Modal({
           </h2>
         ) : (
           <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-            <h2 id={titleId} className="text-sm font-semibold text-[var(--color-text-primary)]">
+            <h2 id={titleId} className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)]">
               {title}
             </h2>
             {dismissible && (

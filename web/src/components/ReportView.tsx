@@ -3,6 +3,7 @@ import { fetchChatConfig, generateReport, listReports, getReport, deleteReport }
 import type { ChatConfig, ReportCoverage, ReportMeta, ReportResponse, ReportType, WorkspaceConfig } from '../api/types'
 import { MarkdownViewer } from './MarkdownViewer'
 import { Icon } from './icons'
+import { StateBlock } from './StateBlock'
 import { Modal } from './Modal'
 
 interface Props {
@@ -175,7 +176,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
 
 
   if (configLoading) {
-    return <div className="p-4 text-sm text-[var(--color-text-secondary)]">加载中…</div>
+    return <StateBlock kind="loading" title="加载中…" compact />
   }
 
   if (!providerReady) {
@@ -186,13 +187,13 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
         style={{ boxShadow: 'var(--shadow-modal)' }}
       >
         <Icon name="report" size={32} className="text-[var(--color-text-tertiary)]" />
-        <p className="text-sm font-medium text-[var(--color-text-primary)]">请先在设置中配置 LLM provider</p>
-        <p className="text-xs text-[var(--color-text-secondary)]">生成报告需要一个已配置 API Key 的 provider</p>
+        <p className="text-[length:var(--type-body)] font-medium text-[var(--color-text-primary)]">请先在设置中配置 LLM provider</p>
+        <p className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">生成报告需要一个已配置 API Key 的 provider</p>
         {onOpenSettings && (
           <button
             type="button"
             onClick={onOpenSettings}
-            className="mt-1 text-sm font-medium px-3 py-1.5 bg-[var(--color-accent)] text-[var(--color-text-on-color)]"
+            className="mt-1 text-[length:var(--type-body)] font-medium px-3 py-1.5 bg-[var(--color-accent)] text-[var(--color-text-on-color)]"
             style={{ boxShadow: '0 6px 14px color-mix(in_srgb,var(--color-accent)_35%,transparent)' }}
           >
             去设置
@@ -218,7 +219,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
         style={{ boxShadow: 'var(--shadow-modal)' }}
       >
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-sm">
+          <label className="flex items-center gap-1.5 text-[length:var(--type-body)]">
             <input
               data-testid="report-type-weekly"
               type="radio"
@@ -228,7 +229,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
             />
             周报
           </label>
-          <label className="flex items-center gap-1.5 text-sm">
+          <label className="flex items-center gap-1.5 text-[length:var(--type-body)]">
             <input
               data-testid="report-type-monthly"
               type="radio"
@@ -240,33 +241,33 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
           </label>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+          <label className="flex items-center gap-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             起始
             <input
               data-testid="report-start"
               type="date"
               value={start}
               onChange={(e) => setStart(e.target.value)}
-              className="border border-[var(--color-border)] p-1.5 text-sm"
+              className="border border-[var(--color-border)] p-1.5 text-[length:var(--type-body)]"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+          <label className="flex items-center gap-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             截止
             <input
               data-testid="report-end"
               type="date"
               value={end}
               onChange={(e) => setEnd(e.target.value)}
-              className="border border-[var(--color-border)] p-1.5 text-sm"
+              className="border border-[var(--color-border)] p-1.5 text-[length:var(--type-body)]"
             />
           </label>
-          <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+          <label className="flex items-center gap-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             Workspace
             <select
               data-testid="report-workspace"
               value={reportWorkspace}
               onChange={(e) => setReportWorkspace(e.target.value)}
-              className="border border-[var(--color-border)] p-1.5 text-sm"
+              className="border border-[var(--color-border)] p-1.5 text-[length:var(--type-body)]"
             >
               <option value="">全部</option>
               {workspaces.map((w) => (
@@ -281,19 +282,19 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
             data-testid="report-generate"
             disabled={generating || openingName !== null}
             onClick={handleGenerate}
-            className="text-sm font-medium px-3 py-1.5 bg-[var(--color-accent)] text-[var(--color-text-on-color)] disabled:opacity-50"
+            className="text-[length:var(--type-body)] font-medium px-3 py-1.5 bg-[var(--color-accent)] text-[var(--color-text-on-color)] disabled:opacity-50"
             style={{ boxShadow: '0 6px 14px color-mix(in_srgb,var(--color-accent)_35%,transparent)' }}
           >
             {generating ? '生成中…' : '生成'}
           </button>
         </div>
         {generating && (
-          <div data-testid="report-progress" className="text-xs text-[var(--color-text-secondary)]">
+          <div data-testid="report-progress" className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             正在读取 Wiki 文档、聚类并分层合成…
           </div>
         )}
         {error && (
-          <div data-testid="report-error" role="alert" className="text-xs text-[var(--color-danger)]">
+          <div data-testid="report-error" role="alert" className="text-[length:var(--type-caption)] text-[var(--color-danger-text)]">
             {error}
           </div>
         )}
@@ -309,7 +310,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
                   data-testid="report-download"
                   disabled={downloading}
                   onClick={handleDownload}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 border border-[var(--color-border)] text-[var(--color-accent)] hover:bg-[var(--color-bg)] disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 text-[length:var(--type-caption)] font-medium px-3 py-1.5 border border-[var(--color-border)] text-[var(--color-accent)] hover:bg-[var(--color-bg)] disabled:opacity-50"
                 >
                   <Icon name={downloading ? 'spinner' : 'download'} size={14} className={downloading ? 'animate-spin' : undefined} />
                   {downloading ? '下载中…' : '下载'}
@@ -320,7 +321,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
                     data-testid="report-delete"
                     disabled={deleting}
                     onClick={() => setConfirmingDelete(true)}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 border border-[var(--color-border)] text-[var(--color-danger)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 text-[length:var(--type-caption)] font-medium px-3 py-1.5 border border-[var(--color-border)] text-[var(--color-danger-text)] hover:bg-[color-mix(in_srgb,var(--color-danger)_10%,var(--color-surface))] disabled:opacity-50"
                   >
                     <Icon name={deleting ? 'spinner' : 'trash'} size={14} className={deleting ? 'animate-spin' : undefined} />
                     {deleting ? '删除中…' : '删除'}
@@ -330,7 +331,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
               {hasCoverage && (
                 <div
                   data-testid="report-coverage"
-                  className="shrink-0 flex flex-col gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-text-secondary)]"
+                  className="shrink-0 flex flex-col gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
                 >
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                     <span>输入文档 {result.inputDocumentCount ?? 0}</span>
@@ -376,7 +377,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
               data-testid="report-empty-state"
               className="h-full flex flex-col items-center justify-center gap-2 text-center border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] py-24 px-6"
             >
-              <p className="text-sm text-[var(--color-text-secondary)]">选择参数后点击「生成」，或从右侧历史记录中选择</p>
+              <p className="text-[length:var(--type-body)] text-[var(--color-text-secondary)]">选择参数后点击「生成」，或从右侧历史记录中选择</p>
             </div>
           )}
         </div>
@@ -386,15 +387,18 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
           className="w-56 shrink-0 bg-[var(--color-surface)] p-3 overflow-y-auto"
           style={{ boxShadow: 'var(--shadow-modal)' }}
         >
-          <div className="text-xs font-semibold text-[var(--color-text-secondary)] mb-2">历史记录</div>
+          <div className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] mb-2">历史记录</div>
           {historyLoading ? (
-            <div role="status" className="text-xs text-[var(--color-text-secondary)]">正在加载历史记录…</div>
+            <StateBlock kind="loading" title="正在加载历史记录…" testId="report-history-loading" compact />
           ) : historyError ? (
-            <div role="alert" data-testid="report-history-error" className="text-xs text-[var(--color-danger)]">
-              历史记录加载失败：{historyError}
-            </div>
+            <StateBlock
+              kind="error"
+              title={`历史记录加载失败：${historyError}`}
+              compact
+              testId="report-history-error"
+            />
           ) : history.length === 0 ? (
-            <div className="text-xs text-[var(--color-text-tertiary)]">暂无记录</div>
+            <StateBlock kind="empty" title="暂无记录" compact />
           ) : (
             <ul className="space-y-1">
               {history.map((item) => {
@@ -406,7 +410,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
                       data-testid="report-history-item"
                       disabled={opening}
                       onClick={() => handleHistoryClick(item)}
-                      className="w-full text-left text-xs text-[var(--color-text-primary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-bg)] px-2 py-1.5 disabled:opacity-50"
+                      className="w-full text-left text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-bg)] px-2 py-1.5 disabled:opacity-50"
                       title={item.name}
                     >
                       <span className="block font-medium">
@@ -432,7 +436,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
           data-testid="report-delete-confirm"
         >
           <div className="p-4">
-            <p className="text-sm text-[var(--color-text-secondary)]">
+            <p className="text-[length:var(--type-body)] text-[var(--color-text-secondary)]">
               删除“{loadedName}”后无法恢复。
             </p>
             <div className="mt-5 flex justify-end gap-2">
@@ -440,7 +444,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
                 type="button"
                 disabled={deleting}
                 onClick={() => setConfirmingDelete(false)}
-                className="px-3 py-2 text-sm border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-50"
+                className="px-3 py-2 text-[length:var(--type-body)] border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-50"
               >
                 取消
               </button>
@@ -449,7 +453,7 @@ export function ReportView({ workspace, workspaces, onOpenSettings }: Props) {
                 data-testid="report-delete-confirm-btn"
                 disabled={deleting}
                 onClick={handleDelete}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm bg-[var(--color-danger)] text-[var(--color-text-on-color)] disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-[length:var(--type-body)] bg-[var(--color-danger)] text-[var(--color-text-on-color)] disabled:opacity-50"
               >
                 <Icon name={deleting ? 'spinner' : 'trash'} size={14} className={deleting ? 'animate-spin' : undefined} />
                 {deleting ? '正在删除…' : '确认删除'}
