@@ -537,6 +537,31 @@ systemctl --user daemon-reload
 systemctl --user enable --now stele
 ```
 
+### 只把分享页对外，其余留在本机
+
+面板没有鉴权，`/api/*` 能读出全部已索引文档，所以默认 `--bind localhost`：整个面板只在本机可达。
+要把分享链接发给别人，**另开一个只有 `/share/` 的监听器**，而不是把面板暴露出去：
+
+```bash
+./stele --port 18989 --bind 127.0.0.1 \
+        --share-port 8989 --share-bind 0.0.0.0 \
+        --dir /path/to/workspace
+```
+
+| 端口 | 绑定 | 内容 |
+|---|---|---|
+| `--port` | `--bind`（默认 `localhost`） | 完整 API + UI |
+| `--share-port` | `--share-bind`（默认 `0.0.0.0`） | **只有 `/share/`**，省略则不对外开任何东西 |
+
+这是物理隔离，不是按来源放行：公开端口上**没有注册**面板的任何路由，`/api/*`、`/mcp`、SPA、静态资源
+一律 404。之所以可行，是因为分享页完全自包含（内联 CSS，mermaid 走 CDN），不向本源请求任何东西。
+
+按来源 IP 判断在 WSL 下本来也不成立：经 Windows portproxy 转发后，Go 看到的源地址全是 WSL 网关，
+真实来源已经丢了。
+
+分享链接的端口取自 `--share-port`：面板端口是私有的，把它写进链接等于发一个注定连不上的地址。
+`--share-url` 仍可覆盖整个 origin（反向代理、隧道、公网域名）。
+
 ### 注册 workspace
 
 通过 UI 添加，或直接编辑 `~/.stele/workspaces.yaml`。路径必须是**绝对路径**——面板作为服务运行，
@@ -614,7 +639,7 @@ sync:
 | `bookmarks.json` · `share-tokens.json` | 收藏与分享链接 |
 | `taxonomy.yaml` | 可选，覆盖内嵌词表 |
 | `wiki/` | 索引缓存、embedding、会话摘要、摘要与综述缓存 |
-| `knowledge-repo/` | 知识镜像 git 仓（仅工作区文档，**从不含会话记录**） |
+| `knowledge-repo/` | 知识镜像 git 仓（仅工作区文档，**从不含会话记录**）。分支固定为 `master`：`git init -b` 显式指定，否则它会取本机 `init.defaultBranch`，同一个远端就会收到两条互无祖先的历史 |
 | `reports/` | 生成的周报/月报与 manifest |
 
 `STELE_DATA_DIR` 可整体覆盖位置。项目原名 comet-panel，首次启动会把旧的
