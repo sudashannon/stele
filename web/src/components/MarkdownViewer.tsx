@@ -8,7 +8,6 @@ import { DiagramBlock } from './DiagramBlock'
 import { ShareModal } from './ShareModal'
 import { Icon } from './icons'
 import { BacklinksPanel } from './BacklinksPanel'
-import { SessionBacklinks } from './SessionBacklinks'
 import { StateBlock } from './StateBlock'
 function getDiagramLanguage(className?: string): 'mermaid' | 'plantuml' | null {
   if (className === 'language-mermaid') return 'mermaid'
@@ -553,9 +552,12 @@ export function MarkdownViewer({
             column merely split that space into two useless slivers, and
             left-aligning it merely moved the void to one side. A document's
             context belongs beside it: what cites it, what it cites, and which
-            agent sessions touched it. `path` doubles as the wiki componentId,
-            which is how SessionBacklinks was already keyed, so this needs no new
-            plumbing. Collapses at the shared `narrow` gate. */}
+            agent sessions touched it. `path` doubles as the wiki componentId, so
+            this needs no new plumbing. Collapses at the shared `narrow` gate.
+
+            BacklinksPanel renders the session list itself, so mounting
+            SessionBacklinks beside it drew 「相关会话」 twice and fetched the
+            session index twice. */}
         {!error && content !== null && path && (
           <aside
             data-testid="markdown-context-rail"
@@ -573,8 +575,7 @@ export function MarkdownViewer({
                 {path}
               </div>
             </div>
-            <BacklinksPanel componentId={path} />
-            <SessionBacklinks componentId={path} onOpenSession={onOpenSession} />
+            <BacklinksPanel componentId={path} onOpenSession={onOpenSession} />
           </aside>
         )}
       </div>

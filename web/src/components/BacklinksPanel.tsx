@@ -76,7 +76,14 @@ function EdgeSection({
 // Session grouping and rendering live in SessionBacklinks so the document
 // viewer and the change detail panel show the same thing.
 
-export function BacklinksPanel({ componentId }: { componentId: string }) {
+export function BacklinksPanel({
+  componentId,
+  onOpenSession,
+}: {
+  componentId: string
+  /** Opens an agent session from the 相关会话 block. */
+  onOpenSession?: (sessionId: string) => void
+}) {
   const [data, setData] = useState<{ forward: WikiEdge[]; backlinks: WikiEdge[]; sessions: WikiSession[] } | null>(null)
   const [loadError, setLoadError] = useState(false)
 
@@ -130,7 +137,7 @@ export function BacklinksPanel({ componentId }: { componentId: string }) {
         emptyText="暂无其他文档引用本文档"
       />
       {sessionBacklinks.length > 0 && (
-        <SessionBacklinkList edges={sessionBacklinks} sessions={data.sessions} />
+        <SessionBacklinkList edges={sessionBacklinks} sessions={data.sessions} onOpenSession={onOpenSession} />
       )}
     </div>
   )

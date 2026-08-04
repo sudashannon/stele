@@ -172,4 +172,48 @@ describe('BacklinksPanel', () => {
     await waitFor(() => expect(screen.getByText(/引用（forward）（1 处引用）/)).toBeTruthy())
     expect(screen.getByText(/反向引用（0 处引用）/)).toBeTruthy()
   })
+
+  // The panel owns the session block. Mounting SessionBacklinks beside it drew
+  // 相关会话 twice in the document viewer and fetched the session index twice,
+  // so the count of that block is a contract, not an implementation detail.
+  it('renders the session block exactly once and passes the open handler down', async () => {
+    const transcript = '/home/u/.omp/agent/sessions/-repo/2026-07-30T00-00-00-000Z_s1.jsonl'
+    let sessionFetches = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/wiki/component/')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            component: { id: '/x/a.md' },
+            forward: [],
+            backlinks: [{ from: transcript, to: '/x/a.md', kind: 'reads', source: 'session' }],
+          }),
+        } as Response)
+      }
+      if (url.includes('/api/wiki/sessions')) {
+        sessionFetches++
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            sessions: [{
+              id: 's1', path: transcript, workspace: 'rx101', title: 'orin wifi', cwd: '/repo',
+              startedAt: '2026-07-30T01:00:00Z', updatedAt: '2026-07-30T02:00:00Z',
+              userTurns: 37, toolCalls: { read: 1 }, writes: [], reads: ['/x/a.md'], edits: [], intents: [],
+            }],
+          }),
+        } as Response)
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+
+    const onOpenSession = vi.fn()
+    render(<BacklinksPanel componentId="/x/a.md" onOpenSession={onOpenSession} />)
+
+    await waitFor(() => expect(screen.getByTestId('session-backlinks')).toBeTruthy())
+    expect(screen.getAllByTestId('session-backlinks')).toHaveLength(1)
+    expect(screen.getAllByText(/相关会话/)).toHaveLength(1)
+    expect(screen.getAllByText('orin wifi')).toHaveLength(1)
+    expect(sessionFetches).toBe(1)
+  })
 })
