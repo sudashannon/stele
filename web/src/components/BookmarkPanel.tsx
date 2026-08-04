@@ -17,7 +17,7 @@ export function BookmarkPanel({ bookmarks, onOpen, onRemove, onClose }: Bookmark
       data-testid="bookmark-panel"
       role="region"
       aria-label="收藏"
-      className="flex max-h-[70vh] w-80 flex-col overflow-hidden border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)]"
+      className="flex max-h-[70vh] w-80 flex-col overflow-hidden border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-overlay)] z-40"
     >
       <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
         <div className="text-[length:var(--type-body)] leading-[var(--leading-body)] font-semibold text-[var(--color-text-primary)]">收藏</div>

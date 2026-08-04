@@ -114,7 +114,7 @@ export function ContextMenu({ items, x, y, onClose }: Props) {
       ref={menuRef}
       role="menu"
       aria-orientation="vertical"
-      className="fixed z-50 min-w-[160px] border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-[var(--shadow-2)]"
+      className="fixed z-50 min-w-[160px] border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-[var(--shadow-overlay)]"
       style={{ left: position.x, top: position.y }}
       onKeyDown={(event) => {
         if (event.key === 'ArrowDown') {

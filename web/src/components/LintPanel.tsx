@@ -151,15 +151,15 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
       )}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse bg-[var(--color-surface)]">
-          <thead>
-            <tr className="sticky top-0 bg-[var(--color-layer)]">
-              <th className="py-1 px-2 text-left text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] border-b border-[var(--color-border)]">
+          <thead className="sticky top-0 z-10">
+            <tr>
+              <th className="py-1 px-2 text-left bg-[var(--color-layer)] border-b border-[var(--color-border)] text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]">
                 规则
               </th>
-              <th className="py-1 px-2 text-left text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] border-b border-[var(--color-border)]" style={{ width: 80 }}>
+              <th className="py-1 px-2 text-left bg-[var(--color-layer)] border-b border-[var(--color-border)] text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]" style={{ width: 80 }}>
                 严重度
               </th>
-              <th className="py-1 px-2 text-right text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] border-b border-[var(--color-border)]" style={{ width: 80 }}>
+              <th className="py-1 px-2 text-right bg-[var(--color-layer)] border-b border-[var(--color-border)] text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)]" style={{ width: 80 }}>
                 数量
               </th>
             </tr>

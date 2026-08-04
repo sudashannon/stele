@@ -45,7 +45,7 @@ export function StaleBundleNotice({ onReload }: { onReload?: () => void }) {
     <div
       data-testid="stale-bundle-notice"
       role="alert"
-      className="fixed left-1/2 top-4 z-50 flex max-w-[36rem] -translate-x-1/2 items-start gap-3 border border-[var(--color-warn)] bg-[var(--color-warn-subtle)] px-4 py-3 shadow-[var(--shadow-overlay)]"
+      className="fixed left-1/2 top-4 z-50 flex max-w-[36rem] -translate-x-1/2 items-start gap-3 border border-[var(--color-warn)] bg-[var(--color-warn-subtle)] px-4 py-3 shadow-[var(--shadow-2)]"
     >
       <Icon name="warning" size={16} className="mt-0.5 shrink-0 text-[var(--color-warn-text)]" />
       <div className="space-y-2">

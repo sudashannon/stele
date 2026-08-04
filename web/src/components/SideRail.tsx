@@ -102,11 +102,13 @@ function RailHint({ label }: { label: string }) {
   return (
     <span
       className={
-        // `text-[length:…]` is required: `text-[length:var(--type-caption)]` compiles
-        // to a *color* utility (Tailwind cannot tell a size token from a color
-        // one), which overrode the color below and left the hint inheriting the
-        // button's white text — an empty white tooltip next to the active item.
-        'pointer-events-none absolute left-full top-1/2 z-30 ml-2 -translate-y-1/2 whitespace-nowrap border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] font-medium leading-none text-[var(--color-text-primary)] opacity-0 shadow-[var(--shadow-1)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100'
+        // `text-[length:…]` is required. Writing the size token WITHOUT the
+        // `length:` hint compiles to a *color* utility, because Tailwind cannot
+        // tell a size token from a colour one; it then overrode the colour below
+        // and left the hint inheriting the button's white text — an empty white
+        // tooltip next to the active item. `tokenContract.test.ts` guards the
+        // whole tree against that form, which is why it is not spelled out here.
+        'pointer-events-none absolute left-full top-1/2 z-30 ml-2 -translate-y-1/2 whitespace-nowrap border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] font-medium leading-none text-[var(--color-text-primary)] opacity-0 shadow-[var(--shadow-overlay)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100'
       }
     >
       {label}

@@ -58,10 +58,16 @@ function formatDueBadge(iso: string | null): string {
 
 const RECENT_WIKI_OPTION_LIMIT = 20
 const TODO_ROW_HEIGHT = 56
+const TODO_REASON_ROW_HEIGHT = 36
+const TODO_DONE_COLLAPSED_HEIGHT = 28
 const TODO_WINDOW_SIZE = 60
 
-// Reason blocks group consecutive todos that share an identical blocker reason.
-const TODO_REASON_BLOCK_HEIGHT = 60
+// ── Virtual-list entry types ──────────────────────────────────────────────────
+
+type ListEntry =
+  | { type: 'todo'; todo: Todo; group: keyof GroupedTodos }
+  | { type: 'reason'; reason: string; count: number; group: keyof GroupedTodos }
+  | { type: 'done-collapsed'; count: number }
 
 
 function wikiUpdatedTimestamp(component: WikiComponent): number | null {
@@ -217,6 +223,7 @@ export function TodoPanel({
   )
   const [qcChange, setQcChange] = useState<TodoChangeRef | null>(null)
   const [qcWikiRefs, setQcWikiRefs] = useState<TodoWikiRef[]>([])
+  const [doneCollapsed, setDoneCollapsed] = useState(true)
   const [filterOpen, setFilterOpen] = useState(false)
   const [confirmClearContext, setConfirmClearContext] = useState(false)
   const [windowStart, setWindowStart] = useState(0)
@@ -323,53 +330,76 @@ export function TodoPanel({
     setConfirmClearContext(false)
   }, [])
 
+  // ── Entry list with reason blocks and done collapsing ───────────────────────
+
   const flattenedTodos = useMemo(
     () => GROUP_SPECS.flatMap((spec) => groups[spec.key].map((todo) => ({ todo, group: spec.key }))),
     [groups],
   )
 
-  // Reason-group detection: consecutive todos with an identical, non-empty
-  // blocker reason are collapsed so the reason is rendered once for the group.
-  const reasonGroupMap = useMemo(() => {
-    const map = new Map<string, { isLeader: boolean; count: number; reason: string }>()
-    // Two-pass: first collect groups, then only mark leaders for count >= 2.
-    const pendingLeaders: { id: string; reason: string }[] = []
-    for (let i = 0; i < flattenedTodos.length; i++) {
-      const entry = flattenedTodos[i]
-      const reason = entry.todo.externalRef?.blocker
-      if (!reason) continue
-      const prev = i > 0 ? flattenedTodos[i - 1] : null
-      const prevReason = prev?.todo.externalRef?.blocker
-      if (prevReason === reason) {
-        const leader = pendingLeaders[pendingLeaders.length - 1]
-        const entry_ = map.get(leader.id)!
-        entry_.count++
-        map.set(entry.todo.id, { isLeader: false, count: entry_.count, reason })
-      } else {
-        pendingLeaders.push({ id: entry.todo.id, reason })
-        map.set(entry.todo.id, { isLeader: false, count: 1, reason })
-      }
-    }
-    // Mark leaders only for groups of size >= 2.
-    for (const pl of pendingLeaders) {
-      const entry = map.get(pl.id)
-      if (entry && entry.count >= 2) {
-        map.set(pl.id, { isLeader: true, count: entry.count, reason: pl.reason })
-      }
-    }
-    return map
-  }, [flattenedTodos])
+  const displayEntries = useMemo(() => {
+    // Phase 1: build todo entries from flattenedTodos
+    const raw: ListEntry[] = flattenedTodos.map(({ todo, group }) => ({ type: 'todo', todo, group }))
 
-  // Variable row heights: leader rows include a reason block.
+    // Phase 2: insert reason entries after consecutive groups (size ≥2) sharing the same blocker reason
+    const withReasons: ListEntry[] = []
+    let i = 0
+    while (i < raw.length) {
+      const entry = raw[i]
+      if (entry.type !== 'todo') {
+        withReasons.push(entry)
+        i++
+        continue
+      }
+      const reason = entry.todo.externalRef?.blocker
+      if (!reason) {
+        withReasons.push(entry)
+        i++
+        continue
+      }
+      // Find the run of consecutive todos with the same blocker reason
+      // Hoisted to a local because TypeScript does not narrow a discriminated
+      // union through a repeated index access like `raw[j].type`.
+      let j = i + 1
+      for (;;) {
+        const next = raw[j]
+        if (!next || next.type !== 'todo' || next.todo.externalRef?.blocker !== reason) break
+        j++
+      }
+      const count = j - i
+      // Push all todos in this run
+      for (let k = i; k < j; k++) withReasons.push(raw[k])
+      // Insert a reason row after groups of >= 2
+      if (count >= 2) {
+        withReasons.push({ type: 'reason', reason, count, group: entry.group })
+      }
+      i = j
+    }
+
+    // Phase 3: collapse done group — replace all done entries with one sentinel
+    if (!doneCollapsed) return withReasons
+
+    const result: ListEntry[] = []
+    let doneCount = 0
+    for (const e of withReasons) {
+      // The done-collapsed sentinel carries no group, so narrow before reading it.
+      if (e.type !== 'done-collapsed' && e.group === 'done') { doneCount++; continue }
+      result.push(e)
+    }
+    if (doneCount > 0) result.push({ type: 'done-collapsed', count: doneCount })
+    return result
+  }, [flattenedTodos, doneCollapsed])
+
+  // Fixed heights per entry kind — virtualisation arithmetic stays exact
   const entryHeights = useMemo(
-    () => flattenedTodos.map((e) => {
-      const rg = reasonGroupMap.get(e.todo.id)
-      return rg?.isLeader ? TODO_ROW_HEIGHT + TODO_REASON_BLOCK_HEIGHT : TODO_ROW_HEIGHT
+    () => displayEntries.map((e) => {
+      if (e.type === 'reason') return TODO_REASON_ROW_HEIGHT
+      if (e.type === 'done-collapsed') return TODO_DONE_COLLAPSED_HEIGHT
+      return TODO_ROW_HEIGHT
     }),
-    [flattenedTodos, reasonGroupMap],
+    [displayEntries],
   )
 
-  // Cumulative heights for virtual-list offset lookups.
   const cumulativeHeights = useMemo(() => {
     const ch: number[] = []
     let sum = 0
@@ -380,22 +410,50 @@ export function TodoPanel({
     return ch
   }, [entryHeights])
 
-  const visibleTodos = flattenedTodos.slice(windowStart, windowStart + TODO_WINDOW_SIZE)
-  const selectedIsVisible = selectedId !== null && visibleTodos.some(({ todo }) => todo.id === selectedId)
-  const tabbableId = selectedIsVisible ? selectedId : (visibleTodos[0]?.todo.id ?? null)
+  const visibleEntries = displayEntries.slice(windowStart, windowStart + TODO_WINDOW_SIZE)
+  const visibleTodoEntries = useMemo(
+    () => visibleEntries.filter((e): e is { type: 'todo'; todo: Todo; group: keyof GroupedTodos } => e.type === 'todo'),
+    [visibleEntries],
+  )
+  const selectedIsVisible = selectedId !== null && visibleTodoEntries.some(({ todo }) => todo.id === selectedId)
+  const tabbableId = selectedIsVisible ? selectedId : (visibleTodoEntries[0]?.todo.id ?? null)
 
   const moveRowFocus = useCallback((currentId: string, key: 'ArrowUp' | 'ArrowDown' | 'Home' | 'End') => {
-    const currentIndex = flattenedTodos.findIndex(({ todo }) => todo.id === currentId)
+    // Find current entry index — only todo entries are focusable
+    const currentIndex = displayEntries.findIndex((e) => e.type === 'todo' && e.todo.id === currentId)
     if (currentIndex === -1) return
 
+    const step = key === 'ArrowUp' ? -1 : key === 'ArrowDown' ? 1 : 0
     let targetIndex = currentIndex
-    if (key === 'ArrowUp') targetIndex = Math.max(0, currentIndex - 1)
-    if (key === 'ArrowDown') targetIndex = Math.min(flattenedTodos.length - 1, currentIndex + 1)
-    if (key === 'Home') targetIndex = 0
-    if (key === 'End') targetIndex = flattenedTodos.length - 1
 
-    const targetId = flattenedTodos[targetIndex]?.todo.id
-    if (!targetId) return
+    if (key === 'Home') targetIndex = 0
+    else if (key === 'End') targetIndex = displayEntries.length - 1
+    else targetIndex += step
+
+    // Clamp
+    targetIndex = Math.max(0, Math.min(displayEntries.length - 1, targetIndex))
+
+    // Skip non-todo entries
+    if (key === 'ArrowUp' || key === 'ArrowDown') {
+      while (targetIndex >= 0 && targetIndex < displayEntries.length && displayEntries[targetIndex].type !== 'todo') {
+        if (step < 0 && targetIndex <= 0) break
+        if (step > 0 && targetIndex >= displayEntries.length - 1) break
+        targetIndex += step
+      }
+    }
+    // For Home/End, find the first/last todo entry
+    if (key === 'Home') {
+      while (targetIndex < displayEntries.length && displayEntries[targetIndex].type !== 'todo') targetIndex++
+      if (targetIndex >= displayEntries.length) return
+    }
+    if (key === 'End') {
+      while (targetIndex >= 0 && displayEntries[targetIndex].type !== 'todo') targetIndex--
+      if (targetIndex < 0) return
+    }
+
+    const targetEntry = displayEntries[targetIndex]
+    if (!targetEntry || targetEntry.type !== 'todo') return
+    const targetId = targetEntry.todo.id
     if (targetIndex === currentIndex) {
       rowRefs.current.get(targetId)?.focus()
       return
@@ -407,7 +465,7 @@ export function TodoPanel({
       if (targetIndex >= start + TODO_WINDOW_SIZE) return targetIndex - TODO_WINDOW_SIZE + 1
       return start
     })
-  }, [flattenedTodos])
+  }, [displayEntries])
 
   useEffect(() => {
     setWindowStart(0)
@@ -415,10 +473,10 @@ export function TodoPanel({
   }, [statusFilter, workspaceFilter, searchQuery])
 
   useEffect(() => {
-    if (windowStart >= flattenedTodos.length) {
-      setWindowStart(Math.max(0, flattenedTodos.length - TODO_WINDOW_SIZE))
+    if (windowStart >= displayEntries.length) {
+      setWindowStart(Math.max(0, displayEntries.length - TODO_WINDOW_SIZE))
     }
-  }, [flattenedTodos.length, windowStart])
+  }, [displayEntries.length, windowStart])
 
   useEffect(() => {
     const targetId = pendingFocusId.current
@@ -427,7 +485,7 @@ export function TodoPanel({
     if (!target) return
     pendingFocusId.current = null
     target.focus()
-  }, [selectedId, windowStart, visibleTodos])
+  }, [selectedId, windowStart, visibleEntries])
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -557,7 +615,7 @@ export function TodoPanel({
       {/* Body: filters | list | detail */}
       <div className="flex-1 flex min-h-0">
         {/* Left filters — hidden on narrow, toggleable on medium, always visible on wide */}
-          <div className={`w-[180px] shrink-0 border-r border-[var(--color-border)] overflow-y-auto ${filterOpen ? 'block' : 'hidden'} narrow:hidden wide:block`}>
+          <div className={`w-40 shrink-0 border-r border-[var(--color-border)] overflow-y-auto ${filterOpen ? 'block' : 'hidden'} narrow:hidden wide:block`}>
             <div className="p-3 space-y-3">
               {/* Status filter */}
               <div>
@@ -627,10 +685,9 @@ export function TodoPanel({
           data-testid="todo-list-scroll"
           className="flex-1 min-w-0 overflow-y-auto"
           onScroll={(event) => {
-            if (flattenedTodos.length <= TODO_WINDOW_SIZE) return
+            if (displayEntries.length <= TODO_WINDOW_SIZE) return
             const scrollTop = event.currentTarget.scrollTop
-            // Find the entry whose cumulative height first exceeds scrollTop.
-            let idx = flattenedTodos.length - 1
+            let idx = displayEntries.length - 1
             for (let i = 0; i < cumulativeHeights.length; i++) {
               if (scrollTop < cumulativeHeights[i]) {
                 idx = i
@@ -638,7 +695,7 @@ export function TodoPanel({
               }
             }
             const next = Math.max(0, Math.min(
-              flattenedTodos.length - TODO_WINDOW_SIZE,
+              displayEntries.length - TODO_WINDOW_SIZE,
               idx,
             ))
             setWindowStart(next)
@@ -660,48 +717,101 @@ export function TodoPanel({
                 />
               )}
               {GROUP_SPECS.map((g) => {
-                const visible = visibleTodos.filter((entry) => entry.group === g.key).map((entry) => entry.todo)
+                const isDoneGroup = g.key === 'done'
+                const doneTodosCount = groups.done.length
+                // The done-collapsed sentinel has no group, so exclude it first.
+                const visible = visibleEntries.filter((e) => e.type !== 'done-collapsed' && e.group === g.key)
+
+                // Done group always renders its header when it has any todos,
+                // even when collapsed (displayEntries sends only a sentinel).
+                if (isDoneGroup) {
+                  if (doneTodosCount === 0) return null
+                  return (
+                    <div key="done" data-testid={`todo-group-${g.key}`}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setDoneCollapsed((v) => !v)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDoneCollapsed((v) => !v) } }}
+                        className="sticky top-0 flex items-center gap-1 bg-[var(--color-layer)] px-4 py-1.5 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] z-10 border-b border-[var(--color-border-subtle)] cursor-pointer hover:bg-[var(--color-layer-accent)]"
+                      >
+                        <Icon name={doneCollapsed ? 'chevron-right' : 'chevron-down'} size={12} />
+                        {g.label} <span className="font-normal tabular-nums">({doneTodosCount})</span>
+                      </div>
+                      {visible.map((entry) => {
+                        if (entry.type === 'done-collapsed') return null
+                        if (entry.type === 'reason') return <ReasonBlock key={`reason-${entry.reason}-${entry.count}`} reason={entry.reason} count={entry.count} />
+                        return (
+                          <TodoRow
+                            key={entry.todo.id}
+                            todo={entry.todo}
+                            selected={entry.todo.id === selectedId}
+                            tabbable={entry.todo.id === tabbableId}
+                            rowRef={(element) => {
+                              if (element) rowRefs.current.set(entry.todo.id, element)
+                              else rowRefs.current.delete(entry.todo.id)
+                            }}
+                            onSelect={() => setSelectedId(entry.todo.id === selectedId ? null : entry.todo.id)}
+                            onMoveFocus={(key) => moveRowFocus(entry.todo.id, key)}
+                            onToggleDone={() => {
+                              const newStatus: TodoStatus = entry.todo.status === 'done' ? 'open' : 'done'
+                              onUpdate(entry.todo.id, { status: newStatus }).catch(() => {})
+                            }}
+                            onNavigateWiki={onNavigateWiki}
+                            onNavigateSession={onNavigateSession}
+                            sessionPathById={sessionPathById}
+                            onNavigateChange={onNavigateChange}
+                            wikiComponents={wikiComponents}
+                            writable={writable}
+                          />
+                        )
+                      })}
+                    </div>
+                  )
+                }
+
+                // Non-done groups
                 if (visible.length === 0) return null
                 return (
                   <div key={g.key} data-testid={`todo-group-${g.key}`}>
                     <div className="sticky top-0 flex items-center gap-1 bg-[var(--color-bg)] px-4 py-1.5 text-[length:var(--type-caption)] font-semibold text-[var(--color-text-secondary)] z-10 border-b border-[var(--color-border-subtle)]">
                       <Icon name={g.icon} size={12} /> {g.label} <span className="font-normal">({groups[g.key].length})</span>
                     </div>
-                    {visible.map((todo) => (
-                      <TodoRow
-                        key={todo.id}
-                        todo={todo}
-                        selected={todo.id === selectedId}
-                        tabbable={todo.id === tabbableId}
-                        rowRef={(element) => {
-                          if (element) rowRefs.current.set(todo.id, element)
-                          else rowRefs.current.delete(todo.id)
-                        }}
-                        onSelect={() => setSelectedId(todo.id === selectedId ? null : todo.id)}
-                        onMoveFocus={(key) => moveRowFocus(todo.id, key)}
-                        onToggleDone={() => {
-                          const newStatus: TodoStatus = todo.status === 'done' ? 'open' : 'done'
-                          onUpdate(todo.id, { status: newStatus }).catch(() => {})
-                        }}
-                        onNavigateWiki={onNavigateWiki}
-                        onNavigateSession={onNavigateSession}
-                        sessionPathById={sessionPathById}
-                        onNavigateChange={onNavigateChange}
-                        wikiComponents={wikiComponents}
-                        reasonBlock={(() => {
-                          const rg = reasonGroupMap.get(todo.id)
-                          return rg?.isLeader ? { reason: rg.reason, count: rg.count } : undefined
-                        })()}
-                        writable={writable}
-                      />
-                    ))}
+                    {visible.map((entry) => {
+                      if (entry.type === 'reason') return <ReasonBlock key={`reason-${entry.reason}-${entry.count}`} reason={entry.reason} count={entry.count} />
+                      if (entry.type === 'todo') return (
+                        <TodoRow
+                          key={entry.todo.id}
+                          todo={entry.todo}
+                          selected={entry.todo.id === selectedId}
+                          tabbable={entry.todo.id === tabbableId}
+                          rowRef={(element) => {
+                            if (element) rowRefs.current.set(entry.todo.id, element)
+                            else rowRefs.current.delete(entry.todo.id)
+                          }}
+                          onSelect={() => setSelectedId(entry.todo.id === selectedId ? null : entry.todo.id)}
+                          onMoveFocus={(key) => moveRowFocus(entry.todo.id, key)}
+                          onToggleDone={() => {
+                            const newStatus: TodoStatus = entry.todo.status === 'done' ? 'open' : 'done'
+                            onUpdate(entry.todo.id, { status: newStatus }).catch(() => {})
+                          }}
+                          onNavigateWiki={onNavigateWiki}
+                          onNavigateSession={onNavigateSession}
+                          sessionPathById={sessionPathById}
+                          onNavigateChange={onNavigateChange}
+                          wikiComponents={wikiComponents}
+                          writable={writable}
+                        />
+                      )
+                      return null
+                    })}
                   </div>
                 )
               })}
-              {windowStart + visibleTodos.length < flattenedTodos.length && (
+              {windowStart + visibleEntries.length < displayEntries.length && (
                 <div
                   aria-hidden="true"
-                  style={{ height: cumulativeHeights.length > 0 ? cumulativeHeights[cumulativeHeights.length - 1] - (windowStart + visibleTodos.length < cumulativeHeights.length ? cumulativeHeights[windowStart + visibleTodos.length - 1] : cumulativeHeights[cumulativeHeights.length - 1]) : 0 }}
+                  style={{ height: cumulativeHeights.length > 0 ? cumulativeHeights[cumulativeHeights.length - 1] - (windowStart + visibleEntries.length < cumulativeHeights.length ? cumulativeHeights[windowStart + visibleEntries.length - 1] : cumulativeHeights[cumulativeHeights.length - 1]) : 0 }}
                   data-testid="todo-list-bottom-spacer"
                 />
               )}
@@ -755,7 +865,6 @@ function TodoRow({
   sessionPathById,
   wikiComponents,
   writable,
-  reasonBlock,
 }: {
   todo: Todo
   selected: boolean
@@ -766,19 +875,20 @@ function TodoRow({
   onToggleDone: () => void
   onNavigateWiki: (path: string) => void
   onNavigateChange: (workspace: string, changeName: string) => void
-  /** Opens the session a projected todo came from. */
-
   onNavigateSession?: (path: string) => void
   sessionPathById?: Record<string, string>
   wikiComponents: WikiComponent[]
   writable: boolean
-
-  /** Reason group block — only the leader of consecutive identical blocker reasons shows this. */
-  reasonBlock?: { reason: string; count: number }
 }) {
-
-  const [reasonExpanded, setReasonExpanded] = useState(false)
   const isDone = todo.status === 'done'
+
+  // Priority as a left-edge rule colour, not a second marker.
+  const priorityBorder = (() => {
+    if (selected) return 'var(--color-accent)'
+    if (todo.priority === 'urgent') return 'var(--color-danger)'
+    if (todo.priority === 'high') return 'var(--color-warn-text)'
+    return 'transparent'
+  })()
 
   return (
     <div
@@ -802,19 +912,12 @@ function TodoRow({
       }}
       className={`flex shrink-0 items-start gap-2 overflow-hidden px-4 py-2 cursor-pointer border-l-2 transition-colors ${
         selected
-          ? 'border-l-[var(--color-accent)] bg-[var(--color-accent)]/5'
-          : 'border-l-transparent hover:bg-[var(--palette-highlight)]'
+          ? 'bg-[var(--color-accent)]/5'
+          : 'hover:bg-[var(--palette-highlight)]'
       }`}
-      style={{ height: reasonBlock ? TODO_ROW_HEIGHT + TODO_REASON_BLOCK_HEIGHT : TODO_ROW_HEIGHT }}
+      style={{ height: TODO_ROW_HEIGHT, borderLeftColor: priorityBorder }}
     >
-      {/* Priority dot */}
-      <span
-        className="shrink-0 w-1.5 h-1.5 mt-1.5"
-        style={{ backgroundColor: PRIORITY_COLORS[todo.priority] }}
-        title={PRIORITY_LABELS[todo.priority]}
-      />
-
-      {/* Done checkbox */}
+      {/* Done checkbox — the single interactive marker per row */}
       {writable !== false && (
         <button
           onClick={(e) => {
@@ -834,32 +937,6 @@ function TodoRow({
 
       {/* Content */}
       <div className="min-w-0 flex-1">
-
-        {/* Reason block — shown only for the leader of a reason group */}
-        {reasonBlock && (
-          <div className="mb-1">
-            <p
-              data-testid={`todo-reason-${todo.id}`}
-              className={`text-[length:var(--type-body)] leading-[var(--leading-body)] text-[var(--color-text-secondary)] break-words ${
-                reasonExpanded ? '' : 'line-clamp-2'
-              }`}
-              style={{ maxWidth: 'var(--measure)' }}
-            >
-              {reasonBlock.reason}
-              {reasonBlock.count > 1 && (
-                <span className="text-[length:var(--type-caption)] text-[var(--color-text-tertiary)] ml-1">
-                  （共 {reasonBlock.count} 个任务）
-                </span>
-              )}
-            </p>
-            <button
-              onClick={(e) => { e.stopPropagation(); setReasonExpanded((v) => !v) }}
-              className="text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline mt-0.5"
-            >
-              {reasonExpanded ? '收起' : '展开'}
-            </button>
-          </div>
-        )}
         <div className={`truncate text-[length:var(--type-body)] leading-[var(--leading-body)] ${isDone ? 'line-through text-[var(--color-text-tertiary)]' : 'text-[var(--color-text-primary)]'}`}>
           {todo.title || '(无标题)'}
         </div>
@@ -887,15 +964,7 @@ function TodoRow({
           )}
 
           {todo.metadata.source === 'omp' && todo.externalRef && (() => {
-            // The projection already knows which session produced this todo;
-            // resolving that id to an indexed transcript turns the origin chip
-            // into the way back to the work it came from.
             const sessionPath = sessionPathById?.[todo.externalRef.sessionId]
-            // The chip is an origin affordance, so it carries only `OMP · <phase>`.
-            // Appending the blocker produced a 280-character, 1489px unbroken run
-            // inside a virtualised 56px row - triple any sane line length. The full
-            // text stays reachable three ways: the grouped reason block above rows
-            // that share it, the detail drawer, and this chip's own title tooltip.
             const chipLabel = `OMP · ${todo.externalRef.phase}`
             const chipTitle = todo.externalRef.blocker || `OMP ${todo.externalRef.sessionId}/${todo.externalRef.taskKey}`
             if (!sessionPath || !onNavigateSession) {
@@ -970,6 +1039,41 @@ function TodoRow({
             )
           })}
         </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ── ReasonBlock — contained reason row below grouped blocker tasks ─────────────
+
+function ReasonBlock({ reason, count }: { reason: string; count: number }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div
+      data-testid={`todo-reason-block-${reason.slice(0, 16)}`}
+      className="flex items-start gap-2 bg-[var(--color-layer)] border-y border-[var(--color-border-subtle)] overflow-hidden"
+      style={{ height: TODO_REASON_ROW_HEIGHT }}
+    >
+      {/* indent gutter */}
+      <div className="shrink-0" style={{ width: 'calc(1rem + 1rem + 1rem)' }} />
+      <div className="min-w-0 flex-1 flex items-start gap-2 py-1.5 pr-3">
+        <p
+          className={`text-[length:var(--type-caption)] leading-[var(--leading-caption)] text-[var(--color-text-secondary)] ${
+            expanded ? '' : 'truncate'
+          }`}
+        >
+          {reason}
+          <span className="text-[var(--color-text-tertiary)] ml-1 whitespace-nowrap">
+            （共 {count} 个任务）
+          </span>
+        </p>
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v) }}
+          className="shrink-0 text-[length:var(--type-caption)] text-[var(--color-accent)] hover:underline mt-px"
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
       </div>
     </div>
   )

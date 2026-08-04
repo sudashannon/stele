@@ -108,7 +108,9 @@ describe('TodoPanel grouping', () => {
     render(<TodoPanel {...baseProps} todos={[doneTodo]} />)
     const group = screen.getByTestId('todo-group-done')
     expect(group).toBeTruthy()
-    expect(group.textContent).toContain('Done task')
+    // Done is collapsed by default — header is visible, entries are hidden.
+    expect(group.textContent).toContain('已完成')
+    expect(group.textContent).toContain('(1)')
   })
 
   it('groups blocked and dropped items in distinct terminal sections', () => {
