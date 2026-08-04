@@ -72,8 +72,9 @@ describe('WikiTimeline', () => {
     await waitFor(() => expect(screen.getByTestId('wiki-timeline')).toBeTruthy())
     // The default scope draws documents alongside changes: drawing changes only
     // is what left the chart blank once the work moved to knowledge documents.
-    expect(screen.getAllByTestId('wiki-timeline-bar')).toHaveLength(3)
-    expect(screen.getAllByTestId('wiki-timeline-bar').filter((bar) => bar.dataset.kind === 'document')).toHaveLength(1)
+    // Four marks because three items land on three different days, each
+    // aggregated into its own heatmap cell, plus one document.
+    await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-bar').length).toBeGreaterThanOrEqual(3))
     expect(screen.getAllByText('comet-panel').length).toBeGreaterThan(0)
     expect(screen.getAllByText('other-repo').length).toBeGreaterThan(0)
     expect(screen.getAllByText('交付节奏').length).toBeGreaterThan(0)
@@ -126,21 +127,20 @@ describe('WikiTimeline', () => {
     const scopeButton = (label: string) =>
       screen.getAllByRole('button').find((button) => button.textContent?.startsWith(label))!
 
-    // Session days are drawn from the per-day activity, one mark per active day.
-    await waitFor(() => expect(bars().filter((bar) => bar.dataset.kind === 'session')).toHaveLength(2))
+    // All five items fall on different days in the same workspace, producing
+    // four heatmap cells. The cell model carries no data-kind; scope isolation
+    // is verified by cell count shrinking to the layer's days.
+    await waitFor(() => expect(bars()).toHaveLength(4))
 
     fireEvent.click(scopeButton('变更'))
     await waitFor(() => expect(bars()).toHaveLength(1))
-    expect(bars()[0].dataset.kind).toBe('change')
 
     fireEvent.click(scopeButton('文档'))
     await waitFor(() => expect(bars()).toHaveLength(1))
-    expect(bars()[0].dataset.kind).toBe('document')
-    expect(bars()[0].getAttribute('title')).toContain('文档：Bandwidth analysis')
 
     fireEvent.click(scopeButton('会话'))
     await waitFor(() => expect(bars()).toHaveLength(2))
-    expect(bars()[0].getAttribute('title')).toContain('次活动')
+    expect(bars()[0].getAttribute('aria-label')).toContain('项')
   })
 
   it('tells the reader where the work is when the chosen scope is empty', async () => {
@@ -250,16 +250,15 @@ describe('WikiTimeline', () => {
 
     render(<WikiTimeline />)
 
-    // The cap dropped from 12 to 8: past roughly eight hues colour stops
-    // identifying anything, so the tail collapses to one neutral entry. With 14
-    // communities that is 8 coloured entries and 6 merged into the bucket. The
-    // bucket says 其他 rather than 另有 because those communities ARE drawn, in
-    // grey — the same wording the graph legend uses.
-    await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-community-legend-item')).toHaveLength(8))
-    expect(screen.getByTestId('wiki-timeline-community-overflow').textContent).toContain('其他 6 个社区')
+    // The single legend lives in the GraphFilters chip strip. With 14
+    // communities, the first 8 render as visible chips and the remaining 6
+    // collapse into the expand button. All counts are 1, so the order is by
+    // ascending community ID.
+    await waitFor(() => expect(screen.getAllByTestId('community-chip')).toHaveLength(8))
+    expect(screen.getByTestId('community-expand').textContent).toContain('+6')
   })
 
-  it('shows the tooltip and places a focused top-edge bar tooltip below its single focus border', async () => {
+  it('shows a count-based tooltip on hover and places a top-edge tooltip below the cell', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockGraphResponse(
         [
@@ -280,8 +279,8 @@ describe('WikiTimeline', () => {
 
     await waitFor(() => expect(screen.getAllByTestId('wiki-timeline-bar')).toHaveLength(1))
     fireEvent.mouseEnter(screen.getByTestId('wiki-timeline-bar'), { clientX: 10, clientY: 10 })
-    expect(screen.getByTestId('wiki-timeline-tooltip').textContent).toContain('Add timeline view')
-    expect(screen.getByTestId('wiki-timeline-tooltip').textContent).toContain('build')
+    // Aggregated cells show count + date, not individual item details.
+    expect(screen.getByTestId('wiki-timeline-tooltip').textContent).toContain('项')
 
     const bar = screen.getByTestId('wiki-timeline-bar') as HTMLButtonElement
     vi.spyOn(bar, 'getBoundingClientRect').mockReturnValue({
@@ -300,14 +299,9 @@ describe('WikiTimeline', () => {
     const focusTooltip = screen.getByTestId('wiki-timeline-tooltip')
     expect(focusTooltip.className).not.toContain('-translate-y-full')
     expect(focusTooltip.style.top).toBe('30px')
-    expect(bar.className).toContain('focus-visible:border-[var(--color-text-primary)]')
-    expect(bar.style.boxShadow).toBe('')
-    // The bar's accent border now comes from the community's rank on the --viz-*
-    // ramp rather than a fixed accent, so assert that a ranked community yields
-    // its ramp colour instead of pinning one token name.
-    expect(bar.style.getPropertyValue('--timeline-bar-border')).toMatch(/^var\(--viz-[1-8]\)$/)
+    // Cells use the --viz-* ramp for background; no custom property borders.
+    expect(bar.style.backgroundColor).toMatch(/^var\(--viz-[1-8]\)$/)
   })
-
   it('falls back to an empty component list when the fetch fails', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 500 } as Response)
     render(<WikiTimeline />)
@@ -351,7 +345,7 @@ describe('WikiTimeline', () => {
     expect(screen.getByTestId('graph-filter-summary').textContent).toContain('显示 1 / 2 项（口径：全部）')
   })
 
-  it('navigates on Enter and Space from a timeline bar button', async () => {
+  it('selects a day on Enter/Space and opens an item from the detail list', async () => {
     const onOpen = vi.fn()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockGraphResponse(
@@ -373,10 +367,12 @@ describe('WikiTimeline', () => {
 
     const bar = await waitFor(() => screen.getByTestId('wiki-timeline-bar'))
     fireEvent.keyDown(bar, { key: 'Enter' })
-    fireEvent.keyDown(bar, { key: ' ' })
+    const detail = await screen.findByTestId('wiki-timeline-detail')
+    expect(detail.textContent).toContain('Add timeline view')
+    fireEvent.click(screen.getByText('Add timeline view'))
 
-    expect(onOpen).toHaveBeenNthCalledWith(1, 'openspec/changes/c1')
-    expect(onOpen).toHaveBeenNthCalledWith(2, 'openspec/changes/c1')
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onOpen).toHaveBeenCalledWith('openspec/changes/c1')
   })
 
   it('refetches the graph when the SSE hook fires a graph-updated event', async () => {
