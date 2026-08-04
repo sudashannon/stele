@@ -274,10 +274,22 @@ html {
   --leading-title: 1.75rem;   /* 28px */
   --leading-display: 2rem;    /* 32px */
 
-  /* Reading measure. A measure caps a TEXT COLUMN; it must never size a panel.
-   * A panel fills its container, and any width left over carries content — an
-   * outline, metadata, backlinks — or the container should be narrower. */
-  --measure: 72ch;
+  /* Reading measure — fluid, not fixed.
+   *
+   * `rem`, not `ch`: `ch` is the advance of the Latin digit "0", which says
+   * nothing about full-width CJK, and it resolves against the element it sits on
+   * — the wrapper inherits the 14px body size while the prose renders at 16px, so
+   * the original `72ch` silently measured 576px.
+   *
+   * Fixed caps were the deeper mistake. The reading track is flexible while a cap
+   * is not, so any fixed value leaves an interior void that GROWS with the window:
+   * measured 300px at a 1600px viewport and 620px at 1920px with a 46rem cap. The
+   * percentage makes the column track its container, so it fills at any width and
+   * leaves a small symmetric margin instead of a void; the rem ceiling only binds
+   * on very large displays, where an unbounded line would become unreadable.
+   * These are technical references full of code blocks, long absolute paths and
+   * tables, which wrap badly in a narrow column. */
+  --measure: min(90rem, 96%);
 }
 
 body {

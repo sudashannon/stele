@@ -7,6 +7,7 @@ import { fetchArtifactContent, fetchCachedSummary, summarizeDocument } from '../
 import { DiagramBlock } from './DiagramBlock'
 import { ShareModal } from './ShareModal'
 import { Icon } from './icons'
+import { BacklinksPanel } from './BacklinksPanel'
 import { SessionBacklinks } from './SessionBacklinks'
 import { StateBlock } from './StateBlock'
 function getDiagramLanguage(className?: string): 'mermaid' | 'plantuml' | null {
@@ -510,7 +511,12 @@ export function MarkdownViewer({
           </nav>
         )}
         <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
-          <div className="mx-auto max-w-[var(--measure)] px-6 py-8">
+          {/* Fluid up to the ceiling in `--measure`, then centred so the small
+              remainder becomes a symmetric margin. Centring only failed before
+              because the column was FIXED and narrow, which split the leftover
+              into two useless slivers; a column that tracks its container leaves
+              a margin, not a void. */}
+          <div className="mx-auto w-full max-w-[var(--measure)] px-8 py-8">
             {summary.status !== 'idle' && (
               <section
                 ref={summaryRef}
@@ -540,13 +546,37 @@ export function MarkdownViewer({
                 {content}
               </ReactMarkdown>
             )}
-            {!error && content !== null && path && (
-              <div className="mt-10 border-t border-[var(--color-border-subtle)] pt-6">
-                <SessionBacklinks componentId={path} onOpenSession={onOpenSession} />
-              </div>
-            )}
           </div>
         </div>
+        {/* Right rail — this is what the leftover width is FOR.
+            Capping the prose at a measure necessarily leaves space; centring the
+            column merely split that space into two useless slivers, and
+            left-aligning it merely moved the void to one side. A document's
+            context belongs beside it: what cites it, what it cites, and which
+            agent sessions touched it. `path` doubles as the wiki componentId,
+            which is how SessionBacklinks was already keyed, so this needs no new
+            plumbing. Collapses at the shared `narrow` gate. */}
+        {!error && content !== null && path && (
+          <aside
+            data-testid="markdown-context-rail"
+            aria-label="文档上下文"
+            className="hidden w-[19rem] shrink-0 space-y-5 overflow-y-auto border-l border-[var(--color-border)] bg-[var(--color-bg)] px-4 py-6 min-[1200px]:block"
+          >
+            <div className="space-y-1">
+              <div className="text-[length:var(--type-caption)] font-semibold text-[var(--color-text-tertiary)]">文档</div>
+              {workspace && (
+                <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                  工作区 <span className="font-[family-name:var(--font-mono)]">{workspace}</span>
+                </div>
+              )}
+              <div className="break-all font-[family-name:var(--font-mono)] text-[length:var(--type-caption)] text-[var(--color-text-tertiary)]">
+                {path}
+              </div>
+            </div>
+            <BacklinksPanel componentId={path} />
+            <SessionBacklinks componentId={path} onOpenSession={onOpenSession} />
+          </aside>
+        )}
       </div>
       {zoomed && (
         <div
