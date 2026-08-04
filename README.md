@@ -4,7 +4,7 @@
 
 ### 工程知识图谱 + agent 记忆层
 
-把 OpenSpec 变更、Trellis 任务、Superpowers 产物和 **agent 会话** 索引进一张图，
+把 OpenSpec 变更、Trellis 任务、Superpowers 产物、**纯文档仓库**和 **agent 会话** 索引进一张图，
 让下一个 agent 动手之前就能读到"这件事以前是怎么做的"。
 
 **单 Go 二进制 + 嵌入式前端。下载即用。**
@@ -36,11 +36,11 @@ Stele 把这两类东西放进同一张图：
 |------|------|
 | 🚀 **变更仪表盘** | KPI 卡片、阶段步进、任务进度环、产出物清单、多 workspace 聚合 |
 | 🧠 **会话记忆层** | 双 runtime（omp / claude-code）会话摘要入图、会话↔文档边、**Agent 会话面板**（筛选未完成/工作区/运行时、每日活跃、待办轨迹与阻塞原因、未完成项一键转待办）|
-| 🗺️ **知识图谱** | Cytoscape 力导向图、多层加权 Louvain 社区、TF-IDF 主题标签 |
+| 🗺️ **知识图谱** | Cytoscape `cose` 力导向、**默认按社区聚合为超节点 + 下钻**、多层加权 Louvain、TF-IDF 主题标签、类型用形状／社区用颜色 |
 | 🔍 **语义搜索** | 384 维本地 embedding + cosine + 词法增强 + `tag:` 精确筛选 |
 | 🏷️ **受控标签** | 五 facet 词表、别名归一、覆盖率剪枝的稀疏 tag 边 |
 | 🎯 **单入口召回** | `wiki_context`：相关文档 + 动过它们的会话 + 命中的 agent 记忆产物，一个 Markdown packet |
-| 📅 **时间线 / 日历** | 三层活动时间线（变更 / 文档 / 会话按天，可切口径、自动定位今天）；季度视图产物热力图 |
+| 📅 **时间线 / 日历** | **按「工作区 × 日」聚合的热力图**（分位色阶 + 量级图例，可切口径、点一格看当日明细、自动定位今天）；季度视图产物热力图 |
 | ✅ **聚焦待办** | 逾期/今天/明天分组、Change 与 Wiki 关联、MCP 双向同步 |
 | ✓ **文档健康** | 死链、孤儿、低连接密度、lifecycle gap、占位符残留 |
 | 📊 **报告生成** | 周报按**会话投入**分配版面（不按文档数），带 `D<n>` 证据引用与 manifest 可追溯 |
@@ -265,25 +265,42 @@ type Provider interface {
 
 ---
 
-## 时间线
+## 时间线：按日聚合，不画单条
 
-三层数据叠在同一条工作区轴上，可切口径（**全部 / 变更 / 文档 / 会话**，默认全部）：
+三层数据落在同一条工作区轴上，可切口径（**全部 / 变更 / 文档 / 会话**，默认全部）。
 
-| 层 | 数据 | 画法 |
-|---|---|---|
-| 变更 | `change` + 阶段色 | 条形，跨度取 `created_at → updatedAt` |
-| 文档 | 其余全部组件 | 细刻度，按类型着色（实测中位跨度 1 天，密集期自然成带） |
-| 会话 | 每日活跃计数 | 行底细带，一天一格 |
+原先每个组件画一条：实测 **1523 条**，其中 1359 条只有 8px 高，一个工作区的行占了大半——
+读出来是一片彩色噪点，单条什么也没说明。现在按「工作区 × 日」聚合成热力格：**114 格**，
+一格 = 那天那个工作区的 N 项，身份由行与日期承载，颜色只编码量级。
 
-原先只画 `change`，于是**七月中旬后整片空白**——最后一个 change 停在 2026-07-21，而之后写的 320 篇
-文档（`knowledge 249 / spec 22 / plan 18 / …`）一条都不画；没有 change 的 superpowers 工作区
-（lz100）甚至没有行。同一次修复还治了两个更隐蔽的毛病：
+| 维度 | 做法 |
+|---|---|
+| 色阶 | 单色 `--viz-1…8`，**按分位而非线性** |
+| 行高 / 日宽 | 由宿主盒推导，双向夹紧 |
+| 点击一格 | 选中该日，下方明细列表列出那 N 项 |
+| 未选中时 | 明细列表显示当前口径下最近的项，不是空面板 |
 
-- 图表是 flex 子项，被 `flex-shrink` **压到容器宽度**，`PX_PER_DAY` 一直无效、几个月挤成一屏
-- 打开时停在最旧一端，现在自动定位到今天（延后一帧赋值 `scrollLeft`，否则会被布局钳成 0）
+**色阶必须按分位**：线性映射对着全局最大值算，而一次批量导入日有 189 项、正常工作日 3~9 项，
+于是 95% 的格子落在最浅一档，图在说"除了那一天什么都没发生"。分位切分把实际分布铺满 8 级里的 7 级。
+分位色阶没有天然刻度，所以图表头部有一条「少 → 多」量级图例，每个色块的 `title` 给出它的计数区间——
+没有它，最深和最浅只是两种蓝。
 
-空态也不再留白：会说明"当前口径没有数据"并列出其它口径各有多少。社区筛选**不含会话**（会话不属于任何社区），
-这一点会在筛选摘要里写明，而不是静默排除。
+**几何随窗口自适应**：固定 40px 行高在 900px 视口下只占 196px，下方留 570px 白；固定 18px 日宽
+在窗口本可完整显示时仍强制横滚。两者都改为由宿主盒推导并夹紧——日宽不低于 8px（低于此一格不再是可读的标记，
+此时才横滚），行高不超过 72px（否则两行的图会变成两块板）。实测 1280 / 1600 / 2560 三个宽度下
+格子为 10×64 / 13×71 / 24×71，**均无横滚**，图表块从 196px 长到 326px。
+
+**一格可能覆盖多项，所以点击不再直接打开文档**——它选中那一天，下方列表才是打开的入口。
+改之前那些格子是 enabled 的按钮而按 Enter 毫无反应，那是死控件。列表行用与「最近更新」同一套
+`typeBadgeClass` 徽章，且文档的 `detail` 携带真实 wiki 类型，所以行上写的是 `knowledge` / `design`
+而不是笼统的 `document`。
+
+还修过两个更隐蔽的毛病，一并记在这里：图表曾是 flex 子项被 `flex-shrink` **压到容器宽度**，
+于是日宽设了也没用、几个月挤成一屏（`shrink-0` 是承重的）；打开时停在最旧一端，
+现在自动定位到今天（延后一帧赋值 `scrollLeft`，否则会被布局钳成 0）。
+
+空态不留白：会说明"当前口径没有数据"并列出其它口径各有多少。社区筛选**不含会话**（会话不属于任何社区），
+这一点写在筛选摘要里，而不是静默排除。
 
 ---
 
@@ -327,6 +344,34 @@ type Provider interface {
 - TF-IDF 主题标签（取标题里最具区分度的 3 个词，如 `kmc · kms · caller`）
 - 只有完全无边的文档标为未归类
 - 社区综述页由 LLM 生成并缓存
+
+### 默认按社区聚合，不画全部节点
+
+全画就是毛线球。原先有个 `MAX_COSE_NODE_COUNT = 250` 的闸门，超过就回退到 `concentric`——
+而 concentric 按度数排到同心圆上，935 个稀疏节点度数相近，于是全挤在圆心，谁都看不出来。
+
+现在默认一个社区渲染成一个**超节点**，大小按成员数（`mapData(memberCount, 1, 400, 24, 72)`），
+跨社区的结构边合成一条加权超边（宽度随权重 1.5–6px 对数缩放）。点一个超节点**下钻**展开它，
+其成员按个体节点画出。布局始终是 `cose`，不再有节点数回退。
+
+尾部同样按「一个中性实体」处理：排名 8 之后的社区折叠成**一个** `--viz-rest` 灰节点，
+而不是 18 个各自的灰点——分类色上限是 8 + 1 个中性尾，图例也是这么画的，两边必须一致。
+折叠依据是**当前视图里在场的社区**，不是全局排名：按全局排名判断时，筛到单个社区仍会被折成
+「其他 1 个社区」且 `communityId: -1` 点不开。建节点与建边共用同一张 `superIdByCid` 映射，
+否则边会指向已被折叠掉、不存在的节点。
+
+`nodeDimensionsIncludeLabels: true` 是这里的承重选项：`cose` 只按节点圆排斥，
+聚合后 26 个超节点的标签会重叠成一坨（`jetson · 安全 · 方案`、`opt · wan2bus · md`）。
+
+### 类型用形状，社区用颜色
+
+一张图上只能有一套颜色语义。类型改由**形状**编码（11 种：`hexagon` / `star` / `diamond` / …），
+颜色专给社区（8 个色相 + 中性尾）。此前两套编码都在抢颜色通道。
+
+无社区归属的文档一度只剩文字、看不到节点圆——`resolveCommColor` 给它们返回 `palette.surface`，
+而画布背景是同一个值，白圆画在白底上。现在用中性 `--viz-axis` 灰。
+
+图例与搜索/控件都不浮在画布上：浮层压在自动 `fit` 的图上，早晚会遮住节点。它们在画布**上方**的工具栏行里。
 
 ### 增量更新
 
@@ -494,18 +539,54 @@ systemctl --user enable --now stele
 
 ### 注册 workspace
 
-通过 UI 添加，或直接编辑 `~/.stele/workspaces.yaml`：
+通过 UI 添加，或直接编辑 `~/.stele/workspaces.yaml`。路径必须是**绝对路径**——面板作为服务运行，
+相对路径会按服务自己的 `cwd` 解析，指向一个不存在的地方：
 
 ```yaml
 workspaces:
     - alias: gateway
       path: /home/user/workspace/gateway/openspec
       color: '#0f62fe'
-      type: openspec          # openspec | trellis | superpowers；省略则自动探测
+      type: openspec          # openspec | trellis | superpowers | docs
 sync:
     enabled: false
     remote: ""
 ```
+
+| 类型 | 布局要求 | 自动探测 |
+|---|---|:--:|
+| `openspec` | `changes/` 或 `openspec/changes/` | ✅ |
+| `trellis` | `.trellis/{tasks,spec,workspace}` 至少一个 | ✅ |
+| `superpowers` | 项目根下 `docs/superpowers/{specs,plans,artifacts,reports}` 至少一个 | ✅ |
+| `docs` | 只要有可索引的 markdown | ❌ **必须显式指定** |
+
+省略 `type` 时按上表顺序探测。**`docs` 故意不参与探测**：「含 markdown」描述了几乎所有目录，
+让它参加会使探测顺序失去意义。探测失败的报错会指出这条出路，而不只是拒绝。
+
+#### docs：纯文档目录收什么、不收什么
+
+一个只有工程文档、没有任何工作流布局的仓库原先根本注册不上，而它的文档也进不了索引：
+实测一棵模型部署树 480 个 md，被目录名分类的只有 48 个，带 `wiki: true` 的 **0 个**——432 篇够不着。
+
+但递归全收比这个缺口更糟。那 432 篇里 190 篇是源码树深处的 `README.md`，另有 225 篇埋在代码里。
+周报那边已经量过批量导入的后果：一个 189 文件的目录吃掉 8 个主题里的 6 个。所以有四条排除：
+
+| 排除 | 判据 | 挡掉了什么 |
+|---|---|---|
+| vendored 依赖树 | `3rdparty` / `vendor` / `vendors` / `_deps` / `third_party` … | llama.cpp 整个 `docs/`（SYCL、CANN、OpenVINO 指南） |
+| 构建产物 | `build` / `build-*` / `cmake-build-*` / `out` / `dist` | `build-x86-native/_deps/highway-src/g3doc` |
+| **与源码同目录的 md** | 该目录里是否存在 `.cpp` / `.py` / `CMakeLists.txt` … | 模块文档（挨着 `.cpp` 的 `NOTES.md`） |
+| 深层 `README.md` | 相对注册根深度 > 1 | 12 个 `mllm/compile/ir/*/README.md` |
+
+第三条是承重规则，而且它是**测量而非名单**：markdown 挨着 `.cpp`/`.py` 就是在文档化那段代码，
+只有 markdown 的目录才是文档目录。这一条单独把 432 个候选砍到 233，配合前两条到 79。
+
+未分类 markdown 在 docs 模式下索引为 `knowledge`，不再要求 `wiki: true`——那个 opt-in 是为了
+让工作流工作区不吸收无关 markdown，而纯文档工作区**本身就是** markdown，要求它等于什么都不索引。
+
+首次注册那棵树时实测：组件 1488 → 1564，新工作区 117 个，其中 vendored / 构建产物 **0**、
+深层 README **0**，`docs/results` 下 47 篇 Orin 延迟与 TRT 报告全部收进。
+（前两个数字随该树的后续写入变化，这里记的是当时的快照；两个 **0** 是不变量。）
 
 ### 会话记忆层
 
@@ -552,6 +633,27 @@ sync:
 
 ---
 
+## 「仪器 / Instrument」设计语言
+
+这是一台读数的仪器，不是一张卡片墙。全部 token 在 `web/src/styles.css` 一处声明，
+`src/tokenContract.test.ts` 扫源码守着它们：用到未声明的 `var(--…)` 就红。
+
+| 规则 | 做法 | 为什么 |
+|---|---|---|
+| 深度用**明度**，不用阴影 | `--color-bg` / `--color-surface` / `--color-layer` / `--color-layer-accent` | 阴影是"离开平面"的信号，只留给真的浮层（`--shadow-overlay` / `-card` / `-modal`） |
+| 零圆角 | `--radius-{sm,md,lg}: 0px` | 圆角是唯一例外：图表里天生是圆的标记 |
+| 字号是契约 | `--type-micro…display` 共 7 级，写作 `text-[length:var(--type-x)]` | 裸写 `text-[var(--type-x)]` 会被 Tailwind 编译成**颜色**工具类，字号和颜色一起静默丢失 |
+| 分类色上限 8 + 1 | `--viz-1…8` + 中性 `--viz-rest` | 第 9 个色相已不可辨；尾部折叠成**一个**中性实体，图例与图必须一致 |
+| 填充与文字是不同角色 | `--viz-*` 和 `--color-{warn,success,danger}` 只做填充，字用中性墨或 `*-text` | 色阶步进当文字时对比度实测低到 **1.29:1** |
+| 机器字串用等宽 | `--font-mono`（IBM Plex Mono）+ `tabular-nums`，正文不用 | 路径、哈希、数字要能对齐比对 |
+| 断点只有两个 | `narrow:`（<1200px）与 `wide:`（≥1400px） | 断点越多越没人能验证每一种 |
+| 阅读宽度是流式的 | `--measure: min(90rem, 96%)` | 固定上限赢不了弹性轨道：`72ch` 在 14px 上下文里实得 576px，空白随窗口从 300px 长到 620px |
+
+`ch` 是拉丁数字 `0` 的宽度，对中文全宽字没有意义——这是上面最后一条踩出来的：
+按 `ch` 设的阅读宽度在中文正文下永远偏窄，而它留下的空隙会随窗口一起变大。
+
+---
+
 ## 键盘快捷键
 
 | 快捷键 | 功能 |
@@ -581,14 +683,21 @@ sync:
 | `/api/wiki/sessions/refresh` | POST | 立即重扫会话记录并重新挂图 |
 | `/api/wiki/rebuild` | POST | 全量重建 |
 | `/api/wiki/lint` | GET | 文档健康问题 |
+| `/api/wiki/fix-dead-links` | POST | 批量修死链 |
 | `/api/wiki/overview` | GET | 社区综述 |
 | `/api/wiki/recent` | GET | 最近更新（`?offset=&limit=`） |
 | `/api/wiki/calendar/{month,day}` | GET | 日历视图 |
 | `/api/wiki/summarize` · `/api/wiki/summary` | POST / GET | LLM 文档摘要（带缓存） |
+| `/api/artifact` | GET | 文档原文（`?path=&workspace=`）；**允许的读取根由 `workspace` 推导**，缺它会按第一个工作区鉴权并 403 |
+| `/api/bookmarks` | GET / POST / DELETE | 收藏夹 |
 | `/api/todos` `/api/todos/{id}` | GET / POST / PATCH / DELETE | 待办 |
-| `/api/reports` | GET / POST | 周报 / 月报 |
-| `/api/share` `/api/share/revoke` | POST | 分享链接 |
+| `/api/report` | POST | 生成周报 / 月报 |
+| `/api/reports` · `/api/reports/get` | GET | 报告列表 / 取单份（`?name=`） |
+| `/api/share/create` · `/api/share/list` · `/api/share/revoke` | POST / GET / DELETE | 分享链接 |
+| `/share/{token}` | GET | 分享页（只读 HTML，无需登录） |
+| `/api/sync` · `/api/sync/config` | POST · GET / PUT | 镜像仓同步与配置 |
 | `/api/chat/message` | POST (SSE) | 流式对话 |
+| `/api/chat/session` · `/api/chat/config` · `/api/chat/providers` | GET / POST | 对话会话与 provider 配置 |
 | `/api/wiki/events` | GET (SSE) | 图谱 / 待办 / 会话实时推送 |
 | `/mcp` | POST | MCP JSON-RPC（8 个 wiki + 5 个待办工具） |
 
