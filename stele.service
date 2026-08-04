@@ -7,7 +7,9 @@ Type=simple
 Environment=PATH=/home/shanl/.nvm/versions/node/v24.18.0/bin:/home/shanl/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=/home/shanl/workspace/stele
 Environment=PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/shanl/workspace/stele/stele --port 8989 --bind 0.0.0.0 --dir ../miao/openspec
+# The panel stays on loopback and only /share/ is published, so /api/* is not
+# reachable from the network. Drop --share-port to keep everything local.
+ExecStart=/home/shanl/workspace/stele/stele --port 18989 --bind 127.0.0.1 --share-port 8989 --share-bind 0.0.0.0 --dir ../miao/openspec
 Restart=on-failure
 RestartSec=3
 

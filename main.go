@@ -12,11 +12,13 @@ import (
 	"io/fs"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -199,8 +201,10 @@ func resolveSessionSources(ompDir string, explicit *repeatedFlag, ompDefault str
 }
 
 func main() {
-	port := flag.Int("port", 8989, "port to listen on")
-	bind := flag.String("bind", "localhost", "address to bind to (use 0.0.0.0 for LAN access)")
+	port := flag.Int("port", 8989, "panel port; serves the full API and UI on --bind")
+	bind := flag.String("bind", "localhost", "address to bind the panel to (keep it loopback and publish only --share-port)")
+	sharePort := flag.Int("share-port", 0, "port for a public listener that serves ONLY /share/ pages (0 disables)")
+	shareBind := flag.String("share-bind", "0.0.0.0", "address to bind the public share listener to")
 	shareURL := flag.String("share-url", "", "public base URL for share links (default: derived from each request's Host)")
 	baseDir := flag.String("dir", "openspec", "path to an OpenSpec, Trellis, or Superpowers workspace")
 	sessionsDir := flag.String("sessions-dir", "", "OMP transcript directory (default: ~/.omp/agent/sessions; an empty value with no --sessions-source disables the session layer)")
@@ -388,9 +392,26 @@ func main() {
 
 	mux.Handle("/", staticHandler())
 
-	addr := fmt.Sprintf("%s:%d", *bind, *port)
-	url := fmt.Sprintf("http://%s:%d", *bind, *port)
+	addr := net.JoinHostPort(*bind, strconv.Itoa(*port))
+	url := "http://" + addr
 	fmt.Printf("Comet UI Dashboard → %s\n", url)
+
+	// A second listener publishes ONLY the share pages, so the panel can stay on a
+	// loopback bind: /api/* is then not reachable from the network at all, rather
+	// than reachable-but-refused - there is no handler on the public port to talk
+	// to. Share pages are self-contained (inline CSS, mermaid from a CDN) and
+	// request nothing else from this origin, so nothing else needs publishing.
+	if *sharePort != 0 {
+		shareManager.SetPublicPort(*sharePort)
+		shareAddr := net.JoinHostPort(*shareBind, strconv.Itoa(*sharePort))
+		shareMux := publicShareMux(shareManager)
+		fmt.Printf("Share links (public)  → http://%s/share/\n", shareAddr)
+		go func() {
+			if err := http.ListenAndServe(shareAddr, shareMux); err != nil {
+				log.Fatalf("share listener on %s: %v", shareAddr, err)
+			}
+		}()
+	}
 
 	go openBrowser(url)
 

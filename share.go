@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,19 @@ type ShareInfo struct {
 	URL       string    `json:"url"`
 }
 
+// publicShareMux is the only surface published to the network. It carries the
+// share pages and nothing else: no /api/*, no SPA, no /mcp. A share page is
+// self-contained, so an unmatched path returning 404 costs it nothing, and the
+// panel's own routes are unreachable because they are not registered here rather
+// than because a check refused them.
+func publicShareMux(mgr *ShareManager) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/share/", func(w http.ResponseWriter, r *http.Request) {
+		handleSharePage(w, r, mgr)
+	})
+	return mux
+}
+
 // ShareManager creates and validates time-limited share tokens for documents.
 type ShareManager struct {
 	mu     sync.RWMutex
@@ -52,6 +66,11 @@ type ShareManager struct {
 	lanIP     string
 	lanProbed time.Time
 	detect    func() string
+
+	// publicPort is the share-only listener's port, set once at startup. It has
+	// its own lock: lanMu guards the detection cache, and BaseURL reads both.
+	publicMu   sync.RWMutex
+	publicPort int
 }
 
 // lanTTL bounds how long a detected LAN address is reused: short enough that a
@@ -140,8 +159,11 @@ func (m *ShareManager) ShareURL(r *http.Request, token string) string {
 // the moment DHCP moves the adapter.
 //
 // Loopback is the one host that cannot be handed to somebody else, so those
-// callers get a freshly detected LAN address instead, keeping the port they
-// dialed: that is the port a portproxy forwards.
+// callers get a freshly detected LAN address instead. The port comes from
+// SetPublicPort when a share-only listener is published, because the port the
+// caller dialed is then the panel's private one and is deliberately unreachable
+// from the network; without a public listener it keeps the dialed port, which is
+// the port a portproxy forwards.
 func (m *ShareManager) BaseURL(r *http.Request) string {
 	if m.override != "" {
 		return m.override
@@ -160,6 +182,9 @@ func (m *ShareManager) BaseURL(r *http.Request) string {
 	}
 	if isLoopbackHost(hostname) {
 		if lan := m.lanAddr(); lan != "" {
+			if public := m.PublicPort(); public != 0 {
+				port = strconv.Itoa(public)
+			}
 			host = lan
 			if port != "" {
 				host = net.JoinHostPort(lan, port)
@@ -167,6 +192,21 @@ func (m *ShareManager) BaseURL(r *http.Request) string {
 		}
 	}
 	return scheme + "://" + host
+}
+
+// SetPublicPort records the port of the share-only listener. Links handed to a
+// loopback caller must carry it, not the panel's own port.
+func (m *ShareManager) SetPublicPort(port int) {
+	m.publicMu.Lock()
+	defer m.publicMu.Unlock()
+	m.publicPort = port
+}
+
+// PublicPort returns the share-only listener's port, or 0 when none is published.
+func (m *ShareManager) PublicPort() int {
+	m.publicMu.RLock()
+	defer m.publicMu.RUnlock()
+	return m.publicPort
 }
 
 // isLoopbackHost reports whether a link built on this host could only ever

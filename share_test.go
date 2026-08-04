@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -373,5 +375,76 @@ func TestShareManager_SweepCleansExpiredTokens(t *testing.T) {
 
 	if _, err := m.ValidateShare(token1); err == nil {
 		t.Fatal("expected token1 to be swept out")
+	}
+}
+
+// The public listener is a security boundary: it must carry the share pages and
+// nothing else. Registering a route here rather than refusing it in a check is
+// the point - there is no handler on the public port for /api/* to reach.
+func TestPublicShareMuxServesOnlySharePages(t *testing.T) {
+	m := newShareManager(t, "")
+	dir := t.TempDir()
+	doc := filepath.Join(dir, "design.md")
+	if err := os.WriteFile(doc, []byte("# Design\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	token, err := m.CreateShare(doc, "rx101", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := publicShareMux(m)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "http://10.0.28.45:8989/share/"+token, nil))
+	if rec.Code != 200 {
+		t.Fatalf("share page = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Design") {
+		t.Fatalf("share page did not render the document: %q", rec.Body.String()[:min(120, rec.Body.Len())])
+	}
+
+	// Everything the panel serves must be absent from this mux. /api/artifact
+	// would hand over any authorized file; /mcp accepts tool calls; / is the SPA.
+	for _, path := range []string{
+		"/api/artifact?path=" + doc,
+		"/api/wiki/graph",
+		"/api/workspaces",
+		"/api/share/list",
+		"/api/todos",
+		"/mcp",
+		"/",
+		"/assets/index.js",
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "http://10.0.28.45:8989"+path, nil))
+		if rec.Code != 404 {
+			t.Errorf("%s = %d on the public mux, want 404: it must not be published", path, rec.Code)
+		}
+	}
+}
+
+// With the panel on a private port, a link built for a loopback caller must carry
+// the public share port. Keeping the dialed port would publish an address that is
+// deliberately unreachable from the network.
+func TestShareURLUsesThePublicPortWhenOneIsPublished(t *testing.T) {
+	m := newShareManager(t, "")
+	m.detect = func() string { return "10.0.28.45" }
+	m.SetPublicPort(8989)
+
+	req := httptest.NewRequest("GET", "http://localhost:18989/api/share/create", nil)
+	if got := m.ShareURL(req, "tok"); got != "http://10.0.28.45:8989/share/tok" {
+		t.Fatalf("ShareURL = %s, want the public share port 8989, not the panel's 18989", got)
+	}
+}
+
+// Without a share listener the dialed port is still the right answer: that is the
+// port a portproxy forwards.
+func TestShareURLKeepsTheDialedPortWithoutAPublicListener(t *testing.T) {
+	m := newShareManager(t, "")
+	m.detect = func() string { return "10.0.28.45" }
+
+	req := httptest.NewRequest("GET", "http://localhost:8989/api/share/create", nil)
+	if got := m.ShareURL(req, "tok"); got != "http://10.0.28.45:8989/share/tok" {
+		t.Fatalf("ShareURL = %s, want the dialed port preserved", got)
 	}
 }
