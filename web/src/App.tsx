@@ -547,7 +547,12 @@ export default function App() {
       <LazyMarkdownViewer
         path={viewerPath}
         artifacts={props.artifacts}
-        workspace={props.workspace}
+        // The document's own workspace is the authority: /api/artifact resolves
+        // the allowed roots from it, and only the change dashboard was passing
+        // one. Every other view fell back to the first registered workspace, so
+        // a document outside its project root was refused with 403 - which a
+        // plain docs workspace registered at another path hits immediately.
+        workspace={props.workspace ?? viewerComponent?.workspace}
         onSelectArtifact={props.onSelectArtifact}
         onClose={() => openViewer(null)}
         onToggleStar={handleToggleStar}

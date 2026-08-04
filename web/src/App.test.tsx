@@ -52,14 +52,19 @@ vi.mock('./components/WikiTimeline', () => ({
 vi.mock('./components/MarkdownViewer', () => ({
   MarkdownViewer: ({
     path,
+    workspace,
     onClose,
     onToggleStar,
   }: {
     path: string
+    workspace?: string
     onClose: () => void
     onToggleStar?: (path: string, title: string) => void
   }) => (
-    <div data-testid="markdown-viewer">
+    // workspace is surfaced because /api/artifact derives its allowed roots from
+    // it: a document opened without one is authorized against the first
+    // workspace and refused with 403.
+    <div data-testid="markdown-viewer" data-workspace={workspace ?? ''}>
       <div>{path}</div>
       <button type="button" onClick={onClose}>✕ 关闭</button>
       <button
@@ -539,6 +544,33 @@ describe('App view switcher', () => {
     fireEvent.click(screen.getByRole('button', { name: '时间线' }))
     fireEvent.click(await screen.findByText('打开时间线文档'))
     await screen.findByText('✕ 关闭')
+  })
+
+  // /api/artifact resolves the allowed roots from the workspace it is given, so
+  // a document opened without one is authorized against the first registered
+  // workspace and refused with 403. Only the change dashboard used to pass it;
+  // every other view relied on the fallback, which a docs workspace registered
+  // outside that project root breaks immediately.
+  it('opens a document with its own workspace so artifact authorization resolves the right roots', async () => {
+    const index = [
+      { id: '/x/timeline.md', type: 'knowledge', title: 'Deploy notes', path: '/x/timeline.md', workspace: 'mdeploy' },
+    ]
+    // Not mockResolvedValueOnce: this file has no mock-queue reset between
+    // tests, so leftover queued values leak into the next one.
+    vi.mocked(fetchWikiIndex).mockResolvedValue(index)
+
+    try {
+      render(<App />)
+      await screen.findByTestId('workspace-warning-banner')
+      fireEvent.click(screen.getByRole('button', { name: '时间线' }))
+      fireEvent.click(await screen.findByText('打开时间线文档'))
+
+      const viewer = await screen.findByTestId('markdown-viewer')
+      expect(viewer.getAttribute('data-workspace')).toBe('mdeploy')
+    } finally {
+      // Restore the module default so a persistent mock does not leak either.
+      vi.mocked(fetchWikiIndex).mockResolvedValue([])
+    }
   })
 
   it('opens SessionDetail instead of MarkdownViewer for session graph nodes, and session-linked docs still open in the shared viewer', async () => {
