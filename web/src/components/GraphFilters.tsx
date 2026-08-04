@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { communityColor } from './graphPalette'
+import { COMMUNITY_CATEGORICAL_LIMIT, communityColor } from './graphPalette'
 import { Icon } from './icons'
 
 interface GraphFiltersProps {
@@ -124,6 +124,13 @@ export function GraphFilters({
           {visibleCommunityIds.map((id) => {
             const active = activeCommunity === id
             const count = communityCounts[id] ?? 0
+            const rank = communityRank.get(id) ?? Infinity
+            // Only the top ranks carry a hue. Beyond them a swatch would be the
+            // same neutral grey on every chip — 18 chips claiming a colour that
+            // identifies nothing, sitting next to 8 that do, which reads as a
+            // palette that failed to load. Identity past the ramp is carried by
+            // ordering, so those chips show their rank instead of a fake swatch.
+            const hasHue = rank < COMMUNITY_CATEGORICAL_LIMIT
             return (
               <button
                 key={id}
@@ -138,10 +145,16 @@ export function GraphFilters({
                     : `${chipClass} border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)] disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-surface)] disabled:opacity-100`
                 }
               >
-                <span
-                  className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: communityColor(communityRank.get(id) ?? Infinity) }}
-                />
+                {hasHue ? (
+                  <span
+                    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: communityColor(rank) }}
+                  />
+                ) : (
+                  <span className="inline-block w-2.5 shrink-0 text-center font-[family-name:var(--font-mono)] tabular-nums text-[length:var(--type-micro)] text-[var(--color-text-tertiary)]">
+                    {rank + 1}
+                  </span>
+                )}
                 <span>{labelForCommunity(id, communityLabels)}</span>
                 <span className="text-[var(--color-text-tertiary)]">{count}</span>
               </button>

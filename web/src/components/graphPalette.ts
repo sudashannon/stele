@@ -21,6 +21,46 @@ export const TYPE_COLORS: Record<string, string> = {
   diagram: 'var(--color-danger)',
   session: 'var(--color-purple)',
 }
+
+/**
+ * Node shape per document type for the knowledge graph. When community colour
+ * occupies the fill channel (max 8 hues + neutral tail, per the categorical cap),
+ * type is encoded as shape — a preattentive channel that does not compete with
+ * the community ramp. Cytoscape's built-in shape set supports 12 distinct shapes
+ * out of the box, enough for all 11 indexed types.
+ *
+ * The shape keys match Cytoscape's `shape` style property values exactly.
+ */
+export const TYPE_SHAPES: Record<string, string> = {
+  change: 'triangle',
+  proposal: 'diamond',
+  design: 'pentagon',
+  tasks: 'rectangle',
+  spec: 'hexagon',
+  plan: 'star',
+  knowledge: 'ellipse',
+  report: 'round-rectangle',
+  artifact: 'vee',
+  diagram: 'heptagon',
+  session: 'octagon',
+}
+
+/** Shape icon IDs used in the graph legend — kept in a separate record so the
+ *  legend can reference a stable visual without coupling to Cytoscape's shape
+ *  name strings. */
+export const TYPE_SHAPE_ORDER: string[] = [
+  'change',
+  'proposal',
+  'design',
+  'tasks',
+  'spec',
+  'plan',
+  'knowledge',
+  'report',
+  'artifact',
+  'diagram',
+  'session',
+]
 /** Maximum distinct categorical community colours before collapsing to --viz-rest. */
 export const COMMUNITY_CATEGORICAL_LIMIT = 8
 

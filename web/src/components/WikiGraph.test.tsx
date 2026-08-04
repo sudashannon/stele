@@ -81,9 +81,12 @@ describe('WikiGraph', () => {
       style: Array<{ selector: string; style: Record<string, unknown> }>
       layout: { name: string }
     }
+    // Node fill now encodes community and node SHAPE encodes type, so a node no
+    // longer carries a type `color`. The two encodings were previously both
+    // colour, which put 11 type hues and 8 community hues on one canvas.
     expect(call.elements).toEqual([
-      { data: { id: '/x/a.md', label: 'A', color: 'rgb(234, 145, 31)', commColor: 'rgb(255, 255, 255)' } },
-      { data: { id: '/x/b.md', label: 'B', color: 'rgb(36, 161, 72)', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/a.md', label: 'A', shape: 'hexagon', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/b.md', label: 'B', shape: 'star', commColor: 'rgb(255, 255, 255)' } },
       { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'rgb(36, 161, 72)' } },
     ])
     expect(JSON.stringify(call.elements)).not.toMatch(/var\(|color-mix\(/)
@@ -111,7 +114,7 @@ describe('WikiGraph', () => {
     expect(mockCy.destroy).toHaveBeenCalled()
   })
 
-  it('uses a bounded non-iterative layout for large connected graphs', async () => {
+  it('uses cose force-directed layout for all connected graphs regardless of node count', async () => {
     const components = Array.from({ length: 251 }, (_, index) => ({
       id: `/x/${index}.md`,
       type: 'spec',
@@ -133,11 +136,11 @@ describe('WikiGraph', () => {
       const call = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as unknown as {
         layout: { name: string; animate: boolean }
       }
-      expect(call.layout).toMatchObject({ name: 'concentric', animate: false })
+      expect(call.layout).toMatchObject({ name: 'cose', animate: false })
     })
   })
 
-  it('assigns a distinct color to session nodes and keeps them in the legend', async () => {
+  it('assigns a shape to session nodes and keeps them in the legend', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       mockGraphResponse([
         { id: '/x/session.jsonl', type: 'session', title: 'Session', path: '/x/session.jsonl', workspace: 'miao' },
@@ -147,9 +150,9 @@ describe('WikiGraph', () => {
 
     await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalled())
     const call = vi.mocked(cytoscape).mock.calls.at(-1)![0] as unknown as {
-      elements: Array<{ data: { id: string; color?: string } }>
+      elements: Array<{ data: { id: string; shape?: string } }>
     }
-    expect(call.elements.find((element) => element.data.id === '/x/session.jsonl')?.data.color).toContain('rgb(')
+    expect(call.elements.find((element) => element.data.id === '/x/session.jsonl')?.data.shape).toBe('octagon')
     expect(screen.getByText('session')).toBeTruthy()
   })
 
@@ -244,8 +247,8 @@ describe('WikiGraph', () => {
       layout: { name: string }
     }
     expect(call.elements).toEqual([
-      { data: { id: '/x/a.md', label: 'A', color: 'rgb(234, 145, 31)', commColor: 'rgb(255, 255, 255)' } },
-      { data: { id: '/x/b.md', label: 'B', color: 'rgb(36, 161, 72)', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/a.md', label: 'A', shape: 'hexagon', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/b.md', label: 'B', shape: 'star', commColor: 'rgb(255, 255, 255)' } },
       { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'rgb(36, 161, 72)' } },
     ])
     expect(call.elements.some((element) => element.data.source === '/x/b.md' && element.data.target === '/x/c.md')).toBe(false)
@@ -407,20 +410,20 @@ describe('WikiGraph', () => {
 
     await waitFor(() => expect(vi.mocked(cytoscape)).toHaveBeenCalled())
     const call = vi.mocked(cytoscape).mock.calls[0][0] as unknown as {
-      elements: Array<{ data: { id: string; commColor?: string; kind?: string } }>
+      elements: Array<{ data: { id: string; commColor?: string; kind?: string; superNode?: boolean } }>
     }
-    // Community colour is now rank-based on the --viz-* ramp rather than a
-    // per-type hue, so the two members of the top community share --viz-1 and
-    // the next community takes --viz-2. The contract under test is that members
-    // of one community agree and different communities differ.
-    const colorA = call.elements.find((element) => element.data.id === '/x/a.md')?.data.commColor
-    const colorB = call.elements.find((element) => element.data.id === '/x/b.md')?.data.commColor
-    const colorC = call.elements.find((element) => element.data.id === '/x/c.md')?.data.commColor
-    expect(colorA).toBeTruthy()
-    expect(colorB).toBe(colorA)
-    expect(colorC).not.toBe(colorA)
+    // In aggregate mode, communities render as super-nodes with community fill.
+    // The contract under test is that members of one community agree on colour
+    // and different communities differ — super-nodes carry that signal.
+    const super0 = call.elements.find((element) => element.data.id === 'super-0')
+    const super1 = call.elements.find((element) => element.data.id === 'super-1')
+    expect(super0?.data.superNode).toBe(true)
+    expect(super1?.data.superNode).toBe(true)
+    expect(super0?.data.commColor).toBeTruthy()
+    expect(super1?.data.commColor).toBeTruthy()
+    expect(super1?.data.commColor).not.toBe(super0?.data.commColor)
 
-    await waitFor(() => expect(screen.getByTestId('wiki-graph-community-legend')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('community-filter-strip')).toBeTruthy())
     expect(screen.getAllByText('发布流程').length).toBeGreaterThan(0)
     expect(screen.getAllByText('索引维护').length).toBeGreaterThan(0)
   })
@@ -443,20 +446,27 @@ describe('WikiGraph', () => {
     await waitFor(() => expect(screen.getAllByTestId('community-chip').length).toBe(2))
     const communityButton = screen.getAllByTestId('community-chip').find((element) => element.textContent?.includes('孤立资料'))!
 
+    // In aggregate mode, filtering to community 1 shows just its super-node
     fireEvent.click(communityButton)
     await waitFor(() => {
       const call = vi.mocked(cytoscape).mock.calls.at(-1)![0] as unknown as {
-        elements: Array<{ data: { id: string } }>
+        elements: Array<{ data: { id: string; superNode?: boolean } }>
       }
-      expect(call.elements.map((element) => element.data.id)).toEqual(['/x/c.md'])
+      const ids = call.elements.map((element) => element.data.id)
+      expect(ids).toEqual(expect.arrayContaining(['super-1']))
+      // No individual nodes or other super-nodes leaked in
+      expect(ids.filter((id) => !id.startsWith('super-e-') && id !== 'super-1').length).toBe(0)
     })
 
+    // Second click clears filter — both super-nodes return
     fireEvent.click(communityButton)
     await waitFor(() => {
       const call = vi.mocked(cytoscape).mock.calls.at(-1)![0] as unknown as {
         elements: Array<{ data: { id: string } }>
       }
-      expect(call.elements.map((element) => element.data.id)).toEqual(expect.arrayContaining(['/x/a.md', '/x/b.md']))
+      expect(call.elements.map((element) => element.data.id)).toEqual(
+        expect.arrayContaining(['super-0', 'super-1']),
+      )
     })
   })
 

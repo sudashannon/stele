@@ -6,7 +6,7 @@ import { GraphFilters } from './GraphFilters'
 import { useWikiEvents } from '../hooks/useWikiEvents'
 import { Modal } from './Modal'
 import { Icon } from './icons'
-import { communityColor, COMMUNITY_REST_COLOR, TYPE_COLORS } from './graphPalette'
+import { TYPE_SHAPES, TYPE_SHAPE_ORDER } from './graphPalette'
 
 
 type RGB = readonly [number, number, number]
@@ -25,14 +25,6 @@ function readColorToken(styles: CSSStyleDeclaration, name: string, fallback: str
   return parseRGB(styles.getPropertyValue(name)) ?? parseRGB(fallback)!
 }
 
-function mixRGB(left: RGB, right: RGB, leftWeight: number): RGB {
-  const rightWeight = 1 - leftWeight
-  return [
-    Math.round(left[0] * leftWeight + right[0] * rightWeight),
-    Math.round(left[1] * leftWeight + right[1] * rightWeight),
-    Math.round(left[2] * leftWeight + right[2] * rightWeight),
-  ]
-}
 
 function serializeRGB([red, green, blue]: RGB): string {
   return `rgb(${red}, ${green}, ${blue})`
@@ -42,23 +34,12 @@ function createCytoscapePalette() {
   const styles = getComputedStyle(document.documentElement)
   const accent = readColorToken(styles, '--color-accent', '#0f62fe')
   const success = readColorToken(styles, '--color-success', '#24a148')
-  const danger = readColorToken(styles, '--color-danger', '#da1e28')
   const warn = readColorToken(styles, '--color-warn', '#f1c21b')
   const surface = readColorToken(styles, '--color-surface', '#ffffff')
   const layer = readColorToken(styles, '--color-layer', '#f4f4f4')
   const textPrimary = readColorToken(styles, '--color-text-primary', '#161616')
   const textSecondary = readColorToken(styles, '--color-text-secondary', '#525252')
 
-  const typeColors: Record<string, string> = {
-    change: serializeRGB(accent),
-    proposal: serializeRGB(mixRGB(accent, danger, 0.45)),
-    design: serializeRGB(mixRGB(success, accent, 0.55)),
-    tasks: serializeRGB(warn),
-    spec: serializeRGB(mixRGB(warn, danger, 0.7)),
-    plan: serializeRGB(success),
-    artifact: serializeRGB(textSecondary),
-    diagram: serializeRGB(danger),
-  }
   const edgeColors: Record<string, string> = {
     implements: serializeRGB(accent),
     references: serializeRGB(success),
@@ -71,6 +52,7 @@ function createCytoscapePalette() {
   const vizColors = vizFallbacks.map((fallback, i) =>
     readColorToken(styles, `--viz-${i + 1}`, fallback),
   )
+  const vizAxis = readColorToken(styles, '--viz-axis', '#7d8794')
   const vizRest = readColorToken(styles, '--viz-rest', '#b6c0ca')
 
   return {
@@ -79,9 +61,9 @@ function createCytoscapePalette() {
     surface: serializeRGB(surface),
     textPrimary: serializeRGB(textPrimary),
     textSecondary: serializeRGB(textSecondary),
-    typeColors,
     vizColors: vizColors.map(serializeRGB),
     vizRest: serializeRGB(vizRest),
+    vizAxis: serializeRGB(vizAxis),
     edgeColors,
   }
 }
@@ -89,7 +71,6 @@ function createCytoscapePalette() {
 const POLL_INTERVAL_MS = 3000
 const MAX_POLL_ATTEMPTS = 20
 const SEARCH_DEBOUNCE_MS = 300
-const MAX_COSE_NODE_COUNT = 250
 
 function labelForCommunity(id: number, labels: Record<string, string>) {
   return labels[String(id)] ?? `#${id}`
@@ -106,6 +87,8 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   const [gaveUp, setGaveUp] = useState(false)
   const [hover, setHover] = useState<{ title: string; x: number; y: number } | null>(null)
   const [connectedOnly, setConnectedOnly] = useState(true)
+  const [expandedCommunity, setExpandedCommunity] = useState<number | null>(null)
+  const [expandAllNodes, setExpandAllNodes] = useState(false)
   const [activeWorkspaces, setActiveWorkspaces] = useState<Set<string> | null>(null)
   const [activeCommunity, setActiveCommunity] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -212,7 +195,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     }
   }, [searchQuery])
 
-  const typeOrder = useMemo(() => Object.keys(TYPE_COLORS), [])
+  const typeOrder = useMemo(() => TYPE_SHAPE_ORDER, [])
   const typeRank = useCallback((type: string) => {
     const index = typeOrder.indexOf(type)
     return index === -1 ? typeOrder.length : index
@@ -252,6 +235,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   const resetFilters = useCallback(() => {
     setActiveWorkspaces(null)
     setActiveCommunity(null)
+    setExpandedCommunity(null)
   }, [])
 
   const workspaceFilteredComponents = useMemo(() => {
@@ -292,6 +276,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     })
     return labels
   }, [communityLabels, topCommunities])
+
 
   useEffect(() => {
     if (activeCommunity === null) return
@@ -340,16 +325,56 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     [validEdges, visibleIds],
   )
 
+  // Community members grouped by community id — used for aggregation
+  const communityMembers = useMemo(() => {
+    const map: Record<number, string[]> = {}
+    communityFilteredComponents.forEach((comp) => {
+      const cid = communities[comp.id]
+      if (cid !== undefined && cid !== null && cid >= 0) {
+        (map[cid] ??= []).push(comp.id)
+      }
+    })
+    return map
+  }, [communityFilteredComponents, communities])
+
+  // Clear expanded community when it has no members in the current filtered set
+  useEffect(() => {
+    if (expandedCommunity === null) return
+    const members = communityMembers[expandedCommunity]
+    if (!members || members.length === 0) {
+      setExpandedCommunity(null)
+    }
+  }, [expandedCommunity, communityMembers])
+
+  // Whether to aggregate into super-nodes — false when expandAllNodes or when
+  // there are no communities to collapse into.
+  const aggregateMode = !expandAllNodes && Object.keys(communityMembers).length > 0
+
   const hiddenByFilters = components.length - communityFilteredComponents.length
   const hiddenByConnectedOnly = communityFilteredComponents.length - visibleComponents.length
   const activeCommunityLabel =
     activeCommunity === null ? null : labelForCommunity(activeCommunity, effectiveCommunityLabels)
   const visibilitySummary = useMemo(() => {
+    if (aggregateMode) {
+      const communityCount = Object.keys(communityMembers).length
+      const totalMemberCount = Object.values(communityMembers).reduce((sum, ids) => sum + ids.length, 0)
+      // Nodes without a community are rendered individually even in aggregate mode
+      const unassignedCount = communityFilteredComponents.length - totalMemberCount
+      const drawnCount = communityCount + unassignedCount
+      if (expandedCommunity !== null) {
+        const expandedLabel = labelForCommunity(expandedCommunity, effectiveCommunityLabels)
+        const expandedCount = (communityMembers[expandedCommunity] ?? []).length
+        return `${expandedLabel} · ${expandedCount} 个节点已展开 · 共 ${drawnCount} 个社区`
+      }
+      const parts = [`${communityCount} 个社区 · 共 ${communityFilteredComponents.length} 个节点`]
+      if (hiddenByConnectedOnly > 0) parts.push(`仅关联视图隐藏 ${hiddenByConnectedOnly} 个孤立节点`)
+      return parts.join(' · ')
+    }
     const parts = [`显示 ${visibleComponents.length} / ${components.length} 节点`]
     if (hiddenByFilters > 0) parts.push(`筛选隐藏 ${hiddenByFilters} 个`)
     if (hiddenByConnectedOnly > 0) parts.push(`仅关联视图隐藏 ${hiddenByConnectedOnly} 个孤立节点`)
     return parts.join(' · ')
-  }, [components.length, hiddenByConnectedOnly, hiddenByFilters, visibleComponents.length])
+  }, [aggregateMode, communityMembers, communityFilteredComponents.length, expandedCommunity, effectiveCommunityLabels, hiddenByConnectedOnly, components.length, hiddenByFilters, visibleComponents.length])
 
   const filterSummary = useMemo(() => {
     const hidden = components.length - communityFilteredComponents.length
@@ -369,44 +394,264 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
   useEffect(() => {
     setSelectedNodeTitle(null)
     const container = containerRef.current
-    if (!container || visibleComponents.length === 0) return
+    if (!container) return
+
     const palette = createCytoscapePalette()
+
+    // Resolve community colour for a single component
+    const resolveCommColor = (componentId: string) => {
+      const communityId = communities[componentId]
+      if (communityId !== null && communityId !== undefined && communityId >= 0) {
+        if (communityRank.has(communityId)) {
+          return palette.vizColors[communityRank.get(communityId)!]
+        }
+        return palette.vizRest
+      }
+      return palette.surface
+    }
+
+    // Build node data for a single component (individual node)
+    const individualNode = (component: WikiComponent) => ({
+      data: {
+        id: component.id,
+        label: component.title,
+        commColor: resolveCommColor(component.id),
+        shape: TYPE_SHAPES[component.type] ?? 'ellipse',
+      },
+    })
+
+    let nodes: Array<{ data: Record<string, unknown> }> = []
+    let edges: Array<{ data: Record<string, unknown> }> = []
+    let hasLayoutEdges = false
+
+    if (!aggregateMode) {
+      // ── Full individual node path ──
+      if (visibleComponents.length === 0) return
+      nodes = visibleComponents.map(individualNode)
+      edges = visibleEdges.map((edge, index) => ({
+        data: {
+          id: `e${index}`,
+          source: edge.from,
+          target: edge.to,
+          kind: edge.kind,
+          color: palette.edgeColors[edge.kind] ?? palette.textSecondary,
+        },
+      }))
+      hasLayoutEdges = visibleEdges.length > 0
+    } else {
+      // ── Aggregated or drill-down mode ──
+      const assignedIds = new Set<string>()
+      const memberSetByCommunity = new Map<number, Set<string>>()
+      for (const [cid, ids] of Object.entries(communityMembers)) {
+        const s = new Set(ids)
+        memberSetByCommunity.set(Number(cid), s)
+        ids.forEach((id) => assignedIds.add(id))
+      }
+
+      // Collect unassigned components (no community)
+      const unassignedComponents = communityFilteredComponents.filter((c) => !assignedIds.has(c.id))
+
+      const isExpanded = expandedCommunity !== null
+      const expandedMemberIds = isExpanded
+        ? new Set(communityMembers[expandedCommunity!] ?? [])
+        : null
+
+      // Communities present in the CURRENT view, which is what the fold decision
+      // must be based on. Basing it on global rank was wrong: filtering the strip
+      // down to one community still folded it, so clicking any community from
+      // rank 9 onward drew a single anonymous 「其他 1 个社区」 blob that could not
+      // be expanded (its communityId was -1, matching nothing). The tail exists
+      // to stop colour from lying when there are more groups than hues — it has
+      // no business appearing when the view holds few enough to colour.
+      const presentCids = Object.keys(communityMembers)
+        .map(Number)
+        .filter((cid) => !(isExpanded && cid === expandedCommunity))
+        .sort((a, b) => (communityMembers[b]?.length ?? 0) - (communityMembers[a]?.length ?? 0))
+      const foldTail = presentCids.length > palette.vizColors.length
+
+      // One map drives both node ids and fills, so the node builder and the edge
+      // router cannot disagree about what folded — they did, and edges then
+      // pointed at nodes that were never created.
+      const superIdByCid = new Map<number, string>()
+      const fillByCid = new Map<number, string>()
+      presentCids.forEach((cid, index) => {
+        const withinRamp = index < palette.vizColors.length
+        superIdByCid.set(cid, foldTail && !withinRamp ? 'super-rest' : `super-${cid}`)
+        fillByCid.set(cid, withinRamp ? palette.vizColors[index] : palette.vizRest)
+      })
+      const superIdFor = (cid: number) => superIdByCid.get(cid) ?? `super-${cid}`
+
+      let tailMembers = 0
+      const tailCommunityIds: number[] = []
+      for (const cid of presentCids) {
+        const count = communityMembers[cid]?.length ?? 0
+        if (superIdByCid.get(cid) === 'super-rest') {
+          tailMembers += count
+          tailCommunityIds.push(cid)
+          continue
+        }
+        nodes.push({
+          data: {
+            id: `super-${cid}`,
+            label: `${labelForCommunity(cid, effectiveCommunityLabels)} · ${count}`,
+            commColor: fillByCid.get(cid) ?? palette.vizRest,
+            shape: 'ellipse',
+            communityId: cid,
+            superNode: true,
+            memberCount: count,
+          },
+        })
+      }
+      if (tailCommunityIds.length > 0) {
+        nodes.push({
+          data: {
+            id: 'super-rest',
+            label: `其他 ${tailCommunityIds.length} 个社区 · ${tailMembers}`,
+            commColor: palette.vizRest,
+            shape: 'ellipse',
+            communityId: -1,
+            superNode: true,
+            memberCount: tailMembers,
+          },
+        })
+      }
+
+      // Expanded community members as individual nodes
+      if (isExpanded && expandedMemberIds) {
+        for (const comp of communityFilteredComponents) {
+          if (expandedMemberIds.has(comp.id)) {
+            nodes.push(individualNode(comp))
+          }
+        }
+      }
+
+      // Unassigned components as individual nodes
+      for (const comp of unassignedComponents) {
+        nodes.push(individualNode(comp))
+      }
+
+      // ── Edges ──
+      const visibleCommunities = new Set(Object.keys(communityMembers).map(Number))
+      if (isExpanded) visibleCommunities.delete(expandedCommunity!)
+
+      // We build aggregate edge counts: key "<smaller>-<larger>" → count
+      const superEdgeWeights: Record<string, number> = {}
+      const superCommunityIds = new Set(nodes.filter((n) => n.data.superNode).map((n) => (n.data as { communityId: number }).communityId))
+
+      for (const edge of structuralEdges) {
+        const fromCid = communities[edge.from]
+        const toCid = communities[edge.to]
+
+        // Both unassigned: skip for now (unassigned don't form edges well; rare)
+        if ((fromCid === undefined || fromCid === null || fromCid < 0) &&
+            (toCid === undefined || toCid === null || toCid < 0)) continue
+
+        if (isExpanded) {
+          const fromExpanded = fromCid === expandedCommunity
+          const toExpanded = toCid === expandedCommunity
+          const fromCidStr = fromCid !== undefined && fromCid !== null && fromCid >= 0 ? String(fromCid) : null
+          const toCidStr = toCid !== undefined && toCid !== null && toCid >= 0 ? String(toCid) : null
+
+          if (fromExpanded && toExpanded) {
+            // Intra-expanded: individual edge (but only if both nodes are visible)
+            if (componentIds.has(edge.from) && componentIds.has(edge.to)) {
+              const keep = connectedOnly
+                ? (connectedIds.has(edge.from) && connectedIds.has(edge.to))
+                : true
+              if (keep) {
+                edges.push({
+                  data: {
+                    id: `e-intra-${edges.length}`,
+                    source: edge.from,
+                    target: edge.to,
+                    kind: edge.kind,
+                    color: palette.edgeColors[edge.kind] ?? palette.textSecondary,
+                  },
+                })
+              }
+            }
+          } else if (fromExpanded && toCidStr && superCommunityIds.has(toCid!)) {
+            // From expanded member to another community's super-node
+            const key = `${edge.from}→${superIdFor(toCid!)}`
+            superEdgeWeights[key] = (superEdgeWeights[key] ?? 0) + 1
+          } else if (toExpanded && fromCidStr && superCommunityIds.has(fromCid!)) {
+            const key = `${superIdFor(fromCid!)}→${edge.to}`
+            superEdgeWeights[key] = (superEdgeWeights[key] ?? 0) + 1
+          } else if (fromCidStr && toCidStr && superCommunityIds.has(fromCid!) && superCommunityIds.has(toCid!)) {
+            // Both in non-expanded communities → super-edge
+            const a = superIdFor(fromCid!)
+            const b = superIdFor(toCid!)
+            if (a !== b) {
+              const key = [a, b].sort().join('↔')
+              superEdgeWeights[key] = (superEdgeWeights[key] ?? 0) + 1
+            }
+          }
+        } else {
+          // Pure aggregated: only inter-community super-edges
+          if (fromCid === undefined || fromCid === null || fromCid < 0) continue
+          if (toCid === undefined || toCid === null || toCid < 0) continue
+          if (fromCid === toCid) continue
+          if (!superCommunityIds.has(fromCid) || !superCommunityIds.has(toCid)) continue
+          const a = superIdFor(fromCid)
+          const b = superIdFor(toCid)
+          // Two tail communities both fold into super-rest, so their crossing
+          // edges become a self-loop we do not draw.
+          if (a === b) continue
+          const key = [a, b].sort().join('↔')
+          superEdgeWeights[key] = (superEdgeWeights[key] ?? 0) + 1
+        }
+      }
+
+      // Emit super-edges
+      for (const [key, weight] of Object.entries(superEdgeWeights)) {
+        if (key.includes('→')) {
+          // Member-to-super edge
+          const [source, target] = key.split('→')
+          edges.push({
+            data: {
+              id: `super-e-${edges.length}`,
+              source,
+              target,
+              superEdge: true,
+              weight,
+              edgeWidth: Math.max(1.5, Math.min(6, 1.5 + Math.log2(weight + 1) * 1.2)),
+            },
+          })
+        } else {
+          // Super-to-super edge. Keys already hold full node ids joined by ↔,
+          // including the folded `super-rest`, so no id surgery is needed.
+          const [source, target] = key.split('↔')
+          edges.push({
+            data: {
+              id: `super-e-${edges.length}`,
+              source,
+              target,
+              superEdge: true,
+              weight,
+              edgeWidth: Math.max(1.5, Math.min(6, 1.5 + Math.log2(weight + 1) * 1.2)),
+            },
+          })
+        }
+      }
+
+      hasLayoutEdges = edges.length > 0
+
+      if (nodes.length === 0 && unassignedComponents.length === 0) {
+        // Nothing to render
+        return
+      }
+    }
+
     let selectedNode: cytoscape.NodeSingular | null = null
     const cy = cytoscape({
       container,
-      elements: [
-        ...visibleComponents.map((component) => {
-          const communityId = communities[component.id]
-          const commColor =
-            communityId !== null && communityId !== undefined && communityId >= 0
-              ? (communityRank.has(communityId)
-                  ? palette.vizColors[communityRank.get(communityId)!]
-                  : palette.vizRest)
-              : palette.surface
-          return {
-            data: {
-              id: component.id,
-              label: component.title,
-              color: palette.typeColors[component.type] ?? palette.textSecondary,
-              commColor,
-            },
-          }
-        }),
-        ...visibleEdges.map((edge, index) => ({
-          data: {
-            id: `e${index}`,
-            source: edge.from,
-            target: edge.to,
-            kind: edge.kind,
-            color: palette.edgeColors[edge.kind] ?? palette.textSecondary,
-          },
-        })),
-      ],
+      elements: [...nodes, ...edges],
       style: [
         {
           selector: 'node',
           style: {
-            'background-color': 'data(color)',
+            'background-color': 'data(commColor)',
+            shape: 'data(shape)' as unknown as cytoscape.Css.Node['shape'],
             label: 'data(label)',
             'font-size': 9,
             'min-zoomed-font-size': 9,
@@ -420,8 +665,23 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             'text-background-padding': '2px',
             width: 14,
             height: 14,
+            'border-width': 1,
+            'border-color': palette.surface,
+          },
+        },
+        {
+          // Super-nodes: larger, bolder labels, size maps to member count
+          selector: 'node[superNode]',
+          style: {
+            'font-size': 13,
+            'min-zoomed-font-size': 11,
+            'font-weight': 'bold',
+            'text-background-opacity': 0,
+            width: "mapData(memberCount, 1, 400, 24, 72)" as unknown as number,
+            height: "mapData(memberCount, 1, 400, 24, 72)" as unknown as number,
             'border-width': 2,
-            'border-color': 'data(commColor)',
+            'border-color': palette.surface,
+            'z-index': 5,
           },
         },
         {
@@ -449,6 +709,17 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
             'arrow-scale': 0.6,
             'curve-style': 'bezier',
             opacity: 0.55,
+          },
+        },
+        {
+          // Super-edges: weight-proportional width, viz-axis colour with real contrast
+          selector: 'edge[superEdge]',
+          style: {
+            width: 'data(edgeWidth)',
+            'line-color': palette.vizAxis,
+            'target-arrow-color': palette.vizAxis,
+            'arrow-scale': 0.8,
+            opacity: 0.7,
           },
         },
         {
@@ -481,24 +752,42 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           },
         },
       ],
+      // `nodeDimensionsIncludeLabels` is the load-bearing option here: without it
+      // cose packs by node circle only, so at the aggregated level 26 super-nodes
+      // sat close enough that their labels overlapped into unreadable mush
+      // (「jetson · co安全 · 方案 · opt · wan2bus · md」). Repulsion alone cannot fix
+      // that, because the labels are far wider than the circles they belong to.
       layout:
-        visibleEdges.length === 0
-          ? { name: 'grid', avoidOverlap: true, avoidOverlapPadding: 8, condense: false }
-          : visibleComponents.length <= MAX_COSE_NODE_COUNT
-            ? { name: 'cose', animate: false, padding: 30, nodeRepulsion: 8000 }
-            : { name: 'concentric', animate: false, padding: 30, minNodeSpacing: 12, avoidOverlap: true },
+        !hasLayoutEdges
+          ? { name: 'grid', avoidOverlap: true, avoidOverlapPadding: 8, condense: false, nodeDimensionsIncludeLabels: true }
+          : { name: 'cose', animate: false, padding: 40, nodeRepulsion: 12000, idealEdgeLength: 120, nodeDimensionsIncludeLabels: true },
       userZoomingEnabled: true,
       userPanningEnabled: true,
       wheelSensitivity: 0.2,
+      // `fit` scales to fill the viewport, so a filtered view holding one or two
+      // super-nodes zoomed until its label rendered around 100px tall and spilled
+      // across the canvas. Cap the scale: fitting a small graph should centre it,
+      // not magnify it.
+      maxZoom: 1.6,
+      minZoom: 0.05,
     })
     cyRef.current = cy
     cy.one('layoutstop', () => cy.fit(undefined, 30))
+
+    // Tap handler: super-nodes drill down, individual nodes navigate
     cy.on('tap', 'node', (event) => {
       selectedNode?.removeClass('selected')
       selectedNode = event.target as cytoscape.NodeSingular
       selectedNode.addClass('selected')
       setSelectedNodeTitle(selectedNode.data('label') as string)
-      onNodeClick(event.target.id())
+      if (selectedNode.data('superNode') && typeof selectedNode.data('communityId') === 'number') {
+        // Drill into community — toggle: tap again to collapse
+        const cid = selectedNode.data('communityId') as number
+        setExpandedCommunity((prev) => (prev === cid ? null : cid))
+      } else {
+        // Individual node — navigate to document
+        onNodeClick(event.target.id())
+      }
     })
     cy.on('mouseover', 'node', (event) => {
       const node = event.target
@@ -519,7 +808,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
       cy.destroy()
       cyRef.current = null
     }
-  }, [communities, onNodeClick, visibleComponents, visibleEdges])
+  }, [aggregateMode, communities, communityFilteredComponents, communityMembers, communityRank, connectedIds, connectedOnly, effectiveCommunityLabels, expandedCommunity, onNodeClick, structuralEdges, visibleComponents, visibleEdges])
 
   useEffect(() => {
     const cy = cyRef.current
@@ -579,7 +868,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
       <div className="relative flex-1 border-x border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         {components.length > 0 && (
           <div className="absolute left-3 top-3 z-10 flex max-w-[28rem] flex-col gap-2">
-            <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+            <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-[var(--shadow-overlay)]">
               <label className="block text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)]" htmlFor="wiki-graph-search">
                 语义搜索
               </label>
@@ -600,7 +889,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+            <div className="flex flex-wrap items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-[var(--shadow-overlay)]">
               <button
                 type="button"
                 onClick={() => cyRef.current?.fit(undefined, 30)}
@@ -609,7 +898,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                 <Icon name="refresh" size={14} />
                 适应窗口
               </button>
-              {visibleComponents.length > 0 && (
+              {(visibleComponents.length > 0 || aggregateMode) && (
                 <div
                   data-testid="wiki-graph-visibility-summary"
                   className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
@@ -617,7 +906,28 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                   {visibilitySummary}
                 </div>
               )}
-              {edges.length > 0 && (
+              {expandedCommunity !== null && (
+                <button
+                  type="button"
+                  data-testid="wiki-graph-back-to-global"
+                  onClick={() => setExpandedCommunity(null)}
+                  className="inline-flex items-center gap-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+                >
+                  <Icon name="chevron-left" size={14} />
+                  返回全局
+                </button>
+              )}
+              {activeCommunity !== null && (
+                <button
+                  type="button"
+                  onClick={() => setOverviewOpen(true)}
+                  className="inline-flex items-center gap-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+                >
+                  <Icon name="info" size={14} />
+                  社区综述
+                </button>
+              )}
+              {edges.length > 0 && !aggregateMode && (
                 <label className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
                   <input
                     type="checkbox"
@@ -625,6 +935,20 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
                     onChange={(event) => setConnectedOnly(event.target.checked)}
                   />
                   仅显示有关联的节点
+                </label>
+              )}
+              {Object.keys(communityMembers).length > 0 && (
+                <label className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
+                  <input
+                    type="checkbox"
+                    data-testid="expand-all-nodes-toggle"
+                    checked={expandAllNodes}
+                    onChange={(event) => {
+                      setExpandAllNodes(event.target.checked)
+                      if (event.target.checked) setExpandedCommunity(null)
+                    }}
+                  />
+                  展开全部节点（绘制 {components.length} 个节点，可能较慢）
                 </label>
               )}
               {selectedNodeTitle && (
@@ -665,84 +989,32 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         )}
 
         {components.length > 0 && (
-          <>
-            <div
-              data-testid="wiki-graph-legend"
-              className="absolute bottom-3 left-3 z-10 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
-            >
-              <div className="mb-2 font-semibold text-[var(--color-text-secondary)]">类型</div>
-              <ul className="space-y-1">
-                {Object.entries(TYPE_COLORS).map(([type, color]) => (
-                  <li key={type} className="flex items-center gap-2">
-                    <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
-                    <span className="truncate">{type}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {topCommunities.length > 0 && (
-              <div
-                data-testid="wiki-graph-community-legend"
-                className="absolute bottom-3 right-3 z-10 w-60 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
-              >
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="font-semibold text-[var(--color-text-secondary)]">社区</span>
-                  {activeCommunity !== null && (
-                    <button
-                      type="button"
-                      onClick={() => setOverviewOpen(true)}
-                      className="inline-flex items-center gap-1 border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
-                    >
-                      <Icon name="info" size={14} />
-                      社区综述
-                    </button>
-                  )}
+          <div
+            data-testid="wiki-graph-legend"
+            className="absolute bottom-3 left-3 z-10 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-[var(--shadow-overlay)]"
+          >
+            <div className="mb-2 font-semibold text-[var(--color-text-secondary)]">类型</div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+              {TYPE_SHAPE_ORDER.map((type) => (
+                <div key={type} className="flex items-center gap-1.5">
+                  <svg width="10" height="10" viewBox="0 0 10 10" className="shrink-0 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" strokeWidth="1">
+                    {TYPE_SHAPES[type] === 'ellipse' && <circle cx="5" cy="5" r="4"/>}
+                    {TYPE_SHAPES[type] === 'rectangle' && <rect x="1" y="1" width="8" height="8"/>}
+                    {TYPE_SHAPES[type] === 'round-rectangle' && <rect x="1" y="1" width="8" height="8" rx="1.5"/>}
+                    {TYPE_SHAPES[type] === 'triangle' && <polygon points="5,1 9,9 1,9"/>}
+                    {TYPE_SHAPES[type] === 'diamond' && <polygon points="5,1 9,5 5,9 1,5"/>}
+                    {TYPE_SHAPES[type] === 'pentagon' && <polygon points="5,1 8.8,3.8 7.4,8.8 2.6,8.8 1.2,3.8"/>}
+                    {TYPE_SHAPES[type] === 'hexagon' && <polygon points="5,1 8.5,3 8.5,7 5,9 1.5,7 1.5,3"/>}
+                    {TYPE_SHAPES[type] === 'heptagon' && <polygon points="5,1 7.8,2.2 9,5 7.8,7.8 5,9 2.2,7.8 1,5"/>}
+                    {TYPE_SHAPES[type] === 'octagon' && <polygon points="3,1 7,1 9,3 9,7 7,9 3,9 1,7 1,3"/>}
+                    {TYPE_SHAPES[type] === 'star' && <polygon points="5,1 6.2,3.5 9,3.8 6.9,5.7 7.5,8.5 5,7 2.5,8.5 3.1,5.7 1,3.8 3.8,3.5"/>}
+                    {TYPE_SHAPES[type] === 'vee' && <polygon points="1,2 5,9 9,2"/>}
+                  </svg>
+                  <span className="truncate">{type}</span>
                 </div>
-                <ul className="space-y-1">
-                  {topCommunities.map((id, rank) => {
-                    const active = activeCommunity === id
-                    return (
-                      <li key={id}>
-                        <button
-                          type="button"
-                          data-testid="wiki-graph-community-legend-item"
-                          aria-pressed={active}
-                          onClick={() => setActiveCommunity(active ? null : id)}
-                          className={
-                            active
-                              ? 'flex w-full items-center justify-between gap-2 border border-[var(--color-text-primary)] bg-[var(--color-layer)] px-2 py-1 text-left'
-                              : 'flex w-full items-center justify-between gap-2 border border-transparent px-2 py-1 text-left hover:border-[var(--color-border)] hover:bg-[var(--color-layer)]'
-                          }
-                        >
-                          <span className="flex min-w-0 items-center gap-2">
-                            <span
-                              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                              style={{ backgroundColor: communityColor(rank) }}
-                            />
-                            <span className="truncate">{labelForCommunity(id, effectiveCommunityLabels)}</span>
-                          </span>
-                          <span className="shrink-0 text-[var(--color-text-secondary)]">{communityCounts[id] ?? 0}</span>
-                        </button>
-                      </li>
-                    )
-                  })}
-                  {Object.keys(communityCounts).length > topCommunities.length && (
-                    <li
-                      data-testid="wiki-graph-community-legend-item"
-                      className="flex items-center gap-2 px-2 py-1"
-                    >
-                      <span
-                        className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: COMMUNITY_REST_COLOR }}
-                      />
-                      <span className="truncate">其他 {Object.keys(communityCounts).length - topCommunities.length} 个社区</span>
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
-          </>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
