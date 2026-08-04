@@ -1,4 +1,4 @@
-export type WorkspaceSourceType = 'openspec' | 'trellis' | 'superpowers'
+export type WorkspaceSourceType = 'openspec' | 'trellis' | 'superpowers' | 'docs'
 
 export interface ChangeSummary {
   name: string

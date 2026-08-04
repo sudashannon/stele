@@ -12,7 +12,9 @@ const EXIT_MARKER_RE = /__GUARD_EXIT__:(\d)(?::(.*))?/
 const VALID_CHANGE_NAME_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 
 export function isValidChangeName(name: string, sourceType: WorkspaceSourceType = 'openspec'): boolean {
-  if (sourceType === 'superpowers') return false
+  // Neither source has changes to advance: Superpowers tracks plans and
+  // reports, and a plain docs tree is only documents.
+  if (sourceType === 'superpowers' || sourceType === 'docs') return false
   if (sourceType === 'trellis') {
     return name !== '' && name !== '.' && !name.includes('..') && !/[\\/]/.test(name)
   }
@@ -100,7 +102,9 @@ export function GuardButton({
     ? 'Trellis 任务目录名无效，无法迁移'
     : sourceType === 'superpowers'
       ? 'Superpowers 工作区为只读，无法迁移'
-      : '变更名不满足 guard 规则（需字母开头，小写 kebab-case），无法迁移'
+      : sourceType === 'docs'
+        ? '纯文档工作区没有变更，无法迁移'
+        : '变更名不满足 guard 规则（需字母开头，小写 kebab-case），无法迁移'
   const disabledReason = !nameValid ? nameInvalidMsg : blockedReason
 
   return (

@@ -14,6 +14,11 @@ const (
 	KindOpenSpec    Kind = "openspec"
 	KindTrellis     Kind = "trellis"
 	KindSuperpowers Kind = "superpowers"
+	// KindDocs is a plain documentation tree: a repository that holds
+	// engineering markdown without any workflow layout to key off. It is never
+	// auto-detected, because "contains markdown" describes almost every
+	// directory and would make detection order meaningless; it must be chosen.
+	KindDocs Kind = "docs"
 )
 
 // Workspace is the source-neutral workspace configuration shared by the HTTP
@@ -29,12 +34,12 @@ type Workspace struct {
 // ParseKind validates an explicitly configured source kind.
 func ParseKind(value Kind) (Kind, error) {
 	switch value {
-	case KindOpenSpec, KindTrellis, KindSuperpowers:
+	case KindOpenSpec, KindTrellis, KindSuperpowers, KindDocs:
 		return value, nil
 	case "":
 		return "", nil
 	default:
-		return "", fmt.Errorf("unsupported workspace type %q: must be openspec, trellis, or superpowers", value)
+		return "", fmt.Errorf("unsupported workspace type %q: must be openspec, trellis, superpowers, or docs", value)
 	}
 }
 
@@ -42,19 +47,25 @@ func ParseKind(value Kind) (Kind, error) {
 // Automatic detection is ownership-ordered: OpenSpec first, then Trellis,
 // then standalone Superpowers. An explicitly selected Superpowers workspace
 // remains strict: it must be a pure project root, never a docs subdirectory
-// or a mixed workflow repository.
+// or a mixed workflow repository. KindDocs is accepted only when asked for and
+// only when the tree actually holds indexable markdown.
 func ResolveKind(path string, configured Kind) (Kind, error) {
 	kind, err := ParseKind(configured)
 	if err != nil {
 		return "", err
 	}
 	if kind != "" {
-		if kind == KindSuperpowers {
+		switch kind {
+		case KindSuperpowers:
 			if !HasSuperpowersLayout(path) {
 				return "", fmt.Errorf("workspace path %q does not contain a project-root docs/superpowers layout", path)
 			}
 			if HasOpenSpecLayout(path) || HasTrellisLayout(path) {
 				return "", fmt.Errorf("workspace path %q mixes Superpowers with OpenSpec or Trellis", path)
+			}
+		case KindDocs:
+			if !HasDocsLayout(path) {
+				return "", fmt.Errorf("workspace path %q 下未找到可索引的 markdown 文档", path)
 			}
 		}
 		return kind, nil
@@ -71,7 +82,7 @@ func ResolveKind(path string, configured Kind) (Kind, error) {
 	case hasSuperpowers:
 		return KindSuperpowers, nil
 	default:
-		return "", fmt.Errorf("workspace path %q contains no OpenSpec, Trellis, or Superpowers data", path)
+		return "", fmt.Errorf("workspace path %q contains no OpenSpec, Trellis, or Superpowers data; register it as type \"docs\" to index a plain documentation tree", path)
 	}
 }
 
@@ -92,6 +103,126 @@ func HasTrellisLayout(path string) bool {
 	return isDir(filepath.Join(trellisDir, "tasks")) ||
 		isDir(filepath.Join(trellisDir, "spec")) ||
 		isDir(filepath.Join(trellisDir, "workspace"))
+}
+
+// vendoredDirNames are dependency trees copied into a repository. Their
+// markdown is upstream documentation, not this project's engineering record:
+// measured on one model-deployment tree, allowing them pulled in the whole of
+// llama.cpp's docs/ (backend guides for SYCL, CANN, OpenVINO and so on).
+var vendoredDirNames = map[string]struct{}{
+	"3rdparty": {}, "third_party": {}, "thirdparty": {}, "vendor": {}, "vendors": {},
+	"external": {}, "extern": {}, "deps": {}, "_deps": {}, "subprojects": {},
+	"submodules": {}, "site-packages": {}, "dist-packages": {},
+}
+
+// buildOutputDirNames are generated trees. They also carry fetched dependencies
+// (build-x86-native/_deps/highway-src/g3doc), so excluding them removes both the
+// generated and the vendored markdown underneath.
+var buildOutputDirNames = map[string]struct{}{
+	"build": {}, "_build": {}, "out": {}, "target": {}, "dist": {},
+}
+
+// IsExcludedDocsDir reports whether a directory name is a vendored dependency
+// tree or a build output, neither of which holds this project's own documents.
+func IsExcludedDocsDir(name string) bool {
+	lower := strings.ToLower(name)
+	if _, ok := vendoredDirNames[lower]; ok {
+		return true
+	}
+	if _, ok := buildOutputDirNames[lower]; ok {
+		return true
+	}
+	// "build-x86-native", "cmake-build-release": the same generated trees under
+	// a toolchain-specific name.
+	return strings.HasPrefix(lower, "build-") || strings.HasPrefix(lower, "cmake-build-")
+}
+
+// sourceFileExts and sourceFileNames identify a directory that holds code.
+var sourceFileExts = map[string]struct{}{
+	".c": {}, ".cc": {}, ".cpp": {}, ".cxx": {}, ".h": {}, ".hpp": {}, ".hxx": {},
+	".cu": {}, ".cuh": {}, ".py": {}, ".go": {}, ".rs": {}, ".ts": {}, ".tsx": {},
+	".js": {}, ".jsx": {}, ".java": {}, ".kt": {}, ".swift": {}, ".m": {}, ".mm": {},
+	".sh": {}, ".cmake": {}, ".proto": {}, ".gradle": {},
+}
+var sourceFileNames = map[string]struct{}{
+	"cmakelists.txt": {}, "makefile": {}, "setup.py": {}, "pyproject.toml": {},
+	"cargo.toml": {}, "package.json": {}, "go.mod": {},
+}
+
+// DirHoldsSourceCode reports whether any entry is a source file, which is what
+// separates module documentation from a documentation directory.
+//
+// This is the load-bearing rule for a plain docs tree, and it is a measurement
+// rather than a name list: markdown sitting beside .cpp/.py files documents that
+// code unit, while a directory of only markdown is a documentation directory.
+// Measured on one model-deployment tree, this rule alone cut the candidate set
+// from 432 files to 233, and with the vendored and build exclusions to 79.
+func DirHoldsSourceCode(entries []os.DirEntry) bool {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if _, ok := sourceFileNames[name]; ok {
+			return true
+		}
+		if _, ok := sourceFileExts[filepath.Ext(name)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// IsModuleReadme reports whether a path is a README nested below the tree's own
+// top level. A project's own README is an overview worth indexing; one several
+// directories down describes a code module, and there were twelve of those
+// against fourteen real documents in the measured tree.
+func IsModuleReadme(root, path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	if !strings.HasPrefix(name, "readme") {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return strings.Count(rel, string(filepath.Separator)) > 1
+}
+
+// HasDocsLayout accepts any tree that holds at least one markdown file the docs
+// scanner would keep. Walking stops at the first hit, so registering a large
+// repository does not pay for a full scan twice.
+func HasDocsLayout(path string) bool {
+	root := filepath.Clean(path)
+	if !isDir(root) {
+		return false
+	}
+	found := false
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil || found {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if p != root && (strings.HasPrefix(name, ".") || IsExcludedDocsDir(name)) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+			return nil
+		}
+		if IsModuleReadme(root, p) {
+			return nil
+		}
+		entries, readErr := os.ReadDir(filepath.Dir(p))
+		if readErr == nil && DirHoldsSourceCode(entries) {
+			return nil
+		}
+		found = true
+		return filepath.SkipAll
+	})
+	return found
 }
 
 // HasSuperpowersLayout accepts only a project root that owns at least one
@@ -173,7 +304,7 @@ func OpenSpecPath(path string) string {
 
 // ProjectRoot returns the root against which source-relative paths resolve.
 func ProjectRoot(workspace Workspace) string {
-	if workspace.Type == KindTrellis || workspace.Type == KindSuperpowers {
+	if workspace.Type == KindTrellis || workspace.Type == KindSuperpowers || workspace.Type == KindDocs {
 		return filepath.Clean(workspace.Path)
 	}
 	openspecPath := OpenSpecPath(workspace.Path)
@@ -201,6 +332,10 @@ func ScanRoots(workspace Workspace) []string {
 		)
 	case KindSuperpowers:
 		return SuperpowersRoots(workspace.Path)
+	case KindDocs:
+		// The whole registered tree is the content root; the scanner applies the
+		// vendored, build-output and source-adjacency exclusions per directory.
+		return existingDirs(workspace.Path)
 	}
 
 	openspecPath := OpenSpecPath(workspace.Path)
@@ -246,6 +381,10 @@ func WatchRoots(workspace Workspace) []string {
 			return []string{root}
 		}
 		return nil
+	case KindDocs:
+		// Watch the registered tree itself: a docs workspace has no fixed
+		// content subdirectory, so new documents can appear anywhere in it.
+		return existingDirs(workspace.Path)
 	case KindSuperpowers:
 		projectRoot := filepath.Clean(workspace.Path)
 		superpowersRoot := filepath.Join(projectRoot, "docs", "superpowers")
@@ -267,7 +406,7 @@ func WatchRoots(workspace Workspace) []string {
 // made relative. Every project-root source mirrors from its registered root;
 // OpenSpec also normalizes a directly registered openspec/ directory.
 func MirrorRoot(workspace Workspace) string {
-	if workspace.Type == KindTrellis || workspace.Type == KindSuperpowers {
+	if workspace.Type == KindTrellis || workspace.Type == KindSuperpowers || workspace.Type == KindDocs {
 		return filepath.Clean(workspace.Path)
 	}
 	return ProjectRoot(workspace)

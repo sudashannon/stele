@@ -15,6 +15,7 @@ function workspaceTypeLabel(type?: WorkspaceSourceType): string | null {
   if (type === 'trellis') return 'Trellis'
   if (type === 'superpowers') return 'Superpowers'
   if (type === 'openspec') return 'OpenSpec'
+  if (type === 'docs') return '纯文档'
   return null
 }
 
@@ -172,6 +173,7 @@ export function WorkspaceChips({
             <option value="openspec">OpenSpec</option>
             <option value="trellis">Trellis</option>
             <option value="superpowers">Superpowers</option>
+            <option value="docs">纯文档目录</option>
           </select>
           {error && (
             <div

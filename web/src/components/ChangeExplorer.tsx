@@ -42,6 +42,7 @@ const SOURCE_LABELS: Record<string, string> = {
   openspec: 'OpenSpec',
   trellis: 'Trellis',
   superpowers: 'Superpowers',
+  docs: '纯文档',
 }
 
 // Display labels for workflow values.

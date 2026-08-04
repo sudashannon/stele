@@ -224,6 +224,10 @@ func normalizeWorkspaceConfig(cfg WorkspaceConfig) (WorkspaceConfig, error) {
 		if !source.HasSuperpowersLayout(clean) {
 			return WorkspaceConfig{}, fmt.Errorf("workspace path %q 下未找到 docs/superpowers 持久产物目录，不是有效的 Superpowers 项目根目录", cfg.Path)
 		}
+	case source.KindDocs:
+		if !source.HasDocsLayout(clean) {
+			return WorkspaceConfig{}, fmt.Errorf("workspace path %q 下未找到可索引的 markdown 文档（已排除 vendored 依赖、构建产物、与源码同目录的文档和模块 README）", cfg.Path)
+		}
 	}
 
 	cfg.Path = clean

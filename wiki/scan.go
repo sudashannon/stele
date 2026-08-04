@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"stele/internal/source"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,7 +34,31 @@ import (
 // vendored/unrelated markdown that happens to match a classifyPath
 // substring) and performance (avoid traversing huge unrelated trees).
 func ScanComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
+	return scanComponents(workspaceRoot, workspaceAlias, false)
+}
+
+// ScanDocsComponents scans a plain documentation tree, where there is no
+// workflow layout to classify by. Two rules differ from ScanComponents:
+//
+// Unclassified markdown is indexed as knowledge instead of requiring a
+// `wiki: true` opt-in. That opt-in exists so a workflow workspace does not
+// absorb unrelated markdown; a docs workspace is the markdown, so demanding it
+// would index nothing (measured on one tree: 48 of 480 files classified, 0
+// opted in).
+//
+// Vendored trees, build outputs, markdown sitting beside source code, and
+// nested module READMEs are excluded. Without them the same tree offered 432
+// extra files, most of it upstream documentation and per-module READMEs; with
+// them it offers 79, which is the project's own engineering record.
+func ScanDocsComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
+	return scanComponents(workspaceRoot, workspaceAlias, true)
+}
+
+func scanComponents(workspaceRoot, workspaceAlias string, docsMode bool) ([]Component, error) {
 	var components []Component
+	// One ReadDir per directory, not per markdown file: a docs tree can hold
+	// hundreds of files under a handful of directories.
+	dirHasSource := make(map[string]bool)
 
 	err := filepath.Walk(workspaceRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -61,6 +87,8 @@ func ScanComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
 				return filepath.SkipDir
 			case (strings.Contains(name, "_sdk") || strings.Contains(name, "_bsp")) && path != workspaceRoot:
 				return filepath.SkipDir
+			case docsMode && path != workspaceRoot && source.IsExcludedDocsDir(name):
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -70,6 +98,23 @@ func ScanComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
 		}
 		if !strings.HasSuffix(path, ".md") {
 			return nil
+		}
+		if docsMode {
+			// A README several levels down documents a code module, not the
+			// project; and markdown beside source files documents that source.
+			if source.IsModuleReadme(workspaceRoot, path) {
+				return nil
+			}
+			dir := filepath.Dir(path)
+			hasSource, known := dirHasSource[dir]
+			if !known {
+				entries, readErr := os.ReadDir(dir)
+				hasSource = readErr == nil && source.DirHoldsSourceCode(entries)
+				dirHasSource[dir] = hasSource
+			}
+			if hasSource {
+				return nil
+			}
 		}
 		typ := classifyPath(path)
 		// For files not in a known directory, check frontmatter for wiki:true opt-in
@@ -83,7 +128,11 @@ func ScanComponents(workspaceRoot, workspaceAlias string) ([]Component, error) {
 			}
 			typ = classifyByFrontmatter(fm)
 			if typ == "" {
-				return nil // not classified and no opt-in
+				if !docsMode {
+					return nil // not classified and no opt-in
+				}
+				// A docs workspace IS its markdown; the opt-in would index nothing.
+				typ = TypeKnowledge
 			}
 		}
 		absPath, err := filepath.Abs(path)

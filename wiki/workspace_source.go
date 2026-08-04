@@ -20,6 +20,7 @@ type workspaceIndexSource interface {
 type openSpecIndexSource struct{}
 type trellisIndexSource struct{}
 type superpowersIndexSource struct{}
+type docsIndexSource struct{}
 
 func indexSourceFor(workspace WorkspaceConfig) (workspaceIndexSource, WorkspaceConfig, error) {
 	kind, err := source.ResolveKind(workspace.Path, workspace.Type)
@@ -32,9 +33,29 @@ func indexSourceFor(workspace WorkspaceConfig) (workspaceIndexSource, WorkspaceC
 		return trellisIndexSource{}, workspace, nil
 	case source.KindSuperpowers:
 		return superpowersIndexSource{}, workspace, nil
+	case source.KindDocs:
+		return docsIndexSource{}, workspace, nil
 	default:
 		return openSpecIndexSource{}, workspace, nil
 	}
+}
+
+// Scan indexes a plain documentation tree. There is no workflow to derive edges
+// from, so it contributes components only; the cross-document link edges are
+// built later from the markdown itself, the same as for every other source.
+func (docsIndexSource) Scan(workspace WorkspaceConfig) ([]Component, []Edge, error) {
+	var components []Component
+	for _, root := range source.ScanRoots(workspace) {
+		cs, scanErr := ScanDocsComponents(root, workspace.Alias)
+		if scanErr != nil {
+			log.Printf("wiki index: docs workspace %q scan %s had errors: %v", workspace.Alias, root, scanErr)
+		}
+		for i := range cs {
+			stampComponentSource(&cs[i], source.KindDocs)
+		}
+		components = append(components, cs...)
+	}
+	return components, nil, nil
 }
 
 func (openSpecIndexSource) Scan(workspace WorkspaceConfig) ([]Component, []Edge, error) {
