@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"stele/internal/appdir"
+	"stele/wiki"
 )
 
 type syncResult struct {
@@ -44,15 +45,15 @@ func handleSync(reg *WorkspaceRegistry) http.HandlerFunc {
 		gitRun(repoDir, "remote", "add", "origin", syncCfg.Remote)
 
 		// Fetch
-		if err := gitRun(repoDir, "fetch", "origin", "main"); err != nil {
+		if err := gitRun(repoDir, "fetch", "origin", wiki.MirrorBranch); err != nil {
 			writeJSONResp(w, syncResult{Action: "error", Message: "fetch failed: " + err.Error()})
 			return
 		}
 
-		// Compare HEAD vs origin/main
+		// Compare HEAD vs the mirror branch on the remote
 		localHead := gitOutput(repoDir, "rev-parse", "HEAD")
-		remoteHead := gitOutput(repoDir, "rev-parse", "origin/main")
-		mergeBase := gitOutput(repoDir, "merge-base", "HEAD", "origin/main")
+		remoteHead := gitOutput(repoDir, "rev-parse", "origin/"+wiki.MirrorBranch)
+		mergeBase := gitOutput(repoDir, "merge-base", "HEAD", "origin/"+wiki.MirrorBranch)
 
 		var result syncResult
 
@@ -62,7 +63,7 @@ func handleSync(reg *WorkspaceRegistry) http.HandlerFunc {
 
 		case mergeBase == remoteHead:
 			// Local ahead → push
-			if err := gitRun(repoDir, "push", "origin", "HEAD:main"); err != nil {
+			if err := gitRun(repoDir, "push", "origin", "HEAD:"+wiki.MirrorBranch); err != nil {
 				result = syncResult{Action: "error", Message: "push failed: " + err.Error()}
 			} else {
 				// Count commits pushed
@@ -72,7 +73,7 @@ func handleSync(reg *WorkspaceRegistry) http.HandlerFunc {
 
 		case mergeBase == localHead:
 			// Remote ahead → pull + restore
-			if err := gitRun(repoDir, "merge", "origin/main", "--ff-only"); err != nil {
+			if err := gitRun(repoDir, "merge", "origin/"+wiki.MirrorBranch, "--ff-only"); err != nil {
 				result = syncResult{Action: "error", Message: "pull failed: " + err.Error()}
 			} else {
 				n := restoreFiles(repoDir, reg)
@@ -81,11 +82,11 @@ func handleSync(reg *WorkspaceRegistry) http.HandlerFunc {
 
 		default:
 			// Diverged → pull (merge) + restore + push
-			if err := gitRun(repoDir, "merge", "origin/main", "--no-edit"); err != nil {
+			if err := gitRun(repoDir, "merge", "origin/"+wiki.MirrorBranch, "--no-edit"); err != nil {
 				result = syncResult{Action: "error", Message: "merge failed (conflict?): " + err.Error()}
 			} else {
 				n := restoreFiles(repoDir, reg)
-				gitRun(repoDir, "push", "origin", "HEAD:main")
+				gitRun(repoDir, "push", "origin", "HEAD:"+wiki.MirrorBranch)
 				result = syncResult{Action: "merged", FilesChanged: n, Message: fmt.Sprintf("合并远端更新并推送，还原了 %d 个文件", n)}
 			}
 		}

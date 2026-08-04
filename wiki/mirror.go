@@ -14,6 +14,12 @@ import (
 	"stele/internal/source"
 )
 
+// MirrorBranch is the single branch the knowledge mirror lives on. It is pinned
+// rather than inferred: the branch a mirror pushes to must not depend on the
+// machine that created it, and the manual sync endpoint must target the same
+// one the automatic push uses.
+const MirrorBranch = "master"
+
 // Mirror manages a single git repository that mirrors all wiki-indexed
 // documents from all workspaces. On file changes, documents are copied
 // into <repoDir>/<workspace-alias>/<relative-path> and auto-committed
@@ -51,7 +57,11 @@ func (m *Mirror) Init() error {
 	if _, err := os.Stat(gitDir); err == nil {
 		return nil // already initialized
 	}
-	cmd := exec.Command("git", "init")
+	// -b pins the branch name. Without it `git init` uses this machine's
+	// init.defaultBranch, so the same remote received two unrelated histories:
+	// an older mirror pushed `main` while a rebuilt one defaulted to `master`,
+	// and `push HEAD` followed whatever the local name happened to be.
+	cmd := exec.Command("git", "init", "-b", MirrorBranch)
 	cmd.Dir = m.repoDir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -205,7 +215,7 @@ func (m *Mirror) flush() {
 	if err := gitCmd(m.repoDir, "remote", "add", "origin", m.remote); err != nil {
 		return
 	}
-	if err := gitCmd(m.repoDir, "push", "-u", "origin", "HEAD"); err != nil {
+	if err := gitCmd(m.repoDir, "push", "-u", "origin", "HEAD:"+MirrorBranch); err != nil {
 		log.Printf("mirror: push failed: %v", err)
 	}
 }

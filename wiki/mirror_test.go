@@ -209,3 +209,38 @@ func TestRelativeToWorkspaceSuperpowersUsesProjectRoot(t *testing.T) {
 		t.Fatalf("relative path = %q, want %q", got, want)
 	}
 }
+
+// The defect this pins down: `git init` without -b takes the branch name from
+// the machine's init.defaultBranch, so one host created `main` and a rebuilt
+// mirror on another created `master`. Both pushed `HEAD`, and the same remote
+// ended up with two unrelated histories - 315 commits on one branch, 208 on the
+// other, no merge base.
+func TestMirrorInitPinsTheBranchRegardlessOfLocalGitConfig(t *testing.T) {
+	for _, configured := range []string{"main", "trunk", "develop"} {
+		t.Run(configured, func(t *testing.T) {
+			dir := t.TempDir()
+			// A private HOME so this test cannot read or write the real git config.
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+			cfg := exec.Command("git", "config", "--global", "init.defaultBranch", configured)
+			if out, err := cfg.CombinedOutput(); err != nil {
+				t.Fatalf("seeding init.defaultBranch: %v (%s)", err, out)
+			}
+
+			m := NewMirror(dir, "")
+			if err := m.Init(); err != nil {
+				t.Fatal(err)
+			}
+			branch := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+			branch.Dir = dir
+			out, err := branch.Output()
+			if err != nil {
+				t.Fatalf("reading the branch: %v", err)
+			}
+			if got := string(out); got != MirrorBranch+"\n" {
+				t.Fatalf("branch = %q with init.defaultBranch=%q, want %q: the mirror branch must not depend on the host", got, configured, MirrorBranch)
+			}
+		})
+	}
+}

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"stele/wiki"
 )
 
 func TestHandleSync_NotConfiguredReturnsErrorAction(t *testing.T) {
@@ -60,12 +62,14 @@ func TestHandleSync_UpToDateWhenLocalMatchesRemote(t *testing.T) {
 	runGit(t, home, "init", repoDir)
 	runGit(t, repoDir, "config", "user.email", "test@example.com")
 	runGit(t, repoDir, "config", "user.name", "Test")
-	runGit(t, repoDir, "checkout", "-b", "main")
+	// Follows the constant, so renaming the mirror branch cannot leave this
+	// fixture testing a branch the code no longer uses.
+	runGit(t, repoDir, "checkout", "-b", wiki.MirrorBranch)
 	writeFileHelper(t, filepath.Join(repoDir, "note.md"), "hello")
 	runGit(t, repoDir, "add", ".")
 	runGit(t, repoDir, "commit", "-m", "init")
 	runGit(t, repoDir, "remote", "add", "origin", remoteDir)
-	runGit(t, repoDir, "push", "origin", "main")
+	runGit(t, repoDir, "push", "origin", wiki.MirrorBranch)
 
 	t.Setenv("HOME", home)
 
