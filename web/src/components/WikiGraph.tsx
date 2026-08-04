@@ -407,9 +407,8 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         }
         return palette.vizRest
       }
-      return palette.surface
+      return palette.vizAxis
     }
-
     // Build node data for a single component (individual node)
     const individualNode = (component: WikiComponent) => ({
       data: {
@@ -810,6 +809,7 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
     }
   }, [aggregateMode, communities, communityFilteredComponents, communityMembers, communityRank, connectedIds, connectedOnly, effectiveCommunityLabels, expandedCommunity, onNodeClick, structuralEdges, visibleComponents, visibleEdges])
 
+
   useEffect(() => {
     const cy = cyRef.current
     if (!cy) return
@@ -865,101 +865,127 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
           summary={filterSummary}
         />
       )}
-      <div className="relative flex-1 border-x border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-        {components.length > 0 && (
-          <div className="absolute left-3 top-3 z-10 flex max-w-[28rem] flex-col gap-2">
-            <div className="border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-[var(--shadow-overlay)]">
-              <label className="block text-[length:var(--type-caption)] font-medium text-[var(--color-text-secondary)]" htmlFor="wiki-graph-search">
-                语义搜索
-              </label>
-              <div className="mt-1 flex items-center gap-2">
-                <Icon name="search" size={14} className="text-[var(--color-text-secondary)]" />
-                <input
-                  id="wiki-graph-search"
-                  type="text"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="搜索相近节点标题…"
-                  aria-label="图谱语义搜索"
-                  className="w-56 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                />
-              </div>
-              {searchSummary && (
-                <div className="mt-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{searchSummary}</div>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-[var(--shadow-overlay)]">
-              <button
-                type="button"
-                onClick={() => cyRef.current?.fit(undefined, 30)}
-                className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
-              >
-                <Icon name="refresh" size={14} />
-                适应窗口
-              </button>
-              {(visibleComponents.length > 0 || aggregateMode) && (
-                <div
-                  data-testid="wiki-graph-visibility-summary"
-                  className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]"
-                >
-                  {visibilitySummary}
-                </div>
-              )}
-              {expandedCommunity !== null && (
-                <button
-                  type="button"
-                  data-testid="wiki-graph-back-to-global"
-                  onClick={() => setExpandedCommunity(null)}
-                  className="inline-flex items-center gap-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
-                >
-                  <Icon name="chevron-left" size={14} />
-                  返回全局
-                </button>
-              )}
-              {activeCommunity !== null && (
-                <button
-                  type="button"
-                  onClick={() => setOverviewOpen(true)}
-                  className="inline-flex items-center gap-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
-                >
-                  <Icon name="info" size={14} />
-                  社区综述
-                </button>
-              )}
-              {edges.length > 0 && !aggregateMode && (
-                <label className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
-                  <input
-                    type="checkbox"
-                    checked={connectedOnly}
-                    onChange={(event) => setConnectedOnly(event.target.checked)}
-                  />
-                  仅显示有关联的节点
-                </label>
-              )}
-              {Object.keys(communityMembers).length > 0 && (
-                <label className="inline-flex items-center gap-2 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
-                  <input
-                    type="checkbox"
-                    data-testid="expand-all-nodes-toggle"
-                    checked={expandAllNodes}
-                    onChange={(event) => {
-                      setExpandAllNodes(event.target.checked)
-                      if (event.target.checked) setExpandedCommunity(null)
-                    }}
-                  />
-                  展开全部节点（绘制 {components.length} 个节点，可能较慢）
-                </label>
-              )}
-              {selectedNodeTitle && (
-                <div className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
-                  已选中：<span className="text-[var(--color-text-primary)]">{selectedNodeTitle}</span>
-                </div>
-              )}
-            </div>
+      {components.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-x border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
+          {/* One flat row. This band previously nested bordered boxes three deep
+              inside a bordered band; depth in this language is luminance, so the
+              controls share one surface and are separated by thin rules. */}
+          <div className="flex items-center gap-2">
+            <Icon name="search" size={14} className="text-[var(--color-text-secondary)]" />
+            <input
+              id="wiki-graph-search"
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="搜索相近节点标题…"
+              aria-label="图谱语义搜索"
+              className="w-56 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+            />
+            {searchSummary && (
+              <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{searchSummary}</span>
+            )}
           </div>
-        )}
 
+          <span aria-hidden="true" className="h-4 w-px bg-[var(--color-border)]" />
+
+          <button
+            type="button"
+            onClick={() => cyRef.current?.fit(undefined, 30)}
+            className="inline-flex items-center gap-1.5 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+          >
+            <Icon name="refresh" size={14} />
+            适应窗口
+          </button>
+          {expandedCommunity !== null && (
+            <button
+              type="button"
+              data-testid="wiki-graph-back-to-global"
+              onClick={() => setExpandedCommunity(null)}
+              className="inline-flex items-center gap-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+            >
+              <Icon name="chevron-left" size={14} />
+              返回全局
+            </button>
+          )}
+          {activeCommunity !== null && (
+            <button
+              type="button"
+              onClick={() => setOverviewOpen(true)}
+              className="inline-flex items-center gap-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+            >
+              <Icon name="info" size={14} />
+              社区综述
+            </button>
+          )}
+
+          {/* A checkbox already reads as a control; it does not need a box. */}
+          {edges.length > 0 && !aggregateMode && (
+            <label className="inline-flex items-center gap-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
+              <input
+                type="checkbox"
+                checked={connectedOnly}
+                onChange={(event) => setConnectedOnly(event.target.checked)}
+              />
+              仅显示有关联的节点
+            </label>
+          )}
+          {Object.keys(communityMembers).length > 0 && (
+            <label className="inline-flex items-center gap-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)]">
+              <input
+                type="checkbox"
+                data-testid="expand-all-nodes-toggle"
+                checked={expandAllNodes}
+                onChange={(event) => {
+                  setExpandAllNodes(event.target.checked)
+                  if (event.target.checked) setExpandedCommunity(null)
+                }}
+              />
+              展开全部 {components.length} 个节点
+            </label>
+          )}
+
+          <span aria-hidden="true" className="h-4 w-px bg-[var(--color-border)]" />
+
+          {/* Type legend lives in the toolbar row, never over the canvas: an
+              absolutely-positioned legend could cover a node after a re-fit. */}
+          <div
+            data-testid="wiki-graph-legend"
+            className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
+          >
+            {TYPE_SHAPE_ORDER.map((type) => (
+              <div key={type} className="flex items-center gap-1">
+                <svg width="10" height="10" viewBox="0 0 10 10" className="shrink-0 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" strokeWidth="1">
+                  {TYPE_SHAPES[type] === 'ellipse' && <circle cx="5" cy="5" r="4"/>}
+                  {TYPE_SHAPES[type] === 'rectangle' && <rect x="1" y="1" width="8" height="8"/>}
+                  {TYPE_SHAPES[type] === 'round-rectangle' && <rect x="1" y="1" width="8" height="8" rx="1.5"/>}
+                  {TYPE_SHAPES[type] === 'triangle' && <polygon points="5,1 9,9 1,9"/>}
+                  {TYPE_SHAPES[type] === 'diamond' && <polygon points="5,1 9,5 5,9 1,5"/>}
+                  {TYPE_SHAPES[type] === 'pentagon' && <polygon points="5,1 8.8,3.8 7.4,8.8 2.6,8.8 1.2,3.8"/>}
+                  {TYPE_SHAPES[type] === 'hexagon' && <polygon points="5,1 8.5,3 8.5,7 5,9 1.5,7 1.5,3"/>}
+                  {TYPE_SHAPES[type] === 'heptagon' && <polygon points="5,1 7.8,2.2 9,5 7.8,7.8 5,9 2.2,7.8 1,5"/>}
+                  {TYPE_SHAPES[type] === 'octagon' && <polygon points="3,1 7,1 9,3 9,7 7,9 3,9 1,7 1,3"/>}
+                  {TYPE_SHAPES[type] === 'star' && <polygon points="5,1 6.2,3.5 9,3.8 6.9,5.7 7.5,8.5 5,7 2.5,8.5 3.1,5.7 1,3.8 3.8,3.5"/>}
+                  {TYPE_SHAPES[type] === 'vee' && <polygon points="1,2 5,9 9,2"/>}
+                </svg>
+                <span className="truncate">{type}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Readings end the row, right-aligned. */}
+          <div className="ml-auto flex items-center gap-3 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+            {selectedNodeTitle && (
+              <span>
+                已选中：<span className="text-[var(--color-text-primary)]">{selectedNodeTitle}</span>
+              </span>
+            )}
+            {(visibleComponents.length > 0 || aggregateMode) && (
+              <span data-testid="wiki-graph-visibility-summary">{visibilitySummary}</span>
+            )}
+          </div>
+        </div>
+      )}
+      <div className="relative flex-1 min-h-0 border-x border-b border-[var(--color-border)] bg-[var(--color-surface)]">
         <div ref={containerRef} data-testid="wiki-graph-canvas" className="h-full w-full" />
 
         {hover && (
@@ -985,35 +1011,6 @@ export function WikiGraph({ onNodeClick }: { onNodeClick: (id: string) => void }
         {components.length > 0 && visibleComponents.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
             没有匹配当前筛选条件的节点
-          </div>
-        )}
-
-        {components.length > 0 && (
-          <div
-            data-testid="wiki-graph-legend"
-            className="absolute bottom-3 left-3 z-10 border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[length:var(--type-caption)] text-[var(--color-text-primary)] shadow-[var(--shadow-overlay)]"
-          >
-            <div className="mb-2 font-semibold text-[var(--color-text-secondary)]">类型</div>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-              {TYPE_SHAPE_ORDER.map((type) => (
-                <div key={type} className="flex items-center gap-1.5">
-                  <svg width="10" height="10" viewBox="0 0 10 10" className="shrink-0 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" strokeWidth="1">
-                    {TYPE_SHAPES[type] === 'ellipse' && <circle cx="5" cy="5" r="4"/>}
-                    {TYPE_SHAPES[type] === 'rectangle' && <rect x="1" y="1" width="8" height="8"/>}
-                    {TYPE_SHAPES[type] === 'round-rectangle' && <rect x="1" y="1" width="8" height="8" rx="1.5"/>}
-                    {TYPE_SHAPES[type] === 'triangle' && <polygon points="5,1 9,9 1,9"/>}
-                    {TYPE_SHAPES[type] === 'diamond' && <polygon points="5,1 9,5 5,9 1,5"/>}
-                    {TYPE_SHAPES[type] === 'pentagon' && <polygon points="5,1 8.8,3.8 7.4,8.8 2.6,8.8 1.2,3.8"/>}
-                    {TYPE_SHAPES[type] === 'hexagon' && <polygon points="5,1 8.5,3 8.5,7 5,9 1.5,7 1.5,3"/>}
-                    {TYPE_SHAPES[type] === 'heptagon' && <polygon points="5,1 7.8,2.2 9,5 7.8,7.8 5,9 2.2,7.8 1,5"/>}
-                    {TYPE_SHAPES[type] === 'octagon' && <polygon points="3,1 7,1 9,3 9,7 7,9 3,9 1,7 1,3"/>}
-                    {TYPE_SHAPES[type] === 'star' && <polygon points="5,1 6.2,3.5 9,3.8 6.9,5.7 7.5,8.5 5,7 2.5,8.5 3.1,5.7 1,3.8 3.8,3.5"/>}
-                    {TYPE_SHAPES[type] === 'vee' && <polygon points="1,2 5,9 9,2"/>}
-                  </svg>
-                  <span className="truncate">{type}</span>
-                </div>
-              ))}
-            </div>
           </div>
         )}
       </div>

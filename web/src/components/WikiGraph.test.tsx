@@ -85,8 +85,8 @@ describe('WikiGraph', () => {
     // longer carries a type `color`. The two encodings were previously both
     // colour, which put 11 type hues and 8 community hues on one canvas.
     expect(call.elements).toEqual([
-      { data: { id: '/x/a.md', label: 'A', shape: 'hexagon', commColor: 'rgb(255, 255, 255)' } },
-      { data: { id: '/x/b.md', label: 'B', shape: 'star', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/a.md', label: 'A', shape: 'hexagon', commColor: 'rgb(125, 135, 148)' } },
+      { data: { id: '/x/b.md', label: 'B', shape: 'star', commColor: 'rgb(125, 135, 148)' } },
       { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'rgb(36, 161, 72)' } },
     ])
     expect(JSON.stringify(call.elements)).not.toMatch(/var\(|color-mix\(/)
@@ -247,8 +247,8 @@ describe('WikiGraph', () => {
       layout: { name: string }
     }
     expect(call.elements).toEqual([
-      { data: { id: '/x/a.md', label: 'A', shape: 'hexagon', commColor: 'rgb(255, 255, 255)' } },
-      { data: { id: '/x/b.md', label: 'B', shape: 'star', commColor: 'rgb(255, 255, 255)' } },
+      { data: { id: '/x/a.md', label: 'A', shape: 'hexagon', commColor: 'rgb(125, 135, 148)' } },
+      { data: { id: '/x/b.md', label: 'B', shape: 'star', commColor: 'rgb(125, 135, 148)' } },
       { data: { id: 'e0', source: '/x/a.md', target: '/x/b.md', kind: 'references', color: 'rgb(36, 161, 72)' } },
     ])
     expect(call.elements.some((element) => element.data.source === '/x/b.md' && element.data.target === '/x/c.md')).toBe(false)
