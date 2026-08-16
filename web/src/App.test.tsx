@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import App from './App'
@@ -55,11 +56,13 @@ vi.mock('./components/MarkdownViewer', () => ({
     workspace,
     onClose,
     onToggleStar,
+    onEdit,
   }: {
     path: string
     workspace?: string
     onClose: () => void
     onToggleStar?: (path: string, title: string) => void
+    onEdit?: () => void
   }) => (
     // workspace is surfaced because /api/artifact derives its allowed roots from
     // it: a document opened without one is authorized against the first
@@ -67,6 +70,7 @@ vi.mock('./components/MarkdownViewer', () => ({
     <div data-testid="markdown-viewer" data-workspace={workspace ?? ''}>
       <div>{path}</div>
       <button type="button" onClick={onClose}>✕ 关闭</button>
+      <button type="button" onClick={onEdit}>编辑</button>
       <button
         type="button"
         aria-label="收藏"
@@ -76,6 +80,33 @@ vi.mock('./components/MarkdownViewer', () => ({
       </button>
     </div>
   ),
+}))
+
+vi.mock('./components/MarkdownEditor', () => ({
+  MarkdownEditor: ({
+    path,
+    workspace,
+    onClose,
+    onDirtyChange,
+  }: {
+    path: string
+    workspace?: string
+    onClose: () => void
+    onDirtyChange?: (dirty: boolean) => void
+  }) => {
+    const [source, setSource] = useState('')
+    return (
+      <div data-testid="markdown-editor" data-workspace={workspace ?? ''}>
+        <div>{path}</div>
+        <output data-testid="markdown-editor-source">{source}</output>
+        <button type="button" onClick={() => {
+          setSource('# 未保存的修改')
+          onDirtyChange?.(true)
+        }}>修改源码</button>
+        <button type="button" onClick={onClose}>返回阅读</button>
+      </div>
+    )
+  },
 }))
 
 vi.mock('./components/SessionDetail', () => ({
@@ -443,6 +474,60 @@ describe('App', () => {
     fireEvent.click(screen.getByText('✕ 关闭'))
     expect(screen.queryByText('✕ 关闭')).toBeNull()
     await waitFor(() => {})
+  })
+
+  it('switches a document overlay between read-only viewer and source editor', async () => {
+    const changes = [makeChange({ name: 'alpha', workspace: 'docs' })]
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce([])
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
+    vi.mocked(fetchChangeDetail).mockResolvedValueOnce({
+      name: 'alpha', workflow: 'full', phase: 'build', archived: false,
+      tasksCompleted: 0, tasksTotal: 0, verifyResult: 'pending', createdAt: '',
+      phases: [{ key: 'design', label: '设计', status: 'done', artifacts: [{ file: 'design.md', label: '设计文档', exists: true, path: '/x/alpha/design.md' }] }],
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /^打开变更 alpha/ }))
+    fireEvent.click(await screen.findByText('设计文档'))
+    await screen.findByTestId('markdown-viewer')
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    const editor = await screen.findByTestId('markdown-editor')
+    expect(editor.getAttribute('data-workspace')).toBe('docs')
+
+    fireEvent.click(screen.getByRole('button', { name: '返回阅读' }))
+    await screen.findByTestId('markdown-viewer')
+  })
+
+  it('keeps dirty source open when an external rail navigation is canceled, then discards it when confirmed', async () => {
+    const changes = [makeChange({ name: 'alpha', workspace: 'docs' })]
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce([])
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
+    vi.mocked(fetchChangeDetail).mockResolvedValueOnce({
+      name: 'alpha', workflow: 'full', phase: 'build', archived: false, tasksCompleted: 0, tasksTotal: 0, verifyResult: '', createdAt: '',
+      phases: [{ key: 'design', label: '设计', status: 'done', artifacts: [{ file: 'design.md', label: '设计文档', exists: true, path: '/x/alpha/design.md' }] }],
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    try {
+      render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: /^打开变更 alpha/ }))
+      fireEvent.click(await screen.findByText('设计文档'))
+      fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+      await screen.findByTestId('markdown-editor')
+      fireEvent.click(screen.getByRole('button', { name: '修改源码' }))
+
+      fireEvent.click(screen.getByRole('button', { name: '时间线' }))
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('markdown-editor-source').textContent).toBe('# 未保存的修改')
+
+      confirm.mockReturnValue(true)
+      fireEvent.click(screen.getByRole('button', { name: '时间线' }))
+      await screen.findByText('打开时间线文档')
+      expect(screen.queryByTestId('markdown-editor')).toBeNull()
+    } finally {
+      confirm.mockRestore()
+    }
   })
 
   it('starring a doc in MarkdownViewer adds it to the bookmark panel, and clicking it there reopens it', async () => {

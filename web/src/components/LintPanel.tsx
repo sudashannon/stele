@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { fetchLintIssues, fixDeadLinks } from '../api/client'
+import { deleteDocuments, fetchLintIssues, fixDeadLinks } from '../api/client'
 import type { LintIssue } from '../api/types'
 import type { FixDeadLinkRequest } from '../api/client'
 import { Icon } from './icons'
@@ -23,6 +23,16 @@ function ruleSeverity(rule: string): 'warn' | 'danger' {
   return 'warn'
 }
 
+// What each low-quality signal means, in the reader's terms. The rule reports the
+// measurements too, so a row can be judged before anything is deleted.
+const SIGNAL_LABELS: Record<string, string> = {
+  short: '过短',
+  unstructured: '无结构',
+  'unfilled-outline': '骨架未填',
+  'placeholder-dense': '占位符密集',
+  'unresolved-in-finished': '已完成仍有待办',
+}
+
 export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
   const [issues, setIssues] = useState<LintIssue[]>([])
   const [gaveUp, setGaveUp] = useState(false)
@@ -30,6 +40,12 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
   const [fixing, setFixing] = useState(false)
   const [fixError, setFixError] = useState<string | null>(null)
   const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set())
+  // Deletion is destructive, so the chosen paths are held apart from the
+  // dead-link fix selection and confirmed before anything is sent.
+  const [doomed, setDoomed] = useState<Set<string>>(new Set())
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteNote, setDeleteNote] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -107,6 +123,43 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
     })
   }
 
+  const toggleDoomed = (path: string) => {
+    setDoomed((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+    setConfirming(false)
+  }
+
+  const handleDelete = useCallback(async () => {
+    if (doomed.size === 0) return
+    setDeleting(true)
+    setDeleteNote(null)
+    try {
+      const result = await deleteDocuments([...doomed])
+      const parts: string[] = []
+      if (result.deleted.length > 0) {
+        parts.push(`已移入回收站 ${result.deleted.length} 篇（${result.trash}）`)
+      }
+      if (result.failed.length > 0) {
+        const reasons = [...new Set(result.failed.map((f) => f.reason))]
+        parts.push(`${result.failed.length} 篇未删除：${reasons.join('；')}`)
+      }
+      setDeleteNote(parts.join(' · ') || '没有文档被删除')
+      setDoomed(new Set())
+      setConfirming(false)
+      // The index rebuilds server-side after a delete; re-read so the list stops
+      // showing rows whose files are gone.
+      setIssues(await fetchLintIssues())
+    } catch (e) {
+      setDeleteNote(e instanceof Error ? e.message : '删除失败')
+    } finally {
+      setDeleting(false)
+    }
+  }, [doomed])
+
   const toggleRuleExpand = (rule: string) => {
     setExpandedRules((prev) => {
       const next = new Set(prev)
@@ -136,6 +189,55 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
     <div>
       {fixError && (
         <div className="mb-2 border border-[var(--color-warn-text)] px-2 py-1 text-[var(--color-warn-text)]">{fixError}</div>
+      )}
+      {deleteNote && (
+        <div
+          data-testid="lint-delete-note"
+          className="mb-2 border border-[var(--color-border)] bg-[var(--color-layer)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)]"
+        >
+          {deleteNote}
+        </div>
+      )}
+      {doomed.size > 0 && (
+        <div
+          data-testid="lint-delete-bar"
+          className="mb-2 flex flex-wrap items-center justify-end gap-2 text-[length:var(--type-caption)]"
+        >
+          {confirming ? (
+            <>
+              {/* Says where the files go, because "delete" that is really a move
+                  should not read as an unlink. */}
+              <span className="text-[var(--color-text-secondary)]">
+                将 {doomed.size} 篇移入回收站（可恢复），确定？
+              </span>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className="border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="lint-delete-confirm"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="border border-[var(--color-danger)] bg-[var(--color-danger-subtle)] px-2 py-0.5 font-medium text-[var(--color-danger-text)] hover:bg-[var(--color-layer)] disabled:opacity-50"
+              >
+                {deleting ? '删除中…' : '确认移入回收站'}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              data-testid="lint-delete-request"
+              onClick={() => setConfirming(true)}
+              className="border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-danger-text)] hover:bg-[var(--color-layer)]"
+            >
+              删除选中 ({doomed.size})
+            </button>
+          )}
+        </div>
       )}
       {hasDeadLinkFix && (
         <div className="mb-2 flex justify-end">
@@ -197,8 +299,44 @@ export function LintPanel({ onOpen }: { onOpen?: (path: string) => void }) {
                     <tr>
                       <td colSpan={3} className="px-2 py-1">
                         <div className="space-y-1">
+                          {rule === 'low-quality' && (
+                            <div className="flex items-center justify-between pb-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                              <span>勾选后可移入回收站（可恢复）。上游导入的文档删除后，下次导入会再次出现。</span>
+                              <button
+                                type="button"
+                                data-testid="lint-select-all-lowquality"
+                                onClick={() => {
+                                  const paths = items.map((i) => i.componentId)
+                                  const allChosen = paths.every((p) => doomed.has(p))
+                                  setDoomed((prev) => {
+                                    const next = new Set(prev)
+                                    for (const p of paths) {
+                                      if (allChosen) next.delete(p)
+                                      else next.add(p)
+                                    }
+                                    return next
+                                  })
+                                  setConfirming(false)
+                                }}
+                                className="shrink-0 border border-[var(--color-border)] px-2 py-0.5 text-[var(--color-text-primary)] hover:bg-[var(--color-layer)]"
+                              >
+                                全选/取消
+                              </button>
+                            </div>
+                          )}
                           {items.map((i, idx) => {
                             const suggestion = parseDeadLinkSuggestion(i.detail)
+                            if (i.lowQuality) {
+                              return (
+                                <LowQualityDetail
+                                  key={idx}
+                                  issue={i}
+                                  onOpen={onOpen}
+                                  checked={doomed.has(i.componentId)}
+                                  onToggle={() => toggleDoomed(i.componentId)}
+                                />
+                              )
+                            }
                             return (
                               <LintDetail
                                 key={idx}
@@ -274,6 +412,64 @@ function LintDetail({
         <span className="shrink-0 whitespace-nowrap text-[var(--color-accent)]">{suggestion}</span>
       )}
       {sourceButton}
+    </div>
+  )
+}
+
+// A low-quality row shows the measurements behind the verdict, not just the
+// verdict. The rule is a heuristic - while it was being calibrated, three
+// versions of one signal flagged the best-written documents in the corpus - so
+// the numbers have to be visible before anyone deletes anything.
+function LowQualityDetail({
+  issue, onOpen, checked, onToggle,
+}: {
+  issue: LintIssue
+  onOpen?: (path: string) => void
+  checked: boolean
+  onToggle: () => void
+}) {
+  const lq = issue.lowQuality!
+  const name = issue.componentId.split('/').pop() ?? issue.componentId
+  return (
+    <div
+      data-testid="lint-lowquality-row"
+      className="flex items-center gap-2 py-0.5 text-[length:var(--type-caption)]"
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onToggle}
+        aria-label={`选择 ${name} 以删除`}
+        className="shrink-0"
+      />
+      <button
+        type="button"
+        onClick={() => onOpen?.(issue.componentId)}
+        title={issue.componentId}
+        className="min-w-0 flex-1 truncate text-left text-[var(--color-link)] hover:underline"
+      >
+        {name}
+      </button>
+      <div className="flex shrink-0 flex-wrap items-center gap-1">
+        {lq.signals.map((s) => (
+          <span
+            key={s}
+            className="border border-[var(--color-border)] bg-[var(--color-layer)] px-1 text-[var(--color-text-secondary)]"
+          >
+            {SIGNAL_LABELS[s] ?? s}
+          </span>
+        ))}
+        {lq.imported && (
+          <span className="border border-[var(--color-border)] bg-[var(--color-layer)] px-1 text-[var(--color-text-tertiary)]">
+            上游导入
+          </span>
+        )}
+      </div>
+      <span className="shrink-0 font-mono tabular-nums text-[var(--color-text-secondary)]">
+        {lq.chars} 字 · {lq.headings} 标题
+        {lq.emptyHeadings > 0 && ` · ${lq.emptyHeadings} 空`}
+        {lq.placeholders > 0 && ` · ${lq.placeholders} 占位`}
+      </span>
     </div>
   )
 }

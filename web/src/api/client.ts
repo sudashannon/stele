@@ -169,11 +169,74 @@ export async function fetchChangeDetail(name: string, workspace?: string): Promi
   return res.json()
 }
 
-export async function fetchArtifactContent(path: string, workspace?: string): Promise<string> {
+export interface ArtifactText {
+  content: string
+  etag: string
+}
+
+export interface ArtifactSaveResult {
+  etag: string
+  path: string
+  bytes: number
+}
+
+export class ArtifactRequestError extends Error {
+  readonly status: number
+  readonly etag: string | null
+
+  constructor(status: number, message: string, etag: string | null = null) {
+    super(message)
+    this.name = 'ArtifactRequestError'
+    this.status = status
+    this.etag = etag
+  }
+}
+
+function artifactURL(path: string, workspace?: string): string {
   const params = new URLSearchParams({ path })
   if (workspace) params.set('workspace', workspace)
-  const res = await fetch('/api/artifact?' + params.toString())
-  if (!res.ok) throw new Error(`fetchArtifactContent failed: ${res.status}`)
+  return '/api/artifact?' + params.toString()
+}
+
+async function artifactError(res: Response, operation: string): Promise<ArtifactRequestError> {
+  const body: { error?: string; message?: string } = await res.json().catch(() => ({}))
+  return new ArtifactRequestError(
+    res.status,
+    body.error ?? body.message ?? `${operation} failed: ${res.status}`,
+    res.headers.get('ETag'),
+  )
+}
+
+export async function fetchArtifactText(path: string, workspace?: string): Promise<ArtifactText> {
+  const res = await fetch(artifactURL(path, workspace))
+  if (!res.ok) throw await artifactError(res, 'fetchArtifactText')
+  const etag = res.headers.get('ETag')
+  if (!etag) throw new ArtifactRequestError(res.status, 'fetchArtifactText failed: missing ETag')
+  return { content: await res.text(), etag }
+}
+
+export async function saveArtifactText(
+  path: string,
+  content: string,
+  etag: string,
+  workspace?: string,
+): Promise<ArtifactSaveResult> {
+  const res = await fetch(artifactURL(path, workspace), {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: content,
+  })
+  if (!res.ok) throw await artifactError(res, 'saveArtifactText')
+  const body: ArtifactSaveResult = await res.json()
+  return body
+}
+
+export async function fetchArtifactContent(path: string, workspace?: string): Promise<string> {
+  const res = await fetch(artifactURL(path, workspace))
+  if (!res.ok) throw await artifactError(res, 'fetchArtifactContent')
   return res.text()
 }
 
@@ -440,6 +503,24 @@ export async function fixDeadLinks(reqs: FixDeadLinkRequest[]): Promise<FixDeadL
   if (!res.ok) throw new Error(`fix dead links failed: ${res.status}`)
   const data = await res.json()
   return data.results
+}
+
+export interface DeleteDocumentsResult {
+  deleted: { original: string; stored: string; workspace: string; deletedAt: string }[]
+  failed: { path: string; reason: string }[]
+  trash: string
+}
+
+/** Moves documents to <data dir>/trash. Recoverable, not an unlink. */
+export async function deleteDocuments(paths: string[]): Promise<DeleteDocumentsResult> {
+  const res = await fetch('/api/wiki/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+  if (!res.ok) throw new Error(`delete failed: ${res.status}`)
+  const data = await res.json()
+  return { deleted: data.deleted ?? [], failed: data.failed ?? [], trash: data.trash ?? '' }
 }
 
 // Share

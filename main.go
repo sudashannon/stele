@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"stele/chat"
 	"stele/internal/appdir"
@@ -343,6 +345,7 @@ func main() {
 	mux.HandleFunc("/api/wiki/component/", wikiAPI.HandleComponent)
 	mux.HandleFunc("/api/wiki/rebuild", wikiAPI.HandleRebuild)
 	mux.HandleFunc("/api/wiki/lint", wikiAPI.HandleLint)
+	mux.HandleFunc("/api/wiki/delete", wikiAPI.HandleDeleteDocuments)
 	mux.HandleFunc("/api/wiki/summarize", wikiAPI.HandleSummarize)
 	mux.HandleFunc("/api/wiki/summary", wikiAPI.HandleCachedSummary)
 	mux.HandleFunc("/api/wiki/overview", wikiAPI.HandleOverview)
@@ -373,8 +376,9 @@ func main() {
 		}
 		handleGetChange(w, r, *baseDir, reg) // existing GET behavior, unchanged
 	})
+	artifactWriteLock := &sync.Mutex{}
 	mux.HandleFunc("/api/artifact", func(w http.ResponseWriter, r *http.Request) {
-		handleGetArtifact(w, r, *baseDir, reg)
+		handleArtifact(w, r, *baseDir, reg, artifactWriteLock)
 	})
 
 	mux.HandleFunc("/api/chat/message", chat.HandleMessage(*baseDir, *baseDir, wikiAPI))
@@ -724,35 +728,29 @@ func handleTransition(w http.ResponseWriter, r *http.Request, changeName, defaul
 	}
 }
 
-func handleGetArtifact(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry) {
-	workspace, err := resolveWorkspaceConfig(r, baseDir, reg)
-	if err != nil {
-		writeJSONError(w, err.Error(), 400)
-		return
-	}
-	path := r.URL.Query().Get("path")
-	if path == "" {
-		writeJSONError(w, "missing path", 400)
-		return
-	}
+const maxArtifactBodyBytes int64 = 10 << 20
 
-	absPath, absErr := filepath.Abs(path)
-	if absErr != nil {
-		writeJSONError(w, "invalid path", 400)
-		return
+func handleArtifact(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry, writeLock sync.Locker) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		handleGetArtifact(w, r, baseDir, reg)
+	case http.MethodPut:
+		handlePutArtifact(w, r, baseDir, reg, writeLock)
+	default:
+		w.Header().Set("Allow", "GET, HEAD, PUT")
+		writeJSONError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-	// Derive authorization from the resolved source. OpenSpec and Trellis
-	// preserve their project-root boundary; standalone Superpowers may serve
-	// only its four durable docs/superpowers roots, including after symlink
-	// resolution.
-	if !artifactPathAllowed(workspace, absPath) {
-		writeJSONError(w, "path outside allowed artifact roots", 403)
+}
+
+func handleGetArtifact(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry) {
+	_, absPath, ok := resolveArtifactRequest(w, r, baseDir, reg)
+	if !ok {
 		return
 	}
 
 	content, readErr := os.ReadFile(absPath)
 	if readErr != nil {
-		writeJSONError(w, "file not found", 404)
+		writeJSONError(w, "file not found", http.StatusNotFound)
 		return
 	}
 
@@ -762,7 +760,242 @@ func handleGetArtifact(w http.ResponseWriter, r *http.Request, baseDir string, r
 		ct = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Write(content)
+	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+	w.Header().Set("ETag", artifactETag(content))
+	if r.Method != http.MethodHead {
+		w.Write(content)
+	}
+
+}
+
+func handlePutArtifact(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry, writeLock sync.Locker) {
+	workspace, absPath, ok := resolveArtifactRequest(w, r, baseDir, reg)
+	if !ok {
+		return
+	}
+	if !validateIfMatch(w, r) {
+		return
+	}
+
+	writeLock.Lock()
+	defer writeLock.Unlock()
+
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSONError(w, "file not found", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, "unable to resolve artifact path", http.StatusNotFound)
+		return
+	}
+	if !resolvedArtifactWithinWorkspace(workspace, resolvedPath) {
+		writeJSONError(w, "path outside allowed artifact roots", http.StatusForbidden)
+		return
+	}
+
+	body, err := readArtifactBody(w, r)
+	if err != nil {
+		return
+	}
+	if !isUTF8Text(body) {
+		writeJSONError(w, "artifact content must be UTF-8 text", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	info, err := os.Stat(resolvedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSONError(w, "file not found", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, "unable to read artifact", http.StatusInternalServerError)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		writeJSONError(w, "artifact is not a regular file", http.StatusUnsupportedMediaType)
+		return
+	}
+	current, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSONError(w, "file not found", http.StatusNotFound)
+			return
+		}
+		writeJSONError(w, "unable to read artifact", http.StatusInternalServerError)
+		return
+	}
+	if !isUTF8Text(current) {
+		writeJSONError(w, "artifact content must be UTF-8 text", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	currentETag := artifactETag(current)
+	if strings.TrimSpace(r.Header.Get("If-Match")) != currentETag {
+		w.Header().Set("ETag", currentETag)
+		writeJSONError(w, "artifact has changed", http.StatusPreconditionFailed)
+		return
+	}
+	if err := writeArtifactAtomically(resolvedPath, body, info.Mode()); err != nil {
+		writeJSONError(w, "unable to save artifact", http.StatusInternalServerError)
+		return
+	}
+
+	newETag := artifactETag(body)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", newETag)
+	json.NewEncoder(w).Encode(struct {
+		ETag  string `json:"etag"`
+		Path  string `json:"path"`
+		Bytes int    `json:"bytes"`
+	}{ETag: newETag, Path: absPath, Bytes: len(body)})
+}
+
+func resolveArtifactRequest(w http.ResponseWriter, r *http.Request, baseDir string, reg *WorkspaceRegistry) (WorkspaceConfig, string, bool) {
+	workspace, err := resolveWorkspaceConfig(r, baseDir, reg)
+	if err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return WorkspaceConfig{}, "", false
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeJSONError(w, "missing path", http.StatusBadRequest)
+		return WorkspaceConfig{}, "", false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		writeJSONError(w, "invalid path", http.StatusBadRequest)
+		return WorkspaceConfig{}, "", false
+	}
+	if !artifactPathAllowed(workspace, absPath) {
+		writeJSONError(w, "path outside allowed artifact roots", http.StatusForbidden)
+		return WorkspaceConfig{}, "", false
+	}
+	return workspace, absPath, true
+}
+
+func validateIfMatch(w http.ResponseWriter, r *http.Request) bool {
+	values := r.Header.Values("If-Match")
+	if len(values) == 0 || strings.TrimSpace(values[0]) == "" {
+		writeJSONError(w, "an explicit If-Match ETag is required", http.StatusPreconditionRequired)
+		return false
+	}
+	if len(values) != 1 {
+		writeJSONError(w, "If-Match must contain one strong ETag", http.StatusBadRequest)
+		return false
+	}
+	etag := strings.TrimSpace(values[0])
+	if etag == "*" {
+		writeJSONError(w, "an explicit If-Match ETag is required", http.StatusPreconditionRequired)
+		return false
+	}
+	if strings.HasPrefix(etag, "W/") || strings.Contains(etag, ",") || !isStrongETag(etag) {
+		writeJSONError(w, "If-Match must be a strong ETag", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func isStrongETag(etag string) bool {
+	if len(etag) < 2 || etag[0] != '"' || etag[len(etag)-1] != '"' {
+		return false
+	}
+	for _, c := range etag[1 : len(etag)-1] {
+		if c < 0x21 || c == '"' || c > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func readArtifactBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, maxArtifactBodyBytes))
+	if err == nil {
+		return body, nil
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeJSONError(w, "artifact body too large", http.StatusRequestEntityTooLarge)
+		return nil, err
+	}
+	writeJSONError(w, "unable to read artifact body", http.StatusBadRequest)
+	return nil, err
+}
+
+func isUTF8Text(content []byte) bool {
+	return utf8.Valid(content) && !bytes.Contains(content, []byte{0})
+}
+
+func artifactETag(content []byte) string {
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("\"%x\"", sum)
+}
+
+func resolvedArtifactWithinWorkspace(workspace WorkspaceConfig, resolvedPath string) bool {
+	kind, err := source.ResolveKind(workspace.Path, workspace.Type)
+	if err != nil {
+		return false
+	}
+
+	roots := []string{source.ProjectRoot(WorkspaceConfig{Path: workspace.Path, Type: kind})}
+	if kind == source.KindSuperpowers {
+		roots = source.SuperpowersRoots(workspace.Path)
+	}
+	for _, root := range roots {
+		absoluteRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(absoluteRoot)
+		if err == nil && pathWithinRoot(resolvedPath, resolvedRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeArtifactAtomically(target string, content []byte, mode os.FileMode) error {
+	return writeArtifactAtomicallyWithRename(target, content, mode, os.Rename)
+}
+
+func writeArtifactAtomicallyWithRename(target string, content []byte, mode os.FileMode, rename func(string, string) error) error {
+	directory := filepath.Dir(target)
+	temp, err := os.CreateTemp(directory, ".stele-artifact-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+
+	if err := temp.Chmod(mode.Perm()); err != nil {
+		temp.Close()
+		return err
+	}
+	if written, err := temp.Write(content); err != nil {
+		temp.Close()
+		return err
+	} else if written != len(content) {
+		temp.Close()
+		return io.ErrShortWrite
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := rename(tempPath, target); err != nil {
+		return err
+	}
+
+	// The replacement is already durable enough for the response; directory
+	// sync is best effort because failure after rename cannot restore the old file.
+	if dir, err := os.Open(directory); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 func artifactPathAllowed(workspace WorkspaceConfig, path string) bool {

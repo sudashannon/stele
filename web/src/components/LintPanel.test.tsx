@@ -145,3 +145,93 @@ describe('LintPanel', () => {
     expect(fetchMock.mock.calls.length).toBe(callsBeforeUnmount)
   })
 })
+
+// Deletion removes real files from real workspaces, so the panel must not send a
+// request from a single click, and it must say the files are recoverable.
+describe('LintPanel low-quality deletion', () => {
+  const lowQualityIssue = {
+    rule: 'low-quality',
+    componentId: '/ws/knowledge/thin.md',
+    detail: 'short,unstructured · 12 字 · 1 标题',
+    lowQuality: {
+      chars: 12, headings: 1, emptyHeadings: 0, placeholders: 0,
+      signals: ['short', 'unstructured'], imported: false,
+    },
+  }
+
+  function mockLint(issues: unknown[], onDelete?: (body: unknown) => unknown) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input)
+      if (url.includes('/api/wiki/delete')) {
+        const body = JSON.parse(String((init as RequestInit).body))
+        const result = onDelete?.(body) ?? { deleted: body.paths.map((p: string) => ({
+          original: p, stored: '/data/trash/ws/knowledge/thin.md', workspace: 'ws', deletedAt: '',
+        })), failed: [], trash: '/data/trash' }
+        return Promise.resolve({ ok: true, json: async () => result } as Response)
+      }
+      return Promise.resolve({ ok: true, json: async () => issues } as Response)
+    })
+  }
+
+  it('needs a confirmation step before any delete request is sent', async () => {
+    const fetchMock = mockLint([lowQualityIssue])
+    render(<LintPanel />)
+
+    fireEvent.click(await screen.findByText(/low-quality/))
+    fireEvent.click(await screen.findByLabelText('选择 thin.md 以删除'))
+
+    // First press only asks; nothing has been sent yet.
+    fireEvent.click(screen.getByTestId('lint-delete-request'))
+    expect(screen.getByTestId('lint-delete-bar').textContent).toContain('将 1 篇移入回收站')
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/api/wiki/delete'))).toBe(false)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('lint-delete-confirm'))
+    })
+    const deleteCall = fetchMock.mock.calls.find(([u]) => String(u).includes('/api/wiki/delete'))
+    expect(deleteCall).toBeTruthy()
+    expect(JSON.parse(String((deleteCall![1] as RequestInit).body))).toEqual({
+      paths: ['/ws/knowledge/thin.md'],
+    })
+  })
+
+  it('shows the measurements behind the verdict so a row can be judged', async () => {
+    mockLint([{
+      ...lowQualityIssue,
+      lowQuality: { ...lowQualityIssue.lowQuality, emptyHeadings: 4, placeholders: 2, imported: true },
+    }])
+    render(<LintPanel />)
+    fireEvent.click(await screen.findByText(/low-quality/))
+
+    const row = await screen.findByTestId('lint-lowquality-row')
+    expect(row.textContent).toContain('12 字')
+    expect(row.textContent).toContain('1 标题')
+    expect(row.textContent).toContain('4 空')
+    expect(row.textContent).toContain('2 占位')
+    // Signals are named, not shown as raw rule strings.
+    expect(row.textContent).toContain('过短')
+    expect(row.textContent).toContain('无结构')
+    // An upstream import is labelled, because deleting it only lasts until the
+    // next import.
+    expect(row.textContent).toContain('上游导入')
+  })
+
+  it('reports per-path refusals instead of claiming success', async () => {
+    mockLint([lowQualityIssue], () => ({
+      deleted: [],
+      failed: [{ path: '/ws/knowledge/thin.md', reason: 'path is outside every registered workspace' }],
+      trash: '/data/trash',
+    }))
+    render(<LintPanel />)
+    fireEvent.click(await screen.findByText(/low-quality/))
+    fireEvent.click(await screen.findByLabelText('选择 thin.md 以删除'))
+    fireEvent.click(screen.getByTestId('lint-delete-request'))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('lint-delete-confirm'))
+    })
+
+    const note = await screen.findByTestId('lint-delete-note')
+    expect(note.textContent).toContain('1 篇未删除')
+    expect(note.textContent).toContain('outside every registered workspace')
+  })
+})

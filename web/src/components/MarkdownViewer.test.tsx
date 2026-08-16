@@ -17,6 +17,28 @@ describe('MarkdownViewer', () => {
     expect(container.firstChild).toBeNull()
   })
 
+  it('shows edit only for a real artifact path with an edit handler', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, text: async () => '# Hello' } as Response)
+    const onEdit = vi.fn()
+
+    render(<MarkdownViewer path="/x/design.md" onClose={vi.fn()} onEdit={onEdit} />)
+    await screen.findByRole('heading', { name: 'Hello' })
+    fireEvent.click(screen.getByTestId('markdown-edit-btn'))
+    expect(onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('never shows edit controls for a report body', () => {
+    render(<MarkdownViewer path={null} body="# Report" onClose={vi.fn()} onEdit={vi.fn()} />)
+    expect(screen.queryByTestId('markdown-edit-btn')).toBeNull()
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+  })
+  it('does not show edit controls for a binary-looking artifact path', () => {
+    render(<MarkdownViewer path="/x/diagram.png" body="# Diagram" onClose={vi.fn()} onEdit={vi.fn()} />)
+
+    expect(screen.queryByTestId('markdown-edit-btn')).toBeNull()
+  })
+
+
   it('fetches and renders markdown content for the given path', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,
@@ -421,6 +443,83 @@ describe('MarkdownViewer', () => {
     fireEvent(window, new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('keeps frontmatter collapsed until the reader asks for metadata', async () => {
+    const raw = '---\ntitle: Design note\nstatus: draft\n---\n\n# Body'
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, text: async () => raw } as Response)
+
+    render(<MarkdownViewer path="/x/design.md" onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Body' })).toBeTruthy())
+
+    const card = screen.getByTestId('frontmatter-card')
+    expect(card.querySelector('dl')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /文档元数据/ }))
+    expect(card.textContent).toContain('title')
+    expect(card.textContent).toContain('Design note')
+    expect(card.querySelector('dl')).toBeTruthy()
+  })
+
+  it('marks rendered headings with raw source line ranges after frontmatter', async () => {
+    const raw = '---\ntitle: Design note\n---\n\n# Body'
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, text: async () => raw } as Response)
+
+    render(<MarkdownViewer path="/x/design.md" onClose={vi.fn()} />)
+    const heading = await screen.findByRole('heading', { name: 'Body' })
+    expect(heading.getAttribute('data-source-start')).toBe('5')
+    expect(heading.getAttribute('data-source-end')).toBe('5')
+  })
+
+  it('searches document text, navigates matches, and Escape closes search before viewer', async () => {
+    const onClose = vi.fn()
+    render(<MarkdownViewer path={null} body={'# Search\n\nneedle once\n\nneedle twice'} onClose={onClose} />)
+
+    fireEvent.click(screen.getByTestId('markdown-search-toggle'))
+    const input = screen.getByRole('searchbox', { name: '搜索文档' })
+    fireEvent.change(input, { target: { value: 'needle' } })
+    expect(screen.getByText('1/2')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '下一个匹配' }))
+    expect(screen.getByText('2/2')).toBeTruthy()
+
+    fireEvent(window, new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(screen.queryByTestId('markdown-search')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('switches to a read-only source view without exposing write controls', async () => {
+    const raw = '---\ntitle: Source\n---\n\n# Heading\n\nBody'
+    render(<MarkdownViewer path={null} body={raw} onClose={vi.fn()} />)
+
+    fireEvent.click(screen.getByTestId('markdown-source-toggle'))
+    const source = screen.getByTestId('markdown-source-view')
+    expect(source.textContent).toContain(raw)
+    expect(screen.getByTestId('markdown-source-line-numbers').textContent).toContain('1')
+    expect(screen.queryByRole('button', { name: /保存/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /编辑/ })).toBeNull()
+  })
+
+  it('adds a language label and visible copy feedback to fenced code blocks', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<MarkdownViewer path={null} body={'```ts\nconst answer = 42\n```'} onClose={vi.fn()} />)
+
+    const block = await screen.findByTestId('markdown-code-block')
+    expect(block.textContent).toContain('ts')
+    fireEvent.click(screen.getByRole('button', { name: '复制' }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('代码已复制'))
+    expect(writeText).toHaveBeenCalledWith('const answer = 42\n')
+  })
+  it('copies the original source for diagram code blocks', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<MarkdownViewer path={null} body={'```mermaid\ngraph TD\nA-->B\n```'} onClose={vi.fn()} />)
+
+    const block = await screen.findByTestId('markdown-code-block')
+    fireEvent.click(screen.getByRole('button', { name: '复制' }))
+    await waitFor(() => expect(screen.getByText('代码已复制')).toBeTruthy())
+    expect(writeText).toHaveBeenCalledWith('graph TD\nA-->B\n')
+    expect(block.textContent).toContain('mermaid')
+  })
+
 
   it('renders a create-todo button and calls onCreateTodo when clicked', async () => {
     const markdown = '# Test Doc\n\nSome content.'

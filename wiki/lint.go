@@ -10,9 +10,12 @@ import (
 )
 
 type LintIssue struct {
-	Rule        string `json:"rule"` // orphan | dead-link | duplicate | task-artifact-missing | design-no-plan | stale-active | low-content | placeholder-heavy | missing-sections | low-link-density
+	Rule        string `json:"rule"` // orphan | dead-link | duplicate | task-artifact-missing | design-no-plan | stale-active | low-content | placeholder-heavy | missing-sections | low-link-density | low-quality
 	ComponentID string `json:"componentId"`
 	Detail      string `json:"detail"`
+	// LowQuality carries the measurements behind a low-quality verdict so the
+	// panel can show why a document was flagged before anyone deletes it.
+	LowQuality *LowQualitySignals `json:"lowQuality,omitempty"`
 }
 
 // Lint runs the orphan, dead-link, duplicate-title, and lifecycle-gap
@@ -83,10 +86,9 @@ func (g *Graph) Lint() []LintIssue {
 		}
 	}
 
-	issues = append(issues, g.lintLowContent()...)
-	issues = append(issues, g.lintPlaceholderHeavy()...)
 	issues = append(issues, g.lintMissingSections()...)
 	issues = append(issues, g.lintLowLinkDensity()...)
+	issues = append(issues, g.lintLowQuality()...)
 	issues = append(issues, g.lintLifecycleGaps()...)
 	return issues
 }
@@ -155,63 +157,6 @@ func stripMarkup(body string) string {
 		}
 		return r
 	}, body)
-}
-
-func (g *Graph) lintLowContent() []LintIssue {
-	var issues []LintIssue
-	for id, c := range g.components {
-		if !lintableBody(c) {
-			continue
-		}
-		body := readBody(c.Path)
-		if body == "" {
-			continue
-		}
-		stripped := stripMarkup(body)
-		if len(stripped) < 200 {
-			issues = append(issues, LintIssue{
-				Rule:        "low-content",
-				ComponentID: id,
-				Detail:      fmt.Sprintf("body has %d substantive chars (threshold: 200)", len(stripped)),
-			})
-		}
-	}
-	return issues
-}
-
-func (g *Graph) lintPlaceholderHeavy() []LintIssue {
-	var issues []LintIssue
-	for id, c := range g.components {
-		if !lintableBody(c) {
-			continue
-		}
-		body := readBody(c.Path)
-		if body == "" {
-			continue
-		}
-		count := len(placeholderRE.FindAllString(body, -1))
-		if count == 0 {
-			continue
-		}
-		phase, _ := c.Frontmatter["phase"].(string)
-		isDone := phase == "archive" || phase == "verify"
-		if isDone {
-			issues = append(issues, LintIssue{
-				Rule:        "placeholder-heavy",
-				ComponentID: id,
-				Detail:      fmt.Sprintf("%d placeholder(s) in a completed (%s) document", count, phase),
-			})
-			continue
-		}
-		if count > 3 {
-			issues = append(issues, LintIssue{
-				Rule:        "placeholder-heavy",
-				ComponentID: id,
-				Detail:      fmt.Sprintf("%d placeholders in active document", count),
-			})
-		}
-	}
-	return issues
 }
 
 var requiredSectionGroups = map[ComponentType][][]string{

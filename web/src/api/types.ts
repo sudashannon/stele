@@ -79,10 +79,21 @@ export interface WikiComponentResponse {
   backlinks: WikiEdge[]
 }
 
+export interface LowQualitySignals {
+  chars: number
+  headings: number
+  emptyHeadings: number
+  placeholders: number
+  signals: string[]
+  /** Carries an upstream `source:` URL: thin, but not authored here. */
+  imported: boolean
+}
+
 export interface LintIssue {
   rule: string
   componentId: string
   detail: string
+  lowQuality?: LowQualitySignals
 }
 
 export interface WikiComponent {

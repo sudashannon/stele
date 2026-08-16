@@ -9,6 +9,8 @@ import {
   fetchWikiLint,
   fetchChangeDetail,
   fetchArtifactContent,
+  fetchArtifactText,
+  saveArtifactText,
   streamChat,
   fetchChatSession,
   fetchChatConfig,
@@ -307,6 +309,75 @@ describe('fetchArtifactContent', () => {
   })
 })
 
+
+describe('artifact editing requests', () => {
+  it('reads source text together with the strong ETag', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => '# content',
+      headers: new Headers({ ETag: '"version-1"' }),
+    } as Response)
+
+    await expect(fetchArtifactText('/p', 'ws')).resolves.toEqual({ content: '# content', etag: '"version-1"' })
+    const requestedUrl = new URL(fetchSpy.mock.calls[0][0] as string, 'http://localhost')
+    expect(requestedUrl.searchParams.get('workspace')).toBe('ws')
+  })
+
+  it('PUTs raw source with If-Match and returns the server version', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ etag: '"version-2"', path: '/p', bytes: 12 }),
+    } as Response)
+
+    await expect(saveArtifactText('/p', '# changed', '"version-1"', 'ws')).resolves.toEqual({
+      etag: '"version-2"',
+      path: '/p',
+      bytes: 12,
+    })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/artifact?'),
+      expect.objectContaining({
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'If-Match': '"version-1"',
+        },
+        body: '# changed',
+      }),
+    )
+  })
+
+  it('preserves structured write errors including stale ETag', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"server-version"' }),
+      json: async () => ({ error: 'artifact changed' }),
+    } as Response)
+
+    await expect(saveArtifactText('/p', '# changed', '"version-1"')).rejects.toMatchObject({
+      name: 'ArtifactRequestError',
+      status: 412,
+      etag: '"server-version"',
+      message: 'artifact changed',
+    })
+  })
+
+  it.each([400, 415])('keeps structured %i write errors inspectable', async (status) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status,
+      headers: new Headers(),
+      json: async () => ({ error: 'invalid artifact request' }),
+    } as Response)
+
+    await expect(saveArtifactText('/p', '# changed', '"version-1"')).rejects.toMatchObject({
+      name: 'ArtifactRequestError',
+      status,
+      message: 'invalid artifact request',
+    })
+  })
+})
 describe('streamChat', () => {
   it('throws with the error-body message when res.ok is false, WITHOUT reading the body stream', async () => {
     const getReader = vi.fn()

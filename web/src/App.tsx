@@ -34,6 +34,7 @@ import { useWikiEvents } from './hooks/useWikiEvents'
 const LazyCalendarPanel = lazy(() => import('./components/CalendarPanel').then(({ CalendarPanel }) => ({ default: CalendarPanel })))
 const LazyLintPanel = lazy(() => import('./components/LintPanel').then(({ LintPanel }) => ({ default: LintPanel })))
 const LazyMarkdownViewer = lazy(() => import('./components/MarkdownViewer').then(({ MarkdownViewer }) => ({ default: MarkdownViewer })))
+const LazyMarkdownEditor = lazy(() => import('./components/MarkdownEditor').then(({ MarkdownEditor }) => ({ default: MarkdownEditor })))
 const LazyRecentPanel = lazy(() => import('./components/RecentPanel').then(({ RecentPanel }) => ({ default: RecentPanel })))
 const LazyReportView = lazy(() => import('./components/ReportView').then(({ ReportView }) => ({ default: ReportView })))
 const LazySessionDetail = lazy(() => import('./components/SessionDetail').then(({ SessionDetail }) => ({ default: SessionDetail })))
@@ -125,14 +126,21 @@ export default function App() {
   // until the next refresh, and inferring from that stale copy sent transcripts
   // to the Markdown viewer.
   const [viewerKind, setViewerKind] = useState<'session' | 'document' | null>(null)
+  const [viewerEditing, setViewerEditing] = useState(false)
+  const editorDirtyRef = useRef(false)
 
-  // The single entry point for the shared viewer. `kind` is what the caller
-  // already knows about the target; omit it to let the index classify. Path and
-  // kind always move together, so a stale kind cannot mis-route the next open.
+  // Every path that replaces or closes the shared viewer passes through this
+  // guard, including shortcuts and workspace navigation outside the editor.
   const openViewer = useCallback((path: string | null, kind: 'session' | 'document' | null = null) => {
+    if (viewerEditing && editorDirtyRef.current) {
+      if (!window.confirm('有未保存的修改，确定放弃吗？')) return false
+      editorDirtyRef.current = false
+    }
     setViewerPath(path)
     setViewerKind(path ? kind : null)
-  }, [])
+    setViewerEditing(false)
+    return true
+  }, [viewerEditing])
   const [changeArtifacts, setChangeArtifacts] = useState<{ path: string; label: string }[]>([])
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false)
@@ -167,8 +175,7 @@ export default function App() {
   const todoFocusCaptureRef = useRef<(() => void) | null>(null)
 
   const handleViewChange = useCallback((nextView: SideRailView) => {
-    openViewer(null)
-    setView(nextView)
+    if (openViewer(null)) setView(nextView)
   }, [openViewer])
 
   // A todo projected from a session carries that session's id, not its path.
@@ -301,8 +308,8 @@ export default function App() {
         ctrlOrCmd: false,
         label: '关闭面板',
         run: () => {
+          if (!openViewer(null)) return
           palette.closePalette()
-          openViewer(null)
           setBookmarkPanelOpen(false)
           setSettingsOpen(false)
         },
@@ -319,6 +326,7 @@ export default function App() {
 
   const navigateToChange = useCallback(
     (changeName: string) => {
+      if (!openViewer(null)) return
       let workspace: string | undefined
       if (viewerPath) {
         workspace = wikiComponents.find((component) => component.path === viewerPath || component.id === viewerPath)?.workspace
@@ -331,7 +339,6 @@ export default function App() {
       setView('changes')
       setSelected({ name: changeName, workspace })
       setActiveWorkspace(workspace ?? null)
-      openViewer(null)
     },
     [activeWorkspace, changes, openViewer, viewerPath, wikiComponents],
   )
@@ -522,8 +529,17 @@ export default function App() {
 
   const openWikiComponent = useCallback((idOrPath: string) => {
     const component = wikiComponents.find((item) => item.id === idOrPath || item.path === idOrPath)
-    openViewer(component?.path ?? idOrPath)
+    return openViewer(component?.path ?? idOrPath)
   }, [openViewer, wikiComponents])
+
+  const handleEditorDirtyChange = useCallback((dirty: boolean) => {
+    editorDirtyRef.current = dirty
+  }, [])
+
+  const handleEditorClose = useCallback(() => {
+    editorDirtyRef.current = false
+    setViewerEditing(false)
+  }, [])
 
   const renderViewer = useCallback((props: {
     artifacts?: { path: string; label: string }[]
@@ -543,6 +559,17 @@ export default function App() {
         />
       )
     }
+    const workspace = props.workspace ?? viewerComponent?.workspace
+    if (viewerEditing) {
+      return (
+        <LazyMarkdownEditor
+          path={viewerPath}
+          workspace={workspace}
+          onClose={handleEditorClose}
+          onDirtyChange={handleEditorDirtyChange}
+        />
+      )
+    }
     return (
       <LazyMarkdownViewer
         path={viewerPath}
@@ -552,21 +579,21 @@ export default function App() {
         // one. Every other view fell back to the first registered workspace, so
         // a document outside its project root was refused with 403 - which a
         // plain docs workspace registered at another path hits immediately.
-        workspace={props.workspace ?? viewerComponent?.workspace}
+        workspace={workspace}
         onSelectArtifact={props.onSelectArtifact}
         onClose={() => openViewer(null)}
         onToggleStar={handleToggleStar}
         isStarred={isBookmarked(viewerPath)}
         onNavigateToChange={props.onNavigateToChange}
         onCreateTodo={props.onCreateTodo}
+        onEdit={() => setViewerEditing(true)}
         onOpenSession={openWikiComponent}
       />
     )
-  }, [handleToggleStar, isBookmarked, openViewer, openWikiComponent, viewerComponent, viewerIsSession, viewerPath])
+  }, [handleEditorClose, handleEditorDirtyChange, handleToggleStar, isBookmarked, openViewer, openWikiComponent, viewerComponent, viewerEditing, viewerIsSession, viewerPath])
 
   const handleNavigateWikiFromTodo = useCallback((path: string) => {
-    openWikiComponent(path)
-    setView('search')
+    if (openWikiComponent(path)) setView('search')
   }, [openWikiComponent])
 
   const today = new Date()
@@ -731,15 +758,15 @@ export default function App() {
                 workspaces={workspaces}
                 active={activeWorkspace}
                 onSelect={(alias) => {
+                  if (!openViewer(null)) return
                   setActiveWorkspace(alias)
                   setSelected(null)
-                  openViewer(null)
                   setChangeArtifacts([])
                 }}
                 onAdd={async (config) => {
                   await addWorkspace(config)
+                  if (!openViewer(null)) return
                   setSelected(null)
-                  openViewer(null)
                   setChangeArtifacts([])
                   await refreshWorkspaceData({
                     preferredActiveWorkspace: config.alias,
@@ -772,7 +799,7 @@ export default function App() {
                   selected={selected?.name ?? null}
                   selectedWorkspace={selected?.workspace}
                   onSelect={(name, workspace) => {
-                    openViewer(null)
+                    if (!openViewer(null)) return
                     setChangeArtifacts([])
                     setSelected({ name, workspace })
                   }}
@@ -785,8 +812,8 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
+                          if (!openViewer(null)) return
                           setSelected(null)
-                          openViewer(null)
                           setChangeArtifacts([])
                         }}
                         className="underline hover:text-[var(--color-accent)]"
@@ -863,7 +890,7 @@ export default function App() {
                   // The todo view renders no viewer of its own, so the jump has to
                   // land where a session can actually be shown - the same shape as
                   // handleNavigateWikiFromTodo switching to the search view.
-                  openViewer(path, 'session')
+                  if (!openViewer(path, 'session')) return
                   setView('sessions')
                 }}
                 sessionPathById={sessionPathById}
@@ -1003,8 +1030,7 @@ export default function App() {
           <BookmarkPanel
             bookmarks={bookmarks}
             onOpen={(path) => {
-              openViewer(path, 'document')
-              setBookmarkPanelOpen(false)
+              if (openViewer(path, 'document')) setBookmarkPanelOpen(false)
             }}
             onRemove={handleRemoveBookmark}
             onClose={() => setBookmarkPanelOpen(false)}

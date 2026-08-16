@@ -1,131 +1,141 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Children, isValidElement, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSlug from 'rehype-slug'
-import GithubSlugger from 'github-slugger'
 import { fetchArtifactContent, fetchCachedSummary, summarizeDocument } from '../api/client'
+import { parseMarkdownDocument, type MarkdownDocumentModel } from './markdownDocument'
 import { DiagramBlock } from './DiagramBlock'
 import { ShareModal } from './ShareModal'
 import { Icon } from './icons'
 import { BacklinksPanel } from './BacklinksPanel'
 import { StateBlock } from './StateBlock'
-function getDiagramLanguage(className?: string): 'mermaid' | 'plantuml' | null {
-  if (className === 'language-mermaid') return 'mermaid'
-  if (className === 'language-plantuml') return 'plantuml'
-  return null
-}
 
-function extractTitle(rawText: string, fallbackPath: string | null): string {
-  if (!rawText) return fallbackPath ? (fallbackPath.split('/').pop() ?? '') : ''
-  if (rawText.startsWith('---')) {
-    const end = rawText.indexOf('\n---', 3)
-    if (end !== -1) {
-      const fm = rawText.slice(3, end)
-      const match = fm.match(/^title:\s*(.+)$/m)
-      if (match) return match[1].trim().replace(/^["']|["']$/g, '')
-    }
+interface MarkdownNodePosition {
+  position?: {
+    start?: { line?: number }
+    end?: { line?: number }
   }
-  const body = stripFrontmatter(rawText)
-  const heading = body.match(/^#\s+(.+)$/m)
-  if (heading) return heading[1].trim()
-  return fallbackPath ? (fallbackPath.split('/').pop() ?? '') : ''
 }
 
-function stripFrontmatter(text: string): string {
-  if (text.startsWith('---\n') || text.startsWith('---\r\n')) {
-    const end = text.indexOf('\n---', 3)
-    if (end !== -1) return text.slice(end + 4).trimStart()
+// ReactMarkdown parses the body after frontmatter has been removed, so offset
+// its AST positions back to the original file for source-level navigation.
+function sourceAttributes(node: unknown, lineOffset: number): Record<string, string> {
+  const position = (node as MarkdownNodePosition | null)?.position
+  const start = position?.start?.line
+  const end = position?.end?.line
+  if (typeof start !== 'number' || typeof end !== 'number') return {}
+  return {
+    'data-source-start': String(start + lineOffset),
+    'data-source-end': String(end + lineOffset),
   }
-  return text
 }
 
-interface TocEntry {
-  id: string
-  text: string
-  level: number
-}
-
-function extractToc(markdown: string): TocEntry[] {
-  const slugger = new GithubSlugger()
-  const entries: TocEntry[] = []
-  let inFence = false
-  for (const line of markdown.split('\n')) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence
-      continue
-    }
-    if (inFence) continue
-    const match = /^(#{1,3})\s+(.+?)\s*#*\s*$/.exec(line)
-    if (!match) continue
-    const text = match[2]
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-      .trim()
-    entries.push({ id: slugger.slug(text), text, level: match[1].length })
-  }
-  return entries
-}
-
-function isExternalHref(href: string) {
-  return /^(https?:|data:|mailto:|tel:|#|\/)/i.test(href)
-}
-
-function resolveArtifactHref(docPath: string | null, href: string | undefined, workspace?: string) {
-  if (!href) return href
-  if (!docPath || isExternalHref(href)) return href
-  const base = docPath.split('/').slice(0, -1).filter(Boolean)
-  const parts = href.split('/').filter((part) => part && part !== '.')
-  for (const part of parts) {
-    if (part === '..') base.pop()
-    else base.push(part)
-  }
-  const absPath = '/' + base.join('/')
-  const params = new URLSearchParams({ path: absPath })
+function resolveArtifactHref(docPath: string | null, href: string | undefined, workspace: string | undefined): string | undefined {
+  if (!href || href.startsWith('#') || /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(href)) return href
+  if (!docPath) return href
+  const base = docPath.slice(0, docPath.lastIndexOf('/') + 1)
+  const target = href.startsWith('/') ? href : `${base}${href}`
+  const params = new URLSearchParams({ path: target })
   if (workspace) params.set('workspace', workspace)
-  return '/api/artifact?' + params.toString()
+  return `/api/artifact?${params.toString()}`
 }
 
-const markdownComponents: Components = {
-  h1: ({ node, ...rest }) => <h1 className="mb-3 mt-5 text-2xl font-bold" {...rest} />,
-  h2: ({ node, ...rest }) => <h2 className="mb-2 mt-5 text-xl font-semibold" {...rest} />,
-  h3: ({ node, ...rest }) => <h3 className="mb-2 mt-4 text-lg font-semibold" {...rest} />,
-  p: ({ node, ...rest }) => <p className="mb-3 text-[length:var(--type-body-short)] leading-[var(--leading-body-short)]" {...rest} />,
-  ul: ({ node, ...rest }) => <ul className="mb-3 list-disc pl-6" {...rest} />,
-  ol: ({ node, ...rest }) => <ol className="mb-3 list-decimal pl-6" {...rest} />,
-  li: ({ node, ...rest }) => <li className="mb-1" {...rest} />,
-  blockquote: ({ node, ...rest }) => (
-    <blockquote
-      className="mb-3 border-l-4 border-[var(--color-border)] py-1 pl-4 italic text-[var(--color-text-secondary)]"
-      {...rest}
-    />
-  ),
-  hr: ({ node, ...rest }) => <hr className="my-6 border-[var(--color-border)]" {...rest} />,
-  table: ({ node, ...rest }) => (
-    <div className="mb-4 overflow-x-auto">
-      <table className="w-full border-collapse text-left" {...rest} />
-    </div>
-  ),
-  thead: ({ node, ...rest }) => <thead className="bg-[var(--color-bg)]" {...rest} />,
-  tbody: ({ node, ...rest }) => <tbody {...rest} />,
-  tr: ({ node, ...rest }) => <tr className="border-b border-[var(--color-border)]" {...rest} />,
-  th: ({ node, ...rest }) => (
-    <th className="whitespace-nowrap border border-[var(--color-border)] px-3 py-2 font-semibold" {...rest} />
-  ),
-  td: ({ node, ...rest }) => <td className="border border-[var(--color-border)] px-3 py-2 align-top" {...rest} />,
-  code: ({ node, className, children, ...rest }) => {
-    const language = getDiagramLanguage(className)
-    if (language) return <DiagramBlock language={language} code={String(children).replace(/\n$/, '')} />
-    return (
-      <code className="break-words bg-[var(--color-layer)] px-1 py-0.5 font-[var(--font-mono)] text-[length:var(--type-caption)]" {...rest}>
-        {children}
-      </code>
-    )
-  },
-  pre: ({ node, ...rest }) => (
-    <pre className="mb-3 overflow-x-auto bg-[var(--color-layer)] p-4 font-[var(--font-mono)] text-[length:var(--type-caption)] whitespace-pre" {...rest} />
-  ),
+type CopyHandler = (text: string, label: string) => void
+const editableTextExtensions: Record<string, true> = {
+  '.md': true,
+  '.markdown': true,
+  '.mdx': true,
+  '.txt': true,
+  '.json': true,
+  '.yaml': true,
+  '.yml': true,
+  '.toml': true,
+}
+
+function isEditableTextArtifact(path: string | null): boolean {
+  if (!path) return false
+  const dot = path.lastIndexOf('.')
+  return dot >= 0 && editableTextExtensions[path.slice(dot).toLowerCase()] === true
+}
+
+
+function textFromReactNode(node: ReactNode): string {
+  return Children.toArray(node)
+    .map((child) => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child)
+      if (isValidElement<{ children?: ReactNode }>(child)) return textFromReactNode(child.props.children)
+      return ''
+    })
+    .join('')
+}
+
+function languageFromClassName(className: string | undefined): string {
+  return className?.startsWith('language-') ? className.slice('language-'.length) : 'text'
+}
+
+function createMarkdownComponents(lineOffset: number, onCopy: CopyHandler): Components {
+  return {
+    h1: ({ node, ...rest }) => <h1 className="mb-3 mt-5 text-2xl font-bold" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    h2: ({ node, ...rest }) => <h2 className="mb-2 mt-5 text-xl font-semibold" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    h3: ({ node, ...rest }) => <h3 className="mb-2 mt-4 text-lg font-semibold" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    h4: ({ node, ...rest }) => <h4 className="mb-2 mt-4 text-base font-semibold" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    h5: ({ node, ...rest }) => <h5 className="mb-2 mt-3 text-[length:var(--type-body)] font-semibold" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    h6: ({ node, ...rest }) => <h6 className="mb-2 mt-3 text-[length:var(--type-body)] font-medium" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    p: ({ node, ...rest }) => <p className="mb-3 text-[length:var(--type-body-short)] leading-[var(--leading-body-short)]" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    ul: ({ node, ...rest }) => <ul className="mb-3 list-disc pl-6" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    ol: ({ node, ...rest }) => <ol className="mb-3 list-decimal pl-6" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    li: ({ node, ...rest }) => <li className="mb-1" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    blockquote: ({ node, ...rest }) => (
+      <blockquote
+        className="mb-3 border-l-4 border-[var(--color-border)] py-1 pl-4 italic text-[var(--color-text-secondary)]"
+        {...rest}
+        {...sourceAttributes(node, lineOffset)}
+      />
+    ),
+    hr: ({ node, ...rest }) => <hr className="my-6 border-[var(--color-border)]" {...rest} {...sourceAttributes(node, lineOffset)} />,
+    table: ({ node, ...rest }) => (
+      <div className="mb-4 overflow-x-auto" {...sourceAttributes(node, lineOffset)}>
+        <table className="w-full border-collapse text-left" {...rest} />
+      </div>
+    ),
+    thead: ({ node, ...rest }) => <thead className="bg-[var(--color-bg)]" {...rest} />,
+    tbody: ({ node, ...rest }) => <tbody {...rest} />,
+    tr: ({ node, ...rest }) => <tr className="border-b border-[var(--color-border)]" {...rest} />,
+    th: ({ node, ...rest }) => (
+      <th className="whitespace-nowrap border border-[var(--color-border)] px-3 py-2 font-semibold" {...rest} />
+    ),
+    td: ({ node, ...rest }) => <td className="border border-[var(--color-border)] px-3 py-2 align-top" {...rest} />,
+    code: ({ node, className, children, ...rest }) => {
+      const language = className === 'language-mermaid' ? 'mermaid' : className === 'language-plantuml' ? 'plantuml' : null
+      if (language) return <DiagramBlock language={language} code={String(children).replace(/\n$/, '')} />
+      return (
+        <code className={`break-words bg-[var(--color-layer)] px-1 py-0.5 font-[var(--font-mono)] text-[length:var(--type-caption)] ${className ?? ''}`} {...rest}>
+          {children}
+        </code>
+      )
+    },
+    pre: ({ node, children }) => {
+      const code = Children.toArray(children)[0]
+      const codeProps = isValidElement<{ className?: string; code?: string }>(code) ? code.props : undefined
+      const className = codeProps?.className
+      const source = codeProps?.code ?? textFromReactNode(children)
+      return (
+        <div className="mb-4 overflow-hidden border border-[var(--color-border)]" data-testid="markdown-code-block" {...sourceAttributes(node, lineOffset)}>
+          <div className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-layer)] px-3 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+            <span className="font-[var(--font-mono)]">{languageFromClassName(className)}</span>
+            <button
+              type="button"
+              onClick={() => onCopy(source, '代码')}
+              className="border border-[var(--color-border)] px-2 py-0.5 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+            >
+              复制
+            </button>
+          </div>
+          <pre className="overflow-x-auto bg-[var(--color-layer)] p-4 font-[var(--font-mono)] text-[length:var(--type-caption)] whitespace-pre">{children}</pre>
+        </div>
+      )
+    },
+  }
 }
 
 interface Artifact {
@@ -144,6 +154,8 @@ interface Props {
   isStarred?: boolean
   onNavigateToChange?: (changeName: string) => void
   onCreateTodo?: () => void
+  /** Switches a real artifact viewer to source editing. */
+  onEdit?: () => void
   /** Opens an agent session from the 相关会话 block. */
   onOpenSession?: (sessionId: string) => void
 }
@@ -155,6 +167,13 @@ type SummaryState =
   // user just asked for: it must appear silently instead of yanking the scroll.
   | { status: 'ready'; text: string; auto?: boolean }
   | { status: 'error'; message: string }
+type ViewerMode = 'rendered' | 'source'
+
+interface SearchMatch {
+  line: number
+  snippet: string
+}
+
 
 export function MarkdownViewer({
   path,
@@ -167,27 +186,71 @@ export function MarkdownViewer({
   isStarred,
   onNavigateToChange,
   onCreateTodo,
+  onEdit,
   onOpenSession,
 }: Props) {
   const [content, setContent] = useState<string | null>(body ?? null)
   const [error, setError] = useState<string | null>(null)
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
+  const [frontmatterOpen, setFrontmatterOpen] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const [summary, setSummary] = useState<SummaryState>({ status: 'idle' })
+  const [viewerMode, setViewerMode] = useState<ViewerMode>('rendered')
+  const [tocOpen, setTocOpen] = useState(true)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchMatchIndex, setSearchMatchIndex] = useState(0)
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const summaryRef = useRef<HTMLElement>(null)
   const fetchRequestRef = useRef(0)
   const summaryRequestRef = useRef(0)
-  const docTitle = path ? extractTitle(content ?? '', path) : ''
-
-  // Which heading is currently visible — used to highlight the TOC rail entry.
+  const documentModel = useMemo<MarkdownDocumentModel | null>(
+    () => (content === null ? null : parseMarkdownDocument(content)),
+    [content],
+  )
+  const docTitle = path
+    ? documentModel?.frontmatter?.fields.title?.trim() || documentModel?.headings.find((heading) => heading.level === 1)?.text || ''
+    : ''
+  async function copyText(text: string, label: string) {
+    try {
+      if (!navigator.clipboard) throw new Error('clipboard unavailable')
+      await navigator.clipboard.writeText(text)
+      setCopyFeedback(`${label}已复制`)
+    } catch {
+      setCopyFeedback(`${label}复制失败`)
+    }
+  }
+  const searchMatches = useMemo<SearchMatch[]>(() => {
+    if (!documentModel || searchQuery.trim() === '') return []
+    const query = searchQuery.trim().toLocaleLowerCase()
+    const matches: SearchMatch[] = []
+    for (const [index, line] of documentModel.body.split(/\r?\n/).entries()) {
+      const lowerLine = line.toLocaleLowerCase()
+      let offset = 0
+      while (offset < lowerLine.length) {
+        const match = lowerLine.indexOf(query, offset)
+        if (match < 0) break
+        const start = Math.max(0, match - 28)
+        const end = Math.min(line.length, match + query.length + 28)
+        matches.push({ line: documentModel.bodyStartLine + index, snippet: line.slice(start, end).trim() })
+        offset = match + Math.max(query.length, 1)
+      }
+    }
+    return matches
+  }, [documentModel, searchQuery])
   const [activeHeading, setActiveHeading] = useState<string | null>(null)
 
   useEffect(() => {
     if (body !== undefined) {
       fetchRequestRef.current += 1
-      setContent(stripFrontmatter(body))
+      setContent(body)
+      setFrontmatterOpen(false)
+      setViewerMode('rendered')
+      setSearchOpen(false)
+      setSearchQuery('')
+      setCopyFeedback(null)
       setError(null)
       setZoomed(null)
       return
@@ -195,11 +258,16 @@ export function MarkdownViewer({
     if (!path) return
     const requestId = ++fetchRequestRef.current
     setContent(null)
+    setFrontmatterOpen(false)
+    setViewerMode('rendered')
+    setSearchOpen(false)
+    setSearchQuery('')
+    setCopyFeedback(null)
     setError(null)
     setZoomed(null)
     fetchArtifactContent(path, workspace)
       .then((text) => {
-        if (fetchRequestRef.current === requestId) setContent(stripFrontmatter(text))
+        if (fetchRequestRef.current === requestId) setContent(text)
       })
       .catch((err) => {
         if (fetchRequestRef.current === requestId) setError(err instanceof Error ? err.message : '加载失败')
@@ -232,24 +300,27 @@ export function MarkdownViewer({
   }, [path, body, refreshKey])
 
   useEffect(() => {
-    if (!path) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
-      if (zoomed) setZoomed(null)
+      if (searchOpen) setSearchOpen(false)
+      else if (zoomed) setZoomed(null)
       else onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [path, onClose, zoomed])
+  }, [path, onClose, searchOpen, zoomed])
 
-  const toc = useMemo(() => (content ? extractToc(content) : []), [content])
-
+  const toc = useMemo(
+    () => documentModel?.headings.filter((heading) => heading.level <= 3) ?? [],
+    [documentModel],
+  )
   const components = useMemo<Components>(
     () => ({
-      ...markdownComponents,
+      ...createMarkdownComponents(Math.max(0, (documentModel?.bodyStartLine ?? 1) - 1), copyText),
       a: ({ node, href, ...rest }) => (
         <a
           {...rest}
+          {...sourceAttributes(node, Math.max(0, (documentModel?.bodyStartLine ?? 1) - 1))}
           href={resolveArtifactHref(path, href, workspace)}
           className="text-[var(--color-accent)] underline"
           target="_blank"
@@ -262,6 +333,7 @@ export function MarkdownViewer({
           <button
             type="button"
             className="cursor-zoom-in"
+            {...sourceAttributes(node, Math.max(0, (documentModel?.bodyStartLine ?? 1) - 1))}
             onClick={() => typeof resolvedSrc === 'string' && setZoomed({ src: resolvedSrc, alt: alt ?? '' })}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
@@ -270,18 +342,14 @@ export function MarkdownViewer({
               }
             }}
           >
-            <img
-              {...rest}
-              src={resolvedSrc}
-              alt={alt}
-              className="max-w-full"
-            />
+            <img {...rest} src={resolvedSrc} alt={alt} className="max-w-full" />
           </button>
         )
       },
     }),
-    [path, workspace],
+    [copyText, documentModel, path, workspace],
   )
+
   // The summary renders at the very top of the scroll container, so pressing
   // 生成摘要 while reading further down produced no visible change at all: the
   // "正在生成…" placeholder and the finished text both land off-screen and the
@@ -319,7 +387,6 @@ export function MarkdownViewer({
     return () => observer.disconnect()
   }, [content])
 
-
   if (!path && body === undefined) return null
 
   const filename = path ? path.split('/').pop() ?? path : '报告'
@@ -344,6 +411,22 @@ export function MarkdownViewer({
     const element = scrollRef.current?.querySelector(`#${CSS.escape(id)}`)
     if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+  function jumpToSearchMatch(index: number) {
+    if (searchMatches.length === 0) return
+    const nextIndex = (index + searchMatches.length) % searchMatches.length
+    setSearchMatchIndex(nextIndex)
+    const line = searchMatches[nextIndex].line
+    const elements = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('[data-source-start]') ?? [])
+    const target = elements.find((element) => Number(element.dataset.sourceStart) >= line)
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  async function copyTitleLink() {
+    const heading = documentModel?.headings[0]
+    if (!heading) return
+    const url = `${window.location.href.split('#')[0]}#${heading.id}`
+    await copyText(url, '标题链接')
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-surface)] shadow-[var(--shadow-1)]" role="region" aria-label={filename}>
@@ -356,6 +439,88 @@ export function MarkdownViewer({
                 只读文档
               </span>
             </div>
+            <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-2">
+              {toc.length > 1 && (
+                <button
+                  type="button"
+                  aria-pressed={tocOpen}
+                  onClick={() => setTocOpen((value) => !value)}
+                  className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
+                >
+                  目录
+                </button>
+              )}
+              <button
+                type="button"
+                aria-pressed={searchOpen}
+                onClick={() => setSearchOpen((value) => !value)}
+                data-testid="markdown-search-toggle"
+                className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
+              >
+                搜索
+              </button>
+              <button
+                type="button"
+                aria-pressed={viewerMode === 'source'}
+                onClick={() => setViewerMode((value) => (value === 'source' ? 'rendered' : 'source'))}
+                data-testid="markdown-source-toggle"
+                className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
+              >
+                {viewerMode === 'source' ? '阅读' : '源码'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyTitleLink()}
+                disabled={!documentModel?.headings.length}
+                className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] disabled:opacity-50"
+              >
+                复制标题链接
+              </button>
+              {copyFeedback && <span role="status" className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">{copyFeedback}</span>}
+            </div>
+            {searchOpen && (
+              <div data-testid="markdown-search" className="mt-2 flex flex-wrap items-center gap-2">
+                <input
+                  autoFocus
+                  type="search"
+                  aria-label="搜索文档"
+                  value={searchQuery}
+                  onChange={(event) => {
+                    setSearchQuery(event.target.value)
+                    setSearchMatchIndex(0)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      jumpToSearchMatch(searchMatchIndex + (event.shiftKey ? -1 : 1))
+                    }
+                  }}
+                  placeholder="搜索文档…"
+                  className="min-w-40 flex-1 border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[length:var(--type-caption)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                />
+                <span className="text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                  {searchMatches.length === 0 ? '无匹配' : `${searchMatchIndex + 1}/${searchMatches.length}`}
+                </span>
+                <button type="button" aria-label="上一个匹配" onClick={() => jumpToSearchMatch(searchMatchIndex - 1)} disabled={searchMatches.length === 0} className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] disabled:opacity-50">上一个</button>
+                <button type="button" aria-label="下一个匹配" onClick={() => jumpToSearchMatch(searchMatchIndex + 1)} disabled={searchMatches.length === 0} className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)] disabled:opacity-50">下一个</button>
+                <button type="button" aria-label="关闭搜索" onClick={() => setSearchOpen(false)} className="border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-caption)]">关闭</button>
+                {searchMatches.length > 0 && (
+                  <div className="basis-full space-y-1 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                    <div className="font-semibold">匹配位置</div>
+                    {searchMatches.slice(0, 5).map((match, index) => (
+                      <button
+                        key={`${match.line}-${index}`}
+                        type="button"
+                        onClick={() => jumpToSearchMatch(index)}
+                        className="block max-w-full truncate text-left hover:text-[var(--color-accent)]"
+                      >
+                        L{match.line}: {match.snippet}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {displayTitle !== filename && (
               <span className="mt-1 block truncate font-[var(--font-mono)] text-[length:var(--type-caption)] font-normal text-[var(--color-text-secondary)]">{path}</span>
             )}
@@ -371,6 +536,17 @@ export function MarkdownViewer({
               >
                 <Icon name="info" />
                 <span>{summary.status === 'loading' ? '摘要生成中…' : '生成摘要'}</span>
+              </button>
+            )}
+            {isEditableTextArtifact(path) && onEdit && (
+              <button
+                type="button"
+                aria-label="编辑"
+                onClick={onEdit}
+                data-testid="markdown-edit-btn"
+                className="flex items-center gap-1 border border-[var(--color-border)] px-2 py-1.5 text-[length:var(--type-caption)] text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-layer)]"
+              >
+                <span>编辑</span>
               </button>
             )}
             {onToggleStar && path && (
@@ -474,7 +650,7 @@ export function MarkdownViewer({
         )}
       </header>
       <div className="flex min-h-0 flex-1">
-        {toc.length > 1 && (
+        {tocOpen && toc.length > 1 && (
           <nav
             data-testid="markdown-toc"
             aria-label="文档目录"
@@ -538,12 +714,73 @@ export function MarkdownViewer({
                 {summary.status === 'ready' && <p className="whitespace-pre-wrap text-[length:var(--type-caption)] text-[var(--color-text-primary)]">{summary.text}</p>}
               </section>
             )}
+            {documentModel?.frontmatter && (
+              <section data-testid="frontmatter-card" className="mb-6 border border-[var(--color-border)] bg-[var(--color-layer)]">
+                <button
+                  type="button"
+                  aria-expanded={frontmatterOpen}
+                  onClick={() => setFrontmatterOpen((value) => !value)}
+                  className="flex w-full items-center justify-between px-4 py-3 text-left text-[length:var(--type-caption)] font-semibold text-[var(--color-text-primary)] hover:bg-[var(--color-bg)]"
+                >
+                  <span>文档元数据</span>
+                  <span className="font-normal text-[var(--color-text-tertiary)]">{frontmatterOpen ? '收起' : '展开'}</span>
+                </button>
+                {frontmatterOpen && (
+                  <div className="border-t border-[var(--color-border)] px-4 py-3">
+                    {Object.keys(documentModel.frontmatter.fields).length > 0 ? (
+                      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-[length:var(--type-caption)]">
+                        {Object.entries(documentModel.frontmatter.fields).map(([key, value]) => (
+                          <div key={key} className="contents">
+                            <dt className="font-[var(--font-mono)] text-[var(--color-text-secondary)]">{key}</dt>
+                            <dd className="break-words text-[var(--color-text-primary)]">{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : (
+                      <pre className="overflow-x-auto whitespace-pre-wrap font-[var(--font-mono)] text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                        {documentModel.frontmatter.raw}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </section>
+            )}
             {error && <StateBlock kind="error" title={error} compact />}
             {!error && content === null && <StateBlock kind="loading" title="加载中…" compact />}
-            {!error && content !== null && (
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSlug]} components={components}>
-                {content}
-              </ReactMarkdown>
+            {!error && documentModel !== null && (
+              viewerMode === 'source' ? (
+                <section data-testid="markdown-source-view" className="border border-[var(--color-border)] bg-[var(--color-layer)]">
+                  <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[length:var(--type-caption)] text-[var(--color-text-secondary)]">
+                    <span>原始 Markdown · {documentModel.raw.split('\n').length} 行</span>
+                    <button
+                      type="button"
+                      onClick={() => void copyText(documentModel.raw, '源码')}
+                      className="border border-[var(--color-border)] px-2 py-1 hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+                    >
+                      复制全文
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-[auto_1fr] overflow-x-auto">
+                    <pre data-testid="markdown-source-line-numbers" aria-hidden="true" className="select-none border-r border-[var(--color-border)] px-3 py-4 text-right font-[var(--font-mono)] text-[length:var(--type-caption)] leading-6 text-[var(--color-text-tertiary)]">
+                      {documentModel.raw.split('\n').map((_, index) => `${index + 1}\n`)}
+                    </pre>
+                    <pre className="overflow-x-auto p-4 font-[var(--font-mono)] text-[length:var(--type-caption)] leading-6 whitespace-pre">
+                      <code>
+                        {documentModel.raw.split('\n').map((line, index, lines) => (
+                          <span key={index} data-source-start={index + 1} data-source-end={index + 1}>
+                            {line}
+                            {index < lines.length - 1 ? '\n' : ''}
+                          </span>
+                        ))}
+                      </code>
+                    </pre>
+                  </div>
+                </section>
+              ) : (
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSlug]} components={components}>
+                  {documentModel.body}
+                </ReactMarkdown>
+              )
             )}
           </div>
         </div>
