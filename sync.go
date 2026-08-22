@@ -40,9 +40,12 @@ func handleSync(reg *WorkspaceRegistry) http.HandlerFunc {
 			return
 		}
 
-		// Ensure remote is configured
-		gitRun(repoDir, "remote", "remove", "origin")
-		gitRun(repoDir, "remote", "add", "origin", syncCfg.Remote)
+		// Update origin in place. Removing it also deletes remote-tracking refs
+		// and lets a damaged ref block every subsequent automatic push.
+		if err := wiki.ConfigureMirrorRemote(repoDir, syncCfg.Remote); err != nil {
+			writeJSONResp(w, syncResult{Action: "error", Message: "configure remote failed: " + err.Error()})
+			return
+		}
 
 		// Fetch
 		if err := gitRun(repoDir, "fetch", "origin", wiki.MirrorBranch); err != nil {

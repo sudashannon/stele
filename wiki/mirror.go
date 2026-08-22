@@ -211,8 +211,7 @@ func (m *Mirror) flush() {
 	if m.remote == "" {
 		return
 	}
-	gitCmd(m.repoDir, "remote", "remove", "origin") // ignore error: may not exist yet
-	if err := gitCmd(m.repoDir, "remote", "add", "origin", m.remote); err != nil {
+	if err := ConfigureMirrorRemote(m.repoDir, m.remote); err != nil {
 		return
 	}
 	if err := gitCmd(m.repoDir, "push", "-u", "origin", "HEAD:"+MirrorBranch); err != nil {
@@ -266,6 +265,25 @@ func copyFile(src, dst string) error {
 	defer out.Close()
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// ConfigureMirrorRemote updates origin in place so remote-tracking refs remain
+// untouched. Removing and recreating the remote makes an unrelated broken ref
+// prevent every later push. The manual sync endpoint uses the same operation.
+func ConfigureMirrorRemote(dir, remote string) error {
+	cmd := exec.Command("git", "remote")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("mirror: git remote failed: %s", strings.TrimSpace(string(out)))
+		return err
+	}
+	for _, name := range strings.Fields(string(out)) {
+		if name == "origin" {
+			return gitCmd(dir, "remote", "set-url", "origin", remote)
+		}
+	}
+	return gitCmd(dir, "remote", "add", "origin", remote)
 }
 
 // gitCmd runs `git <args...>` in dir, logging (and returning) any failure.

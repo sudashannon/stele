@@ -102,6 +102,48 @@ func TestMirror_SyncFile_CopiesAndCommits(t *testing.T) {
 	}
 }
 
+func TestMirror_FlushPushesDespiteBrokenTrackingRef(t *testing.T) {
+	srcDir := t.TempDir()
+	repoDir := t.TempDir()
+	remoteDir := t.TempDir()
+
+	initRemote := exec.Command("git", "init", "--bare", "-q", remoteDir)
+	if out, err := initRemote.CombinedOutput(); err != nil {
+		t.Fatalf("init remote: %v (%s)", err, out)
+	}
+
+	src := filepath.Join(srcDir, "doc.md")
+	if err := os.WriteFile(src, []byte("# Doc"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewMirror(repoDir, remoteDir)
+	if err := m.Init(); err != nil {
+		t.Fatal(err)
+	}
+	addRemote := exec.Command("git", "remote", "add", "origin", remoteDir)
+	addRemote.Dir = repoDir
+	if out, err := addRemote.CombinedOutput(); err != nil {
+		t.Fatalf("add remote: %v (%s)", err, out)
+	}
+
+	brokenRef := filepath.Join(repoDir, ".git", "refs", "remotes", "origin", MirrorBranch)
+	if err := os.MkdirAll(filepath.Dir(brokenRef), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(brokenRef, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.SyncFile("myws", src, "doc.md")
+	flushNow(m)
+
+	remoteHead := exec.Command("git", "--git-dir", remoteDir, "rev-parse", "refs/heads/"+MirrorBranch)
+	if out, err := remoteHead.CombinedOutput(); err != nil {
+		t.Fatalf("mirror commit was not pushed: %v (%s)", err, out)
+	}
+}
+
 func TestMirror_Flush_NoChangesSkipsCommit(t *testing.T) {
 	srcDir := t.TempDir()
 	repoDir := t.TempDir()
