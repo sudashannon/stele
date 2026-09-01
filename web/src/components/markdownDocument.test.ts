@@ -18,14 +18,26 @@ describe('parseMarkdownDocument', () => {
     ])
   })
 
-  it('keeps malformed frontmatter raw while refusing partial fields', () => {
+  it('keeps scalar fields when a sibling line needs YAML parsing', () => {
     const raw = '---\ntitle: Valid\ntags: [not-a-scalar]\n---\n# Body'
 
     const document = parseMarkdownDocument(raw)
 
     expect(document.frontmatter).toEqual({
       raw: 'title: Valid\ntags: [not-a-scalar]\n',
-      fields: {},
+      fields: { title: 'Valid' },
+    })
+    expect(document.body).toBe('# Body')
+  })
+
+  it('skips nested block values while keeping their sibling scalars', () => {
+    const raw = '---\ntitle: Nested\ndate: 2026-08-31\nsources:\n  - id: claim.a\n    resource: doc://x/y.md\n---\n# Body'
+
+    const document = parseMarkdownDocument(raw)
+
+    expect(document.frontmatter?.fields).toEqual({
+      title: 'Nested',
+      date: '2026-08-31',
     })
     expect(document.body).toBe('# Body')
   })

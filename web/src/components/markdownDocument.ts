@@ -52,21 +52,26 @@ function parseScalar(value: string): string | null {
     return trimmed.slice(1, -1)
   }
 
-  // Collections, anchors, and block scalars need YAML parsing. Reject the
-  // entire block instead of presenting partially trustworthy metadata.
+  // Collections, anchors, and block scalars need YAML parsing. Skip the
+  // line rather than guess at a value; sibling scalar fields still surface.
   if (/^[\[\]{},&*!|>]/.test(trimmed)) return null
   return trimmed
 }
 
+// parseFields extracts the scalar `key: value` pairs a line-based reader can
+// trust. Lines that need real YAML parsing (collections, anchors, block
+// scalars, nested blocks) or that repeat a key are skipped instead of
+// poisoning the block, so a `title` beside a `tags: [...]` list still
+// surfaces to the header title.
 function parseFields(frontmatter: string): Record<string, string> {
   const fields: Record<string, string> = {}
   for (const line of frontmatter.split(/\r?\n/)) {
     if (/^[ \t]*(?:#.*)?$/.test(line)) continue
     const match = fieldLine.exec(line)
-    if (!match || Object.hasOwn(fields, match[1])) return {}
+    if (!match || Object.hasOwn(fields, match[1])) continue
 
     const value = parseScalar(match[2])
-    if (value === null) return {}
+    if (value === null || value === '') continue
     fields[match[1]] = value
   }
   return fields

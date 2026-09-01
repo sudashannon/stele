@@ -150,6 +150,48 @@ func TestScanComponents_ParsesFrontmatter(t *testing.T) {
 	}
 }
 
+func TestScanComponents_FrontmatterTitleWinsOverFirstHeading(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "docs", "superpowers", "specs")
+	os.MkdirAll(dir, 0755)
+	content := "---\ntitle: RX101 IMU 链路\ntags: [rx101, imu]\n---\n# 结论\n\nbody\n"
+	os.WriteFile(filepath.Join(dir, "doc.md"), []byte(content), 0644)
+
+	components, err := ScanComponents(root, "miao")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 {
+		t.Fatalf("expected 1 component, got %d: %+v", len(components), components)
+	}
+	if components[0].Title != "RX101 IMU 链路" {
+		t.Fatalf("expected the frontmatter title to win over the first heading, got %q", components[0].Title)
+	}
+}
+
+func TestScanComponents_FallsBackToHeadingWhenFrontmatterTitleIsNotAString(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "docs", "superpowers", "specs")
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(filepath.Join(dir, "empty.md"), []byte("---\ntitle:\n---\n# Heading Wins\n"), 0644)
+	os.WriteFile(filepath.Join(dir, "numbered.md"), []byte("---\ntitle: 42\n---\n# Number Falls Through\n"), 0644)
+
+	components, err := ScanComponents(root, "miao")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byBase := map[string]string{}
+	for _, c := range components {
+		byBase[filepath.Base(c.Path)] = c.Title
+	}
+	if byBase["empty.md"] != "Heading Wins" {
+		t.Fatalf("an empty frontmatter title must fall back to the heading, got %q", byBase["empty.md"])
+	}
+	if byBase["numbered.md"] != "Number Falls Through" {
+		t.Fatalf("a non-string frontmatter title must fall back to the heading, got %q", byBase["numbered.md"])
+	}
+}
+
 func TestScanComponentsSkipsSymlinkedDocuments(t *testing.T) {
 	root := t.TempDir()
 	specsDir := filepath.Join(root, "docs", "superpowers", "specs")

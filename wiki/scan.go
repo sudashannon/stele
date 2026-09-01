@@ -227,8 +227,10 @@ func classifyByFrontmatter(fm map[string]any) ComponentType {
 }
 
 // parseFrontmatterAndTitle reads a leading "---\n...\n---\n" YAML block (if
-// present) and the first "# heading" line. Falls back to the filename
-// (without extension) when no heading is found.
+// present) and the first "# heading" line. A non-empty frontmatter `title`
+// outranks the heading — the author's declared document title wins over what
+// is often a section heading (e.g. "# 结论"). Falls back to the filename
+// (without extension) when neither is found.
 func parseFrontmatterAndTitle(path string) (map[string]any, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -257,6 +259,9 @@ func parseFrontmatterAndTitle(path string) (map[string]any, string, error) {
 				inFrontmatter = false
 				if err := yaml.Unmarshal([]byte(strings.Join(fmLines, "\n")), &fm); err != nil {
 					return nil, "", err
+				}
+				if t, ok := fm["title"].(string); ok && strings.TrimSpace(t) != "" {
+					title = strings.TrimSpace(t)
 				}
 				continue
 			}
