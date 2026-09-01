@@ -302,7 +302,7 @@ func TestSessionsAreNotMirrored(t *testing.T) {
 	mirror.mu.Lock()
 	pending := make(map[string]string, len(mirror.pending))
 	for key, value := range mirror.pending {
-		pending[key] = value
+		pending[key] = value.dest
 	}
 	mirror.mu.Unlock()
 

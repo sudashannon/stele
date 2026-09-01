@@ -10,7 +10,7 @@ import (
 )
 
 type LintIssue struct {
-	Rule        string `json:"rule"` // orphan | dead-link | duplicate | task-artifact-missing | design-no-plan | stale-active | low-content | placeholder-heavy | missing-sections | low-link-density | low-quality
+	Rule        string `json:"rule"` // orphan | dead-link | duplicate | task-artifact-missing | design-no-plan | stale-active | low-content | placeholder-heavy | missing-sections | low-link-density | low-quality | mermaid-syntax | stale-claim
 	ComponentID string `json:"componentId"`
 	Detail      string `json:"detail"`
 	// LowQuality carries the measurements behind a low-quality verdict so the
@@ -90,6 +90,7 @@ func (g *Graph) Lint() []LintIssue {
 	issues = append(issues, g.lintLowLinkDensity()...)
 	issues = append(issues, g.lintLowQuality()...)
 	issues = append(issues, g.lintLifecycleGaps()...)
+	issues = append(issues, g.lintMermaidFences()...)
 	return issues
 }
 

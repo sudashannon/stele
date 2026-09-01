@@ -235,6 +235,79 @@ var mcpTools = []mcpTool{
 			"required": []string{"workspace", "sessionId", "snapshotSeq", "mode", "todos"},
 		},
 	},
+	{
+		Name:        "wiki_claim_search",
+		Description: "语义搜索已验证的工程断言(claim)。claim 是带版本化证据的一句话事实(结论、坑、决策、风险),比文档检索更细粒度。返回按相似度排序的断言列表(含工作区、类型、新鲜度状态)。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":     map[string]any{"type": "string", "description": "自然语言查询(中/英文均可)"},
+				"workspace": map[string]any{"type": "string", "description": "按工作区别名筛选"},
+				"kind":      map[string]any{"type": "string", "enum": []string{"fact", "decision", "pitfall", "constraint", "risk"}, "description": "按断言类型筛选"},
+				"limit":     map[string]any{"type": "number", "description": "返回条数上限,默认 5,上限 20"},
+			},
+			"required": []string{"query"},
+		},
+	},
+	{
+		Name: "wiki_claim_upsert",
+		Description: "幂等写入/更新工程断言(claim)。一条 claim = 一个带版本化证据的事实/决策/坑/约束/风险。" +
+			"evidence 资源格式: ws://<workspace>/<relpath>#L<from>-L<to>(代码行范围)、doc://<workspace>/<relpath>(文档)、" +
+			"session://<sessionID>(会话)。status 只接受 active(默认)/retracted; 过期(stale)由系统自动标记, 重新 upsert 同 id 即清除过期。" +
+			"需要 loopback + Bearer token 鉴权。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"workspace": map[string]any{"type": "string", "description": "所属工作区别名(必填, 必须在 workspaces.yaml 注册)"},
+				"claims": map[string]any{
+					"type":        "array",
+					"description": "断言列表(1..N 条), 逐条校验, 任一非法整体拒绝",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id":          map[string]any{"type": "string", "description": "断言 ID(必填, claim. 前缀)"},
+							"docId":       map[string]any{"type": "string", "description": "可选, 关联文档 Component ID"},
+							"kind":        map[string]any{"type": "string", "enum": []string{"fact", "decision", "pitfall", "constraint", "risk"}, "description": "断言类型(必填)"},
+							"truth":       map[string]any{"type": "string", "enum": []string{"code_verified", "source_verified", "unknown"}, "description": "可信度(必填)"},
+							"intent":      map[string]any{"type": "string", "enum": []string{"intended", "accidental", "unknown"}, "description": "意图(必填)"},
+							"text":        map[string]any{"type": "string", "description": "断言正文(必填, 一句话一个事实)"},
+							"codeAnchors": map[string]any{"type": "array", "description": "导航用代码路径(不验证版本)"},
+							"evidence":    map[string]any{"type": "array", "description": "版本化证据 [{resource}]"},
+							"tags":        map[string]any{"type": "array", "description": "标签"},
+							"status":      map[string]any{"type": "string", "enum": []string{"active", "retracted"}, "description": "状态(默认 active)"},
+						},
+						"required": []string{"id", "kind", "truth", "intent", "text"},
+					},
+				},
+			},
+			"required": []string{"workspace", "claims"},
+		},
+	},
+	{
+		Name:        "wiki_claim_get",
+		Description: "查看一条断言的完整内容,包括证据(ws:// 代码行范围、doc:// 文档、session:// 会话)及其最后验证的版本状态。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{"type": "string", "description": "断言 ID(claim. 前缀)"},
+			},
+			"required": []string{"id"},
+		},
+	},
+	{
+		Name:        "wiki_claims",
+		Description: "列出断言,可按工作区/状态/类型/关联文档筛选。status=stale 用于查看已过期待重新验证的断言。",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"workspace": map[string]any{"type": "string", "description": "按工作区别名筛选"},
+				"status":    map[string]any{"type": "string", "enum": []string{"active", "stale", "retracted"}, "description": "按状态筛选"},
+				"kind":      map[string]any{"type": "string", "enum": []string{"fact", "decision", "pitfall", "constraint", "risk"}, "description": "按断言类型筛选"},
+				"doc":       map[string]any{"type": "string", "description": "按关联文档(Component ID)筛选"},
+				"limit":     map[string]any{"type": "number", "description": "返回条数上限,默认 20,上限 100"},
+			},
+		},
+	},
 }
 
 // HandleMCP is the MCP Streamable HTTP endpoint. It accepts POST JSON-RPC
@@ -339,6 +412,14 @@ func (a *API) mcpToolsCall(w http.ResponseWriter, r *http.Request, req jsonRPCRe
 		result = a.mcpTodoDelete(r, params.Arguments)
 	case "todo_sync_omp":
 		result = a.mcpTodoSyncOMP(r, params.Arguments)
+	case "wiki_claim_search":
+		result = a.mcpClaimSearch(params.Arguments)
+	case "wiki_claim_get":
+		result = a.mcpClaimGet(params.Arguments)
+	case "wiki_claims":
+		result = a.mcpClaimsList(params.Arguments)
+	case "wiki_claim_upsert":
+		result = a.mcpClaimUpsert(r, params.Arguments)
 	default:
 		result = mcpToolResult{
 			Content: []mcpContent{{Type: "text", Text: "unknown tool: " + params.Name}},
@@ -603,6 +684,9 @@ func (a *API) mcpWikiLint(args map[string]any) mcpToolResult {
 	a.mu.RLock()
 	issues := a.graph.Lint()
 	a.mu.RUnlock()
+
+	// Claims freshness runs outside the graph lock (see HandleLint).
+	issues = a.claimLintIssues(issues)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d lint issues:\n\n", len(issues))

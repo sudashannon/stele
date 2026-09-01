@@ -17,6 +17,7 @@ import (
 
 	"stele/chat"
 	"stele/internal/appdir"
+	"stele/internal/claims"
 	"stele/internal/todo"
 )
 
@@ -30,10 +31,12 @@ type API struct {
 	ready           bool
 	dirtyStructural int32
 	SSE             *SSEHub
-	todoStore       *todo.Store    // set via SetTodoStore; nil until wired
-	todoToken       []byte         // MCP write token; not logged
-	sessions        *SessionsIndex // set via SetSessionsIndex; nil disables the layer
-	memoryDir       string         // agent-memory artifact root; read on demand, never indexed
+	todoStore       *todo.Store                 // set via SetTodoStore; nil until wired
+	todoToken       []byte                      // MCP write token; not logged
+	claimsStore     *claims.Store               // set via SetClaimsStore; nil disables the layer
+	claimVectors    map[string]claimVectorEntry // claim id -> vector bound to text hash
+	sessions        *SessionsIndex              // set via SetSessionsIndex; nil disables the layer
+	memoryDir       string                      // agent-memory artifact root; read on demand, never indexed
 }
 
 // WorkspaceLister exposes the CURRENT workspace registry, decoupling
@@ -703,12 +706,15 @@ func cosineSim(a, b []float32, normA, normB float64) float64 {
 // pattern above.
 func (a *API) HandleLint(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	w.Header().Set("Content-Type", "application/json")
 	issues := a.graph.Lint()
+	a.mu.RUnlock()
 	if issues == nil {
 		issues = []LintIssue{}
 	}
+	// Claims freshness runs outside the graph lock: the resolver reads
+	// workspace files and the store takes its own lock.
+	issues = a.claimLintIssues(issues)
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(issues)
 }
 

@@ -150,3 +150,55 @@ type Claim struct {
 - `wiki_proposal_validate` / `wiki_proposal_apply`：批量 JSON 提案（compatible with Greplica proposal schema），validate 校验循环引用/锚点
 - OMP session 自动导入：`omp-session:<id>` 溯源 + 从 `~/.omp/agent/sessions/` jsonl 提取（格式转换参考 `/tmp/omp2codex.py` 思路：session 行 → session_meta，message 行 role user/assistant → user_message/agent_message，过滤 developer 与工具调用）
 - claims 前端展示（TodoPanel 同构）
+
+## 9. 已交付状态（2026-08-25，含 OpenWiki 吸收）
+
+实现落地后与原计划的主要差异（本节为准）：
+
+### 9.1 MCP 工具（实际 3 个，非 3.2-3.4 的 3+1）
+
+| 工具 | 说明 |
+|---|---|
+| `wiki_claim_upsert` | 写（Bearer 鉴权）。入参 `{workspace, claims[]}`，逐条校验、整体拒绝；status 只接受 `active`/`retracted`，`stale` 由系统自动标记，重新 upsert 同 id 即清除 |
+| `wiki_claim_search` | 读。`{query, workspace?, kind?, limit?}`，语义检索 + 文本子串保底（embedding 脚本缺失时自动降级）；原计划的 `wiki_claim_query` 与 `wiki_claim_list` 合并为此一个工具 |
+| `wiki_claim_get` | 读。按 id 查看完整 claim，含证据资源与最后验证的版本状态 |
+
+### 9.2 证据版本化（核心新增，原计划没有）
+
+claim 的新鲜度由**版本化证据**驱动（`internal/claims/evidence.go`）：
+
+- 证据 URI 三种：`ws://<ws>/<rel>#L<from>-L<to>`（代码行范围 + 上下各 3 行 context 哈希）、`doc://<ws>/<rel>`（整文件哈希）、`session://<id>`（transcript size+mtime）
+- 版本 token 确定性、无模型：`lines-v1:<sha256>` / `doc-v1:<sha256>` / `session-v1:<size>:<mtime>`
+- 解析器 `claims.Resolver` 由 API 从当前 workspace 列表构建；`ParseResource` 拒绝绝对路径/越界/`.git`
+- 过期原因三态：`version-changed` / `evidence-missing` / `resolution-error`（evidence missing 视为过期而非配置错误）
+
+### 9.3 过期检测闭环
+
+| 触发点 | 行为 |
+|---|---|
+| watcher 文件变更（`wiki/watcher.go`） | `CheckClaimsForFiles` 只复检证据引用了变更文件的 claim，翻转 stale 时 SSE `claims-updated` 广播 |
+| `wiki_lint` / REST `/api/wiki/lint` | `CheckAllClaims` 全量复检（OpenWiki 所说的 scheduled verification/preflight），每条 stale claim 产生 `stale-claim` lint issue |
+| `wiki_context` 召回包（`session_api.go`） | `BuildContextPacket` 附带最多 10 条 stale claims（含 evidence 资源），markdown 渲染 "Stale claims (re-verify before relying on these)" |
+
+### 9.4 OKF v0.2 导出（OpenWiki 吸收，`wiki/okf.go` + `wiki/mirror.go`）
+
+镜像仓（knowledge-repo）在每次 flush 时额外投影：
+
+- 每个镜像 `.md` 文档获得 OKF v0.2 合规 frontmatter：`type`（组件类型，作者已有 type 优先）、`generated: {by: stele-wiki, at}`、`sources`（claims 证据投影：active+stale，retracted 排除）、`status: stale`（任一关联 claim 过期）、`verified`（有 claim 且全新鲜）
+- 根 `index.md`：声明 `okf_version: "0.2"` + 概念清单；根 `log.md`：追加式更新历史
+- 无 projector 时（`SetOKF` 未调用）保持原样逐字拷贝行为
+
+### 9.5 文件清单（实际）
+
+| 文件 | 状态 |
+|---|---|
+| `internal/claims/{claim,store,evidence}.go` | 新（claim 类型/校验、Store、Resolver+CheckClaim） |
+| `internal/claims/claims_test.go` | 新 |
+| `wiki/claims_api.go` | 新（store 接线、CheckAllClaims/CheckClaimsForFiles、claimLintIssues、StaleClaimsForDocs） |
+| `wiki/claim_vectors.go` | 新（claim 向量缓存，text-hash 绑定） |
+| `wiki/mcp_claims.go` | 新（3 个 MCP 工具处理） |
+| `wiki/mcp_claim_test.go` | 新（鉴权/幂等/枚举/检索/过期链路） |
+| `wiki/okf.go` + `wiki/okf_test.go` | 新（OKF 投影器 + 镜像端到端） |
+| `wiki/lint_mermaid.go` + `wiki/lint_mermaid_test.go` | 新（mermaid fence 校验，`mermaid-syntax` lint 规则） |
+| `wiki/{api,session_api,mcp,mirror,watcher}.go` | 改（claims 字段/召回包/lint/OKF flush/文件变更复检） |
+| `main.go` | 改（claims store 初始化 + `mirror.SetOKF`） |

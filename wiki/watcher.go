@@ -309,6 +309,12 @@ func (w *Watcher) processBatch(files []string) {
 			return
 		}
 	}
+	if n := w.api.CheckClaimsForFiles(files); n > 0 {
+		log.Printf("wiki watcher: %d claim(s) went stale after file change", n)
+		if w.api.SSE != nil {
+			w.api.SSE.BroadcastNamed("claims-updated", fmt.Sprintf(`{"stale":%d}`, n))
+		}
+	}
 	if w.api.SSE != nil {
 		w.api.SSE.Broadcast(fmt.Sprintf(`{"changed":%d}`, len(files)))
 	}

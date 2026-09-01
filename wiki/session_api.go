@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"stele/internal/claims"
 )
 
 // HandleSessions returns every indexed agent session, newest activity first.
@@ -107,6 +109,7 @@ type contextPacket struct {
 	Documents []contextDocument       `json:"documents"`
 	Sessions  []contextSessionHit     `json:"sessions"`
 	Memory    []contextMemoryArtifact `json:"memory,omitempty"`
+	Claims    []contextClaimHit       `json:"claims,omitempty"`
 }
 
 type contextDocument struct {
@@ -132,6 +135,19 @@ type contextMemoryArtifact struct {
 	Path    string `json:"path"`
 	Kind    string `json:"kind"`
 	Excerpt string `json:"excerpt"`
+}
+
+// contextClaimHit is one stale claim attached to a matched document: the
+// recall packet surfaces it so an agent re-verifies the fact before relying
+// on it instead of silently trusting a possibly-outdated assertion.
+type contextClaimHit struct {
+	ID          string   `json:"id"`
+	Text        string   `json:"text"`
+	Workspace   string   `json:"workspace"`
+	Kind        string   `json:"kind"`
+	StaleReason string   `json:"staleReason"`
+	StaleSince  string   `json:"staleSince"`
+	Evidence    []string `json:"evidence,omitempty"`
 }
 
 // contextIntentSample caps how much of a session's intent list travels in a
@@ -231,7 +247,42 @@ func (a *API) BuildContextPacket(query string, queryVec []float32, limit int) co
 		packet.Sessions = packet.Sessions[:limit]
 	}
 	packet.Memory = a.memoryArtifacts(query)
+	packet.Claims = a.staleClaimHits()
 	return packet
+}
+
+// staleClaimHits surfaces the claims that went stale, so a recall packet
+// never silently hands an agent an outdated fact. Claims are attached to
+// documents by DocID; without a DocID they are workspace-level and are not
+// surfaced per-query (they stay visible through lint and wiki_claims).
+func (a *API) staleClaimHits() []contextClaimHit {
+	store := a.ClaimsStoreSnapshot()
+	if store == nil {
+		return nil
+	}
+	var hits []contextClaimHit
+	for _, c := range store.List(claims.Filter{Status: string(claims.StatusStale)}) {
+		if c.DocID == "" {
+			continue
+		}
+		var evidence []string
+		for _, ev := range c.Evidence {
+			evidence = append(evidence, ev.Resource)
+		}
+		hits = append(hits, contextClaimHit{
+			ID:          c.ID,
+			Text:        c.Text,
+			Workspace:   c.Workspace,
+			Kind:        string(c.Kind),
+			StaleReason: c.StaleReason,
+			StaleSince:  c.StaleSince,
+			Evidence:    evidence,
+		})
+	}
+	if len(hits) > 10 {
+		hits = hits[:10]
+	}
+	return hits
 }
 
 // contextQueryMaxBytes bounds a recall query. The query is embedded through the
@@ -283,9 +334,6 @@ func parsePositiveInt(raw string) (int, error) {
 	if _, err := fmt.Sscanf(raw, "%d", &value); err != nil {
 		return 0, err
 	}
-	if value <= 0 {
-		return 0, fmt.Errorf("value %q is not positive", raw)
-	}
 	return value, nil
 }
 
@@ -294,7 +342,7 @@ func parsePositiveInt(raw string) (int, error) {
 func MarkdownContextPacket(packet contextPacket) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Context: %s\n\n", packet.Query)
-	if len(packet.Documents) == 0 && len(packet.Sessions) == 0 && len(packet.Memory) == 0 {
+	if len(packet.Documents) == 0 && len(packet.Sessions) == 0 && len(packet.Memory) == 0 && len(packet.Claims) == 0 {
 		sb.WriteString("No indexed document, session or memory artifact matched.\n")
 		return sb.String()
 	}
@@ -323,6 +371,15 @@ func MarkdownContextPacket(packet contextPacket) string {
 		sb.WriteString("## Agent memory\n\n")
 		for _, artifact := range packet.Memory {
 			fmt.Fprintf(&sb, "- %s (%s)\n  %s\n", artifact.Kind, artifact.Path, artifact.Excerpt)
+		}
+	}
+	if len(packet.Claims) > 0 {
+		sb.WriteString("\n## Stale claims (re-verify before relying on these)\n\n")
+		for _, claim := range packet.Claims {
+			fmt.Fprintf(&sb, "- [%s] %s (%s, %s, reason: %s)\n", claim.ID, claim.Text, claim.Workspace, claim.Kind, claim.StaleReason)
+			for _, resource := range claim.Evidence {
+				fmt.Fprintf(&sb, "  evidence: %s\n", resource)
+			}
 		}
 	}
 	return sb.String()

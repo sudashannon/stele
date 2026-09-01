@@ -99,8 +99,8 @@ func TestMCP_ToolsList_AllTools(t *testing.T) {
 	result := resp["result"].(map[string]any)
 	tools := result["tools"].([]any)
 
-	if len(tools) != 13 {
-		t.Fatalf("expected 13 tools (8 wiki + 5 todo), got %d", len(tools))
+	if len(tools) != 17 {
+		t.Fatalf("expected 17 tools (8 wiki + 5 todo + 4 claim), got %d", len(tools))
 	}
 
 	toolNames := map[string]bool{}

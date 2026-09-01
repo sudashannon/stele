@@ -29,10 +29,18 @@ type Mirror struct {
 	repoDir  string // e.g. <data dir>/knowledge-repo
 	remote   string // optional push remote (empty disables push)
 	debounce time.Duration
+	okf      *OKFProjector // nil keeps the verbatim-copy behavior
 
 	mu      sync.Mutex
-	pending map[string]string // source path -> dest path relative to repoDir
+	pending map[string]pendingFile // source path -> mirror destination
 	timer   *time.Timer
+}
+
+// pendingFile is one queued mirror destination plus the metadata the OKF
+// projection needs (component type and the document ID claims attach to).
+type pendingFile struct {
+	dest  string
+	ctype string
 }
 
 // NewMirror constructs a Mirror rooted at repoDir. remote, if non-empty, is
@@ -42,7 +50,7 @@ func NewMirror(repoDir, remote string) *Mirror {
 		repoDir:  repoDir,
 		remote:   remote,
 		debounce: 30 * time.Second,
-		pending:  make(map[string]string),
+		pending:  make(map[string]pendingFile),
 	}
 }
 
@@ -88,7 +96,9 @@ func (m *Mirror) SyncFile(workspace, srcPath, relPath string) {
 	destRel := filepath.Join(workspace, relPath)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pending[srcPath] = destRel
+	// Watcher-triggered syncs carry no component type; the flush derives
+	// one from the document's own frontmatter or path at write time.
+	m.pending[srcPath] = pendingFile{dest: destRel}
 	m.resetTimerLocked()
 }
 
@@ -113,7 +123,7 @@ func (m *Mirror) SyncAll(components map[string]Component, workspaces []Workspace
 			log.Printf("wiki mirror: refusing to mirror %s (path escapes workspace %q)", c.Path, c.Workspace)
 			continue
 		}
-		m.pending[c.Path] = filepath.Join(c.Workspace, rel)
+		m.pending[c.Path] = pendingFile{dest: filepath.Join(c.Workspace, rel), ctype: string(c.Type)}
 		queued++
 	}
 	if queued > 0 {
@@ -159,6 +169,16 @@ func relativeToWorkspace(path, alias string, workspaces []WorkspaceConfig) strin
 	return ""
 }
 
+// SetOKF enables OKF v0.2 projection: mirrored .md documents gain compliant
+// frontmatter (type, generated, claim-sourced sources, lifecycle fields)
+// and the repo gains the reserved root index.md/log.md. Without a projector
+// the mirror keeps copying source files verbatim.
+func (m *Mirror) SetOKF(p *OKFProjector) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.okf = p
+}
+
 // resetTimerLocked (re)starts the debounce timer. Caller must hold m.mu.
 func (m *Mirror) resetTimerLocked() {
 	if m.timer != nil {
@@ -172,7 +192,8 @@ func (m *Mirror) resetTimerLocked() {
 func (m *Mirror) flush() {
 	m.mu.Lock()
 	batch := m.pending
-	m.pending = make(map[string]string)
+	m.pending = make(map[string]pendingFile)
+	okfProj := m.okf
 	m.mu.Unlock()
 
 	if len(batch) == 0 {
@@ -180,10 +201,16 @@ func (m *Mirror) flush() {
 	}
 
 	copied := 0
-	for src, destRel := range batch {
-		dest := filepath.Join(m.repoDir, destRel)
-		if err := copyFile(src, dest); err != nil {
-			log.Printf("mirror: copy %s -> %s failed: %v", src, destRel, err)
+	for src, entry := range batch {
+		dest := filepath.Join(m.repoDir, entry.dest)
+		var err error
+		if okfProj != nil && strings.HasSuffix(entry.dest, ".md") {
+			err = writeOKFDocument(okfProj, src, dest, entry.ctype)
+		} else {
+			err = copyFile(src, dest)
+		}
+		if err != nil {
+			log.Printf("mirror: copy %s -> %s failed: %v", src, entry.dest, err)
 			continue
 		}
 		copied++
@@ -191,6 +218,10 @@ func (m *Mirror) flush() {
 
 	if copied == 0 {
 		return
+	}
+
+	if okfProj != nil {
+		m.writeOKFBundleMeta(time.Now())
 	}
 
 	if err := gitCmd(m.repoDir, "add", "-A"); err != nil {

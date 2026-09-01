@@ -27,6 +27,7 @@ import (
 
 	"stele/chat"
 	"stele/internal/appdir"
+	"stele/internal/claims"
 	"stele/internal/sessions"
 	"stele/internal/source"
 	"stele/internal/todo"
@@ -236,6 +237,12 @@ func main() {
 		log.Fatalf("todo store: %v", err)
 	}
 
+	// --- Claims Store (shared by REST and MCP) ---
+	claimsStore, err := claims.NewStore(claims.StorePath())
+	if err != nil {
+		log.Fatalf("claims store: %v", err)
+	}
+
 	// --- MCP write token ---
 	mcpToken, err := todo.EnsureToken()
 	if err != nil {
@@ -255,6 +262,9 @@ func main() {
 	// first explicit workspace is registered.
 	// Wire Todo store and MCP token into the wiki API atomically.
 	wikiAPI.SetTodoStore(todoStore, mcpToken)
+	// Wire the claims store; it loads cached vectors for the current claim
+	// texts and is shared by REST + MCP like the Todo store.
+	wikiAPI.SetClaimsStore(claimsStore)
 	wikiAPI.SetLister(registryLister{reg: reg, defaultDir: *baseDir})
 	// The initial index build scans the whole workspace tree and can take
 	// tens of seconds on a large repo. Run it in the background so
@@ -268,6 +278,10 @@ func main() {
 	syncCfg := reg.Sync()
 	if syncCfg.Enabled {
 		mirror := wiki.NewMirror(mirrorDir, syncCfg.Remote)
+		// OKF v0.2: mirrored documents gain compliant frontmatter (type,
+		// generated, claim-sourced sources) and the repo gains the reserved
+		// index.md/log.md, making the cloud bundle portable to OKF consumers.
+		mirror.SetOKF(wiki.NewOKFProjector(claimsStore))
 		if err := mirror.Init(); err != nil {
 			log.Printf("knowledge mirror init failed (non-fatal): %v", err)
 		} else {
