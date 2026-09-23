@@ -7,12 +7,14 @@ import {
   fetchWikiIndex,
   fetchSessions,
   fetchWorkspaces,
+  fetchWorkflowWorks,
   removeBookmark,
   removeWorkspace,
 } from './api/client'
-import type { Bookmark, ChangeSummary, SessionTodo, WorkspaceConfig, WikiComponent, WikiSession } from './api/types'
+import type { Bookmark, ChangeSummary, SessionTodo, WorkflowWorksResponse, WorkspaceConfig, WikiComponent, WikiSession } from './api/types'
 import { ChangeDetail } from './components/ChangeDetail'
 import { ChangeExplorer } from './components/ChangeExplorer'
+import { WorkflowWorksList } from './components/WorkflowWorksList'
 import { ChatBubble } from './components/ChatBubble'
 import { CommandPalette } from './components/CommandPalette'
 import { Icon } from './components/icons'
@@ -115,6 +117,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [workspaces, setWorkspaces] = useState<WorkspaceConfig[]>([])
   const [activeWorkspace, setActiveWorkspace] = useState<string | null>(null)
+  const [workflowWorks, setWorkflowWorks] = useState<WorkflowWorksResponse | null>(null)
+  const [workflowView, setWorkflowView] = useState(true)
   const [failedWorkspaces, setFailedWorkspaces] = useState<string[]>([])
   const [activeKpiFilter, setActiveKpiFilter] = useState<string | null>(null)
   const [view, setView] = useState<SideRailView>('changes')
@@ -193,10 +197,11 @@ export default function App() {
 
   const refreshWorkspaceData = useCallback(
     async (options?: WorkspaceRefreshOptions) => {
-      const [nextWorkspacesResult, nextChangesResult, nextWikiComponents] = await Promise.all([
+      const [nextWorkspacesResult, nextChangesResult, nextWikiComponents, nextWorkflowWorks] = await Promise.all([
         fetchWorkspaces().catch(() => [] as WorkspaceConfig[]),
         fetchChangesWithMeta().catch(() => ({ changes: [] as ChangeSummary[], failedWorkspaces: [] as string[] })),
         fetchWikiIndex().catch(() => [] as WikiComponent[]),
+        fetchWorkflowWorks().catch((): WorkflowWorksResponse => ({ enabled: false, works: [], error: '工作列表暂不可用' })),
       ])
 
       const nextWorkspaces = nextWorkspacesResult ?? []
@@ -227,6 +232,7 @@ export default function App() {
       setChanges(nextChanges)
       setFailedWorkspaces(nextFailedWorkspaces)
       setWikiComponents(nextWikiComponents)
+      setWorkflowWorks(nextWorkflowWorks)
       setSelected(nextSelection)
       setActiveWorkspace(nextActiveWorkspace)
     },
@@ -327,6 +333,7 @@ export default function App() {
   const navigateToChange = useCallback(
     (changeName: string) => {
       if (!openViewer(null)) return
+      setWorkflowView(false)
       let workspace: string | undefined
       if (viewerPath) {
         workspace = wikiComponents.find((component) => component.path === viewerPath || component.id === viewerPath)?.workspace
@@ -354,6 +361,11 @@ export default function App() {
         setFailedWorkspaces(result.failedWorkspaces ?? [])
       })
       .catch(() => setChanges([]))
+  }, [])
+  useEffect(() => {
+    fetchWorkflowWorks()
+      .then(setWorkflowWorks)
+      .catch(() => setWorkflowWorks({ enabled: false, works: [], error: '工作列表暂不可用' }))
   }, [])
 
   useEffect(() => {
@@ -757,15 +769,24 @@ export default function App() {
               <WorkspaceChips
                 workspaces={workspaces}
                 active={activeWorkspace}
+                workflowActive={workflowView}
                 onSelect={(alias) => {
                   if (!openViewer(null)) return
+                  setWorkflowView(false)
                   setActiveWorkspace(alias)
+                  setSelected(null)
+                  setChangeArtifacts([])
+                }}
+                onSelectWorkflow={() => {
+                  if (!openViewer(null)) return
+                  setWorkflowView(true)
                   setSelected(null)
                   setChangeArtifacts([])
                 }}
                 onAdd={async (config) => {
                   await addWorkspace(config)
                   if (!openViewer(null)) return
+                  setWorkflowView(false)
                   setSelected(null)
                   setChangeArtifacts([])
                   await refreshWorkspaceData({
@@ -781,6 +802,10 @@ export default function App() {
             {/* Main content column — full width, no sidebar */}
             <div className="relative flex-1 overflow-hidden p-4">
               <div className="h-full overflow-y-auto space-y-4">
+                {workflowView ? (
+                  <WorkflowWorksList data={workflowWorks} works={workflowWorks?.works ?? []} />
+                ) : (
+                  <>
                 <KpiCards
                   changes={workspaceChanges}
                   stuckThresholdDays={STUCK_THRESHOLD_DAYS}
@@ -788,6 +813,8 @@ export default function App() {
                   activeFilter={activeKpiFilter}
                   onFilterSelect={setActiveKpiFilter}
                 />
+
+
 
                 {/* Surface separator: luminance step, no shadow.
                     Separates the KPI readout row (surface) from the table (surface)
@@ -849,6 +876,8 @@ export default function App() {
                     detail="可通过上方 KPI 卡片筛选，或在搜索与筛选中定位目标变更"
                   />
                 )}
+                  </>
+                )}
               </div>
 
               {/* Document viewer — rendered as an overlay so the change list
@@ -895,6 +924,7 @@ export default function App() {
                 }}
                 sessionPathById={sessionPathById}
                 onNavigateChange={(workspace, changeName) => {
+                  setWorkflowView(false)
                   setView('changes')
                   setSelected({ name: changeName, workspace })
                   setActiveWorkspace(workspace)

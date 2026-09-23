@@ -211,6 +211,7 @@ func main() {
 	shareURL := flag.String("share-url", "", "public base URL for share links (default: derived from each request's Host)")
 	baseDir := flag.String("dir", "openspec", "path to an OpenSpec, Trellis, or Superpowers workspace")
 	sessionsDir := flag.String("sessions-dir", "", "OMP transcript directory (default: ~/.omp/agent/sessions; an empty value with no --sessions-source disables the session layer)")
+	worktreeStatusScript := flag.String("worktree-status-script", defaultWorktreeStatusScript(), "worktree-session inventory script (empty or missing disables Dashboard work list)")
 	sessionSourceFlags := &repeatedFlag{}
 	flag.Var(sessionSourceFlags, "sessions-source", "agent session source as runtime=path, repeatable (runtimes: "+strings.Join(sessions.ProviderNames(), ", ")+")")
 	flag.Parse()
@@ -378,6 +379,8 @@ func main() {
 	mux.HandleFunc("/api/todos", todoHandler.ServeHTTP)
 	mux.HandleFunc("/api/todos/", todoHandler.ServeHTTP)
 
+	mux.HandleFunc("/api/works", handleWorkflowWorks(*worktreeStatusScript, reg.List))
+	mux.HandleFunc("/api/workflow/artifact", handleWorkflowArtifact(*worktreeStatusScript))
 	mux.HandleFunc("/api/changes", func(w http.ResponseWriter, r *http.Request) {
 		handleListChangesMultiWorkspace(w, r, *baseDir, reg)
 	})

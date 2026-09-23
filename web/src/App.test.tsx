@@ -3,8 +3,8 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import App from './App'
 import { SIDE_RAIL_ITEMS } from './components/SideRail'
-import { fetchWorkspaces, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchSessionsWithMeta, fetchChatSession, fetchChangeDetail, fetchBookmarks, fetchTodos, addBookmark, removeWorkspace } from './api/client'
-import type { ChangeSummary, WorkspaceConfig } from './api/types'
+import { fetchWorkspaces, fetchWorkflowWorks, fetchWorkflowArtifactContent, fetchChangesWithMeta, fetchWikiIndex, fetchLintIssues, fetchRecent, fetchSessionsWithMeta, fetchChatSession, fetchChangeDetail, fetchBookmarks, fetchTodos, addBookmark, removeWorkspace } from './api/client'
+import type { ChangeSummary, WorkflowWork, WorkspaceConfig } from './api/types'
 
 // WikiGraph mounts a real cytoscape instance with a cose layout and
 // `cy.fit()` on 'layoutstop'; that layout engine doesn't run correctly in
@@ -58,7 +58,7 @@ vi.mock('./components/MarkdownViewer', () => ({
     onToggleStar,
     onEdit,
   }: {
-    path: string
+    path: string | null
     workspace?: string
     onClose: () => void
     onToggleStar?: (path: string, title: string) => void
@@ -74,7 +74,7 @@ vi.mock('./components/MarkdownViewer', () => ({
       <button
         type="button"
         aria-label="收藏"
-        onClick={() => onToggleStar?.(path, path.split('/').pop() ?? path)}
+        onClick={() => onToggleStar?.(path ?? '', (path ?? '').split('/').pop() ?? '')}
       >
         收藏
       </button>
@@ -137,6 +137,8 @@ vi.mock('./components/SessionDetail', () => ({
 // chance to render.
 vi.mock('./api/client', () => ({
   fetchWorkspaces: vi.fn().mockResolvedValue(null),
+  fetchWorkflowArtifactContent: vi.fn().mockResolvedValue(''),
+  fetchWorkflowWorks: vi.fn().mockResolvedValue({ enabled: true, works: [] }),
   addWorkspace: vi.fn(),
   fetchChangesWithMeta: vi.fn().mockResolvedValue({ changes: null, failedWorkspaces: ['broken-ws'] }),
   fetchWikiIndex: vi.fn().mockResolvedValue([]),
@@ -182,6 +184,28 @@ function makeChange(overrides: Partial<ChangeSummary>): ChangeSummary {
     ...overrides,
   }
 }
+function makeWorkflowWork(overrides: Partial<WorkflowWork>): WorkflowWork {
+  return {
+    name: 'work',
+    paths: ['/tmp/work'],
+    branch: 'feature/work',
+    kind: 'repo',
+    worktrees: 1,
+    idleDays: 0,
+    goal: 'Ship dashboard work list',
+    current: 'Rendering work inventory',
+    dirty: 0,
+    artifacts: [],
+    sessions: [],
+    notes: [],
+    state: 'active',
+    mergeState: '',
+    merged: false,
+    next: '',
+    workspace: '',
+    ...overrides,
+  }
+}
 
 afterEach(() => {
   vi.useRealTimers()
@@ -190,11 +214,87 @@ afterEach(() => {
 })
 
 describe('App', () => {
-  it('does not crash when fetchChangesWithMeta resolves with changes: null, and still renders the warning banner', async () => {
+  it('does not crash when changes are unavailable, and shows the default Workflow view', async () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
-    expect(screen.getByTestId('kpi-grid')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Workflow 工作' })).toBeTruthy()
   })
+  it('opens Workflow by default and returns to the workspace changes view', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce([
+      { alias: 'miao', path: '/x/miao', color: '#0063f8' },
+    ])
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({
+      changes: [makeChange({ name: 'existing-change', workspace: 'miao' })],
+      failedWorkspaces: [],
+    })
+    vi.mocked(fetchWorkflowWorks).mockResolvedValueOnce({
+      enabled: true,
+      works: [
+        makeWorkflowWork({ name: 'registered-work', workspace: 'miao', dirty: 2 }),
+        makeWorkflowWork({ name: 'unregistered-work', branch: 'feature/unregistered', paths: ['/tmp/unregistered-work'], state: '-' }),
+      ],
+    })
+
+    render(<App />)
+    expect(await screen.findByText('registered-work')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Workflow 工作' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Workflow' }).getAttribute('aria-pressed')).toBe('true')
+
+    expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByText('unregistered-work')).toBeTruthy()
+    expect(screen.getByText('未注册')).toBeTruthy()
+    expect(screen.getAllByText('未声明').length).toBeGreaterThan(0)
+    expect(screen.queryByText('existing-change')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'miao' }))
+    expect(await screen.findByText('existing-change')).toBeTruthy()
+    expect(screen.queryByText('registered-work')).toBeNull()
+  })
+
+  it('leaves Workflow mode when a todo navigates to its linked change', async () => {
+    vi.mocked(fetchWorkspaces).mockResolvedValueOnce([
+      { alias: 'miao', path: '/x/miao', color: '#0063f8' },
+    ])
+    vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({
+      changes: [makeChange({ name: 'alpha', workspace: 'miao' })],
+      failedWorkspaces: [],
+    })
+    vi.mocked(fetchWorkflowWorks).mockResolvedValueOnce({
+      enabled: true,
+      works: [makeWorkflowWork({ name: 'workflow-entry', workspace: 'miao' })],
+    })
+    vi.mocked(fetchTodos).mockResolvedValueOnce({
+      items: [{
+        id: 'linked-todo',
+        workspace: 'miao',
+        title: 'Linked todo',
+        notes: '',
+        status: 'open',
+        priority: 'normal',
+        dueAt: null,
+        change: { workspace: 'miao', name: 'alpha' },
+        wikiRefs: [],
+        metadata: { source: 'ui' },
+        externalRef: null,
+        createdAt: '',
+        updatedAt: '',
+        completedAt: null,
+      }],
+      counts: { total: 1, open: 1, inProgress: 0, done: 0, blocked: 0, dropped: 0 },
+      revision: 1,
+      writable: true,
+    })
+
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Workflow' }))
+    expect(await screen.findByText('workflow-entry')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '待办' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'alpha' }))
+
+    expect(await screen.findByTestId('kpi-grid')).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Workflow 工作' })).toBeNull()
+  })
+
 
 
   it('excludes done and dropped Todos from a Change pending count while retaining blocked', async () => {
@@ -234,6 +334,7 @@ describe('App', () => {
     })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     fireEvent.click(await screen.findByText('alpha'))
 
     expect(await screen.findByRole('button', { name: '待办 2' })).toBeTruthy()
@@ -283,6 +384,7 @@ describe('App', () => {
       })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     await screen.findByRole('button', { name: 'openspec' })
     const changesRefreshCount = vi.mocked(fetchChangesWithMeta).mock.calls.length
     const workspaceRefreshCount = vi.mocked(fetchWorkspaces).mock.calls.length
@@ -335,6 +437,7 @@ describe('App', () => {
     vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     await screen.findByText('alpha')
     // Expand the archived section in the full-width table so beta and gamma are visible.
     fireEvent.click(screen.getByText('已归档 (2)'))
@@ -373,6 +476,7 @@ describe('App', () => {
     vi.mocked(fetchChangesWithMeta).mockResolvedValueOnce({ changes, failedWorkspaces: [] })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     // Two rows share the name 'cache'; the workspace column disambiguates.
     // Click the row whose aria-label names the 'ideas' workspace.
     // The row label prefers the change title over its slug, so `cache` in the
@@ -418,6 +522,7 @@ describe('App', () => {
     }))
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     await screen.findByText('alpha')
 
     fireEvent.click(screen.getByText('alpha'))
@@ -456,6 +561,7 @@ describe('App', () => {
     })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     // `alpha` now appears both as a workspace chip and as a change row, so these
     // queries address the row by its aria-label instead of by bare text.
     const alphaRow = await screen.findByRole('button', { name: /^打开变更 alpha/ })
@@ -487,6 +593,7 @@ describe('App', () => {
     })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     fireEvent.click(await screen.findByRole('button', { name: /^打开变更 alpha/ }))
     fireEvent.click(await screen.findByText('设计文档'))
     await screen.findByTestId('markdown-viewer')
@@ -511,6 +618,7 @@ describe('App', () => {
 
     try {
       render(<App />)
+      fireEvent.click(screen.getByRole('button', { name: '全部' }))
       fireEvent.click(await screen.findByRole('button', { name: /^打开变更 alpha/ }))
       fireEvent.click(await screen.findByText('设计文档'))
       fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
@@ -551,6 +659,7 @@ describe('App', () => {
     vi.mocked(addBookmark).mockResolvedValueOnce([bookmark])
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     await screen.findByText('alpha')
     fireEvent.click(screen.getByText('alpha'))
     const artifactButton = await screen.findByText('设计文档')
@@ -574,16 +683,18 @@ describe('App', () => {
 })
 
 describe('App view switcher', () => {
-  it('defaults to the 变更列表 view showing KpiCards and ChangeExplorer', async () => {
+  it('defaults to the Workflow view with its chip selected', async () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
-    expect(screen.getByTestId('kpi-grid')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Workflow 工作' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Workflow' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.queryByTestId('wiki-graph-canvas')).toBeNull()
   })
 
   it('shows a friendly empty-state guiding the user to pick a change when none is selected', async () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     expect(screen.getByTestId('change-empty-state')).toBeTruthy()
     expect(screen.getByText('点击上方表格中的一行查看变更详情')).toBeTruthy()
   })
@@ -768,6 +879,33 @@ describe('App view switcher', () => {
     expect(screen.queryByTestId('markdown-viewer')).toBeNull()
   })
 
+  it('groups works by lifecycle state and opens a real session artifact', async () => {
+    vi.mocked(fetchWorkflowWorks).mockResolvedValueOnce({
+      enabled: true,
+      works: [
+        makeWorkflowWork({
+          name: 'active work',
+          state: 'active',
+          artifacts: [{ path: 'SESSION.md', kind: 'index', worktree: '/tmp/work' }],
+        }),
+        makeWorkflowWork({ name: 'delivered work', state: 'delivered' }),
+      ],
+    })
+    vi.mocked(fetchWorkflowArtifactContent).mockResolvedValueOnce('# Session content')
+    render(<App />)
+
+    const activeWork = await screen.findByRole('button', { name: 'active work' })
+    const rows = screen.getAllByRole('row').map((row) => row.textContent ?? '')
+    expect(rows.findIndex((row) => row.includes('进行中'))).toBeLessThan(rows.findIndex((row) => row.includes('已交付')))
+
+    fireEvent.click(activeWork)
+    expect(screen.getByRole('region', { name: 'Workflow 工作详情' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /SESSION\.md/ }))
+
+    await screen.findByTestId('markdown-viewer')
+    expect(fetchWorkflowArtifactContent).toHaveBeenCalledWith('/tmp/work', 'SESSION.md')
+  })
+
   it('switching back to 变更列表 restores KpiCards and ChangeExplorer', async () => {
     render(<App />)
     await screen.findByTestId('workspace-warning-banner')
@@ -776,7 +914,7 @@ describe('App view switcher', () => {
     await waitFor(() => expect(fetchWikiIndex).toHaveBeenCalled())
 
     fireEvent.click(screen.getByRole('button', { name: '变更仪表盘' }))
-    expect(screen.getByTestId('kpi-grid')).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Workflow 工作' })).toBeTruthy()
     expect(screen.queryByTestId('wiki-graph-canvas')).toBeNull()
   })
 
@@ -798,6 +936,7 @@ describe('App view switcher', () => {
     })
 
     render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '全部' }))
     await screen.findByText('alpha')
 
     fireEvent.click(screen.getByText('alpha'))

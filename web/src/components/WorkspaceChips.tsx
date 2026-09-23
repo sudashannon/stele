@@ -6,6 +6,8 @@ interface Props {
   workspaces: WorkspaceConfig[]
   active: string | null
   onSelect: (alias: string | null) => void
+  workflowActive?: boolean
+  onSelectWorkflow?: () => void
   onAdd: (cfg: WorkspaceConfig) => Promise<void>
   onRemove?: (alias: string) => void
   removeDisabledAliases?: readonly string[]
@@ -22,6 +24,8 @@ function workspaceTypeLabel(type?: WorkspaceSourceType): string | null {
 export function WorkspaceChips({
   workspaces,
   active,
+  workflowActive = false,
+  onSelectWorkflow,
   onSelect,
   onAdd,
   onRemove,
@@ -64,12 +68,28 @@ export function WorkspaceChips({
 
   return (
     <div className="relative flex flex-wrap items-center gap-2">
+      {onSelectWorkflow && (
+        <button
+          type="button"
+          aria-pressed={workflowActive}
+          onClick={onSelectWorkflow}
+          className={
+            'border px-3 py-1.5 text-[length:var(--type-caption)] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
+            (workflowActive
+              ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
+              : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]')
+          }
+        >
+          Workflow
+        </button>
+      )}
       <button
         type="button"
         onClick={() => onSelect(null)}
+        aria-pressed={active === null && !workflowActive}
         className={
           'border px-3 py-1.5 text-[length:var(--type-caption)] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ' +
-          (active === null
+          (active === null && !workflowActive
             ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-on-color)]'
             : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:bg-[var(--color-layer)]')
         }
@@ -78,7 +98,7 @@ export function WorkspaceChips({
       </button>
 
       {workspaces.map((workspace) => {
-        const isActive = active === workspace.alias
+        const isActive = !workflowActive && active === workspace.alias
         const typeLabel = workspaceTypeLabel(workspace.type)
         const removeDisabled = disabledRemoveSet.has(workspace.alias)
         const sharedButtonClass =
@@ -89,6 +109,7 @@ export function WorkspaceChips({
             <button
               type="button"
               onClick={() => onSelect(workspace.alias)}
+              aria-pressed={isActive}
               className={
                 sharedButtonClass +
                 ' flex items-center gap-2 font-medium ' +

@@ -335,11 +335,30 @@ func (a *API) resolveWorkspaceConfig(path string) (WorkspaceConfig, bool) {
 // configured workspace path, not the expanded project scope. Exported because
 // the session layer attributes transcripts by their working directory and must
 // not reimplement these scope rules.
+//
+// A path under no registered workspace gets one fallback: a git linked
+// worktree (the worktree-session flow materializes them under ~/develop)
+// resolves to its parent repository's checkout, and that root is matched
+// against the registry. Sessions run inside a worktree therefore attribute to
+// the workspace that owns the parent repo instead of being dropped.
 func WorkspaceForPath(workspaces []WorkspaceConfig, path string) (WorkspaceConfig, bool) {
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
 		return WorkspaceConfig{}, false
 	}
+	if workspace, ok := matchWorkspaces(workspaces, absolutePath); ok {
+		return workspace, true
+	}
+	repoRoot, ok := worktreeMainRoot(absolutePath)
+	if !ok {
+		return WorkspaceConfig{}, false
+	}
+	return matchWorkspaces(workspaces, repoRoot)
+}
+
+// matchWorkspaces is the longest-prefix scope match shared by the direct and
+// worktree-fallback attribution paths.
+func matchWorkspaces(workspaces []WorkspaceConfig, absolutePath string) (WorkspaceConfig, bool) {
 	bestLength := -1
 	var best WorkspaceConfig
 	for _, workspace := range workspaces {
@@ -362,6 +381,50 @@ func WorkspaceForPath(workspaces []WorkspaceConfig, path string) (WorkspaceConfi
 		}
 	}
 	return best, bestLength >= 0
+}
+
+// worktreeMainRoot resolves a directory that is a git linked worktree to the
+// filesystem root of its parent repository. It reads only the plain files git
+// already maintains — no subprocess, no library dependency:
+//
+//	<worktree>/.git              one line "gitdir: <path>"
+//	<gitdir>/commondir           optional relative path to the shared git dir
+//
+// The shared git dir is "<repo>/.git" for a normal repository, so the repo
+// root is one level up. Repo-project checkouts (git "app.git" dirs) have no
+// ".git" basename, so the git dir itself is returned: it lives under
+// "<project>/.repo/projects/", which is still inside the registered workspace
+// tree, and that is all prefix matching needs.
+func worktreeMainRoot(path string) (string, bool) {
+	dotGit := filepath.Join(path, ".git")
+	info, err := os.Stat(dotGit)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		return "", false
+	}
+	line := strings.TrimSpace(string(data))
+	gitdir, ok := strings.CutPrefix(line, "gitdir:")
+	if !ok {
+		return "", false
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(path, gitdir)
+	}
+	common := filepath.Clean(gitdir)
+	if commondirData, err := os.ReadFile(filepath.Join(common, "commondir")); err == nil {
+		rel := strings.TrimSpace(string(commondirData))
+		if rel != "" {
+			common = filepath.Clean(filepath.Join(common, rel))
+		}
+	}
+	if filepath.Base(common) == ".git" {
+		return filepath.Dir(common), true
+	}
+	return common, true
 }
 
 func pathWithin(path, root string) bool {

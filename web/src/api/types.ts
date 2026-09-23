@@ -40,6 +40,38 @@ export interface ChangesResponse {
   failedWorkspaces?: string[]
 }
 
+export interface WorkflowArtifact {
+  path: string
+  kind: 'index' | 'session' | 'note'
+  worktree: string
+}
+
+export interface WorkflowWork {
+  name: string
+  paths: string[]
+  branch: string
+  kind: string
+  worktrees: number
+  idleDays: number | null
+  goal: string
+  current: string
+  dirty: number
+  artifacts: WorkflowArtifact[]
+  sessions: string[]
+  notes: string[]
+  state: string
+  mergeState: string
+  merged: boolean
+  next: string
+  workspace: string
+}
+
+export interface WorkflowWorksResponse {
+  enabled: boolean
+  works: WorkflowWork[]
+  error?: string
+}
+
 export interface WorkspaceConfig {
   alias: string
   path: string

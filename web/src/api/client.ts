@@ -1,5 +1,5 @@
 import { encodeTodoId, normalizeTodo } from './types'
-import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, WikiSession, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, TodoStatus, CreateTodoInput, UpdateTodoInput } from './types'
+import type { ChangeSummary, ChangesResponse, WorkspaceConfig, WorkflowWorksResponse, WikiComponentResponse, LintIssue, WikiComponent, WikiGraphData, WikiSession, RecentItem, ChangeDetail, ChatConfig, ChatConfigPatch, ChatProviders, ReportRequest, ReportResponse, ReportMeta, Bookmark, SyncConfigResponse, SyncResult, TodoListResponse, Todo, TodoStatus, CreateTodoInput, UpdateTodoInput } from './types'
 
 export async function fetchChanges(): Promise<ChangeSummary[]> {
   const res = await fetch('/api/changes')
@@ -14,6 +14,19 @@ export async function fetchWorkspaces(): Promise<WorkspaceConfig[]> {
   const res = await fetch('/api/workspaces')
   if (!res.ok) throw new Error(`fetchWorkspaces failed: ${res.status}`)
   return res.json()
+}
+
+export async function fetchWorkflowWorks(): Promise<WorkflowWorksResponse> {
+  const res = await fetch('/api/works')
+  if (!res.ok) throw new Error(`fetchWorkflowWorks failed: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchWorkflowArtifactContent(worktree: string, file: string): Promise<string> {
+  const params = new URLSearchParams({ worktree, file })
+  const res = await fetch('/api/workflow/artifact?' + params.toString())
+  if (!res.ok) throw new Error(`fetchWorkflowArtifactContent failed: ${res.status}`)
+  return res.text()
 }
 
 export async function addWorkspace(cfg: WorkspaceConfig): Promise<void> {

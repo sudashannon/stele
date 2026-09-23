@@ -41,6 +41,28 @@ describe('WorkspaceChips', () => {
     expect(onSelect).toHaveBeenCalledWith(null)
   })
 
+  it('renders Workflow as a selectable active chip', () => {
+    const onSelectWorkflow = vi.fn()
+    render(
+      <WorkspaceChips
+        workspaces={workspaces}
+        active="miao"
+        workflowActive
+        onSelect={vi.fn()}
+        onSelectWorkflow={onSelectWorkflow}
+        onAdd={vi.fn()}
+      />,
+    )
+
+    const workflow = screen.getByRole('button', { name: 'Workflow' })
+    expect(workflow.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getAllByRole('button')[0]).toBe(workflow)
+    fireEvent.click(workflow)
+    expect(onSelectWorkflow).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '全部' }).getAttribute('aria-pressed')).toBe('false')
+    expect(screen.getByRole('button', { name: 'miao' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('renders remove buttons when onRemove is provided', () => {
     const onRemove = vi.fn()
     render(
